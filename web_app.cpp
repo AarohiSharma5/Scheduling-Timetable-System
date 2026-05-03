@@ -69,11 +69,13 @@ public:
     }
 };
 
-map<int, string> activityNames;
+thread_local map<int, string> activityNames;
 
 int timeToMinutes(const string& t) {
     int h = 0, m = 0;
-    sscanf(t.c_str(), "%d:%d", &h, &m);
+    int matched = sscanf(t.c_str(), "%d:%d", &h, &m);
+    if (matched != 2) return -1;
+    if (h < 0 || h > 23 || m < 0 || m > 59) return -1;
     return h * 60 + m;
 }
 
@@ -205,7 +207,16 @@ vector<Activity> parseActivitiesFromText(const string& text, vector<string>& err
             int start = timeToMinutes(parts[1]);
             int finish = timeToMinutes(parts[2]);
             int weight = stoi(parts[3]);
-            int deadline = timeToMinutes(parts[4]) / 60;
+            int deadlineMin = timeToMinutes(parts[4]);
+            if (start < 0 || finish < 0) {
+                errors.pb("Line " + to_string(lineNumber) + ": invalid start/finish time format (use HH:MM).");
+                continue;
+            }
+            if (deadlineMin < 0) {
+                errors.pb("Line " + to_string(lineNumber) + ": invalid deadline time format (use HH:MM).");
+                continue;
+            }
+            int deadline = deadlineMin / 60;
 
             if (finish <= start) {
                 errors.pb("Line " + to_string(lineNumber) + ": finish time must be after start time.");
@@ -600,10 +611,20 @@ document.addEventListener('DOMContentLoaded', function(){
     const textarea = document.getElementById('activities-textarea');
     const analyzeForm = document.getElementById('analyze-form');
 
-    // Add sample & copy buttons to action toolbars (if not present)
+    // Add sample & copy buttons to action toolbars that are inside a card with a textarea
     const actionContainers = document.querySelectorAll('.actions');
     if (actionContainers.length) {
         actionContainers.forEach(function(ac){
+            // find nearest ancestor with class 'card'
+            let node = ac;
+            let card = null;
+            while (node) {
+                if (node.classList && node.classList.contains('card')) { card = node; break; }
+                node = node.parentElement;
+            }
+            if (!card) return; // only modify action bars that belong to a card
+            // card must contain a visible textarea to get sample/copy buttons
+            if (!card.querySelector('textarea')) return;
             if (!ac.querySelector('.btn-sample')) {
                 const btnSample = document.createElement('button');
                 btnSample.type = 'button';
@@ -777,7 +798,7 @@ string renderJobSummary(const vector<Activity>& allActs, const vector<Activity>&
 string renderComparison(const AnalyticsResult& a1, const AnalyticsResult& a2, const vector<Activity>& jobSeq, const vector<Activity>& opt) {
     int jobProfit = 0;
     for (const auto& a : jobSeq) jobProfit += a.weight;
-    AnalyticsResult optAnalytics;
+    AnalyticsResult optAnalytics{};
     if (!opt.empty()) {
         int minTime = INT_MAX, maxTime = 0, totalWeight = 0, usedTime = 0;
         for (const auto& a : opt) {
@@ -881,11 +902,11 @@ string renderResultsPage(const string& originalInput, const vector<Activity>& ac
     bool f_r = form.count("algo_rooms");
     bool f_d = form.count("algo_dp");
     out += "<div class='section' style='margin-top:12px'><h3 style='margin:0 0 8px 0'>Algorithms</h3>";
-    out += string("<label style='display:inline-flex;align-items:center;margin-right:12px'><input type='checkbox' name='algo_actsel" + string("' ") + (f_act?"checked":"" ) + "> Activity Selection</label>");
-    out += string("<label style='display:inline-flex;align-items:center;margin-right:12px'><input type='checkbox' name='algo_weighted" + string("' ") + (f_w?"checked":"" ) + "> Weighted Greedy</label>");
-    out += string("<label style='display:inline-flex;align-items:center;margin-right:12px'><input type='checkbox' name='algo_jobseq" + string("' ") + (f_j?"checked":"" ) + "> Job Sequencing (DSU)</label>");
-    out += string("<label style='display:inline-flex;align-items:center;margin-right:12px'><input type='checkbox' name='algo_rooms" + string("' ") + (f_r?"checked":"" ) + "> Min Rooms</label>");
-    out += string("<label style='display:inline-flex;align-items:center;margin-right:12px'><input type='checkbox' name='algo_dp" + string("' ") + (f_d?"checked":"" ) + "> DP Optimal</label>");
+    out += string("<label style='display:inline-flex;align-items:center;margin-right:12px'><input type='checkbox' name='algo_actsel' ") + (f_act?"checked":"") + "> Activity Selection</label>";
+    out += string("<label style='display:inline-flex;align-items:center;margin-right:12px'><input type='checkbox' name='algo_weighted' ") + (f_w?"checked":"") + "> Weighted Greedy</label>";
+    out += string("<label style='display:inline-flex;align-items:center;margin-right:12px'><input type='checkbox' name='algo_jobseq' ") + (f_j?"checked":"") + "> Job Sequencing (DSU)</label>";
+    out += string("<label style='display:inline-flex;align-items:center;margin-right:12px'><input type='checkbox' name='algo_rooms' ") + (f_r?"checked":"") + "> Min Rooms</label>";
+    out += string("<label style='display:inline-flex;align-items:center;margin-right:12px'><input type='checkbox' name='algo_dp' ") + (f_d?"checked":"") + "> DP Optimal</label>";
     out += "</div>";
     out += "<div class='actions'><button class='btn btn-primary' type='submit'>Re-analyze</button><a class='btn btn-secondary' href='/'>Back Home</a></div>";
     out += "</form></div></div>";
@@ -907,7 +928,7 @@ string renderResultsPage(const string& originalInput, const vector<Activity>& ac
     vector<Activity> sel1, sel2, sel3, sel5;
     vector<vector<Activity>> rooms;
     int roomCount = 0;
-    AnalyticsResult a1, a2, a5;
+    AnalyticsResult a1{}; AnalyticsResult a2{}; AnalyticsResult a5{};
 
     if (doAct) {
         sel1 = activitySelection(acts);
@@ -1044,10 +1065,15 @@ bool readHttpRequest(int client, HttpRequest& req) {
     auto it = req.headers.find("Content-Length");
     if (it != req.headers.end()) contentLength = static_cast<size_t>(stoul(it->second));
 
+    // Limit maximum POST body size to 1MB to avoid resource abuse
+    const size_t MAX_BODY = 1 << 20; // 1 MiB
+    if (contentLength > MAX_BODY) return false;
+
     while (req.body.size() < contentLength) {
         ssize_t received = recv(client, buffer, sizeof(buffer), 0);
         if (received <= 0) break;
         req.body.append(buffer, buffer + received);
+        if (req.body.size() > MAX_BODY) return false;
     }
 
     return true;
