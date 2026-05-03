@@ -92,7 +92,7 @@ int timeToMinutes(string t) {
 string minutesToTime(int mins) {
     int h = mins / 60, m = mins % 60;
     char buf[16];
-    sprintf(buf, "%02d:%02d", h, m);
+    snprintf(buf, sizeof(buf), "%02d:%02d", h, m);
     return string(buf);
 }
 
@@ -411,7 +411,7 @@ void displayTimetableGrid(const vector<Activity>& acts) {
     int cells = (maxFinish - minStart + 29) / 30;
     
     cout << "       ";
-    rep(i, 0, cells) if (i % 2 == 0) cout << left << setw(2) << minutesToTime(minStart + i * 30);
+    rep(i, 0, cells) if (i % 2 == 0) cout << left << setw(6) << minutesToTime(minStart + i * 30);
     cout << "\n";
     
     rep(i, 0, sz(acts)) {
@@ -426,8 +426,72 @@ void displayTimetableGrid(const vector<Activity>& acts) {
     }
 }
 
+void clearScreen() {
+    cout << "\033[2J\033[H";
+}
+
+void displayMainBanner() {
+    cout << BOLD << CYAN << R"(
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                GREEDY SCHEDULING STUDIO | C++17 CONTEST APP               ║
+║        Activity Selection | DSU Job Sequencing | Min Rooms | DP Opt      ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+)" << RESET;
+}
+
+void displayMainOverview() {
+    cout << "\n" << BOLD << GREEN << "What this app does:" << RESET << "\n";
+    cout << "  • Schedules overlapping activities using 5 algorithms\n";
+    cout << "  • Compares greedy vs optimal DP solutions\n";
+    cout << "  • Shows room allocation, conflicts, and analytics\n";
+    cout << "  • Exports the best schedule to CSV\n";
+}
+
+void displayQuickStats() {
+    cout << "\n" << BOLD << YELLOW << "Quick Stats:" << RESET << "\n";
+    cout << "  Algorithms: 5\n";
+    cout << "  Input modes: 2\n";
+    cout << "  Output views: table, grid, conflicts, analytics\n";
+    cout << "  Export: CSV schedule file\n";
+}
+
+void displayMainMenu() {
+    cout << "\n" << BOLD << MAGENTA << "MAIN MENU" << RESET << "\n";
+    cout << "  " << BOLD << "1" << RESET << ". Run sample university timetable\n";
+    cout << "     -> Best for seeing all algorithms on prepared data\n";
+    cout << "  " << BOLD << "2" << RESET << ". Enter custom activities\n";
+    cout << "     -> Type your own schedule and compare results\n";
+    cout << "  " << BOLD << "3" << RESET << ". Advanced options & analytics\n";
+    cout << "     -> Conflict analysis, exports, utilization comparison\n";
+    cout << "  " << BOLD << "4" << RESET << ". Exit\n";
+}
+
+void displayUsageHint() {
+    cout << "\n" << BOLD << CYAN << "Tip:" << RESET
+         << " Start with option 1 if you want a fast demo.\n";
+}
+
+void displayJobSequencingSummary(const vector<Activity>& allActs, const vector<Activity>& scheduled) {
+    int totalProfit = 0;
+    int maxDeadline = 0;
+    rep(i, 0, sz(allActs)) {
+        maxDeadline = max(maxDeadline, allActs[i].deadline);
+    }
+    rep(i, 0, sz(scheduled)) totalProfit += scheduled[i].weight;
+
+    cout << "\n" << BOLD << GREEN << "JOB SCHEDULING SUMMARY:" << RESET << "\n";
+    cout << "  Scheduled Jobs: " << sz(scheduled) << "\n";
+    cout << "  Total Profit:   " << totalProfit << "\n";
+    cout << "  Max Deadline:   slot " << maxDeadline << "\n";
+    cout << "  Note: This algorithm is deadline-based, not interval-based.\n";
+}
+
 void exportToCSV(const vector<Activity>& acts, const string& filename) {
     ofstream file(filename);
+    if (!file.is_open()) {
+        cout << RED << "Could not open file: " << filename << RESET << "\n";
+        return;
+    }
     file << "ID,Activity,Start,Finish,Duration(min),Priority\n";
     rep(i, 0, sz(acts)) {
         file << acts[i].id << "," << activityNames[acts[i].name_id] << ","
@@ -445,34 +509,34 @@ vector<Activity> getSampleData() {
     vector<Activity> acts;
     
     activityNames[1] = "Math";
-    acts.pb({1, 1, 540, 600, 5, 720});
+    acts.pb({1, 1, 540, 600, 5, 12});
     
     activityNames[2] = "Physics";
-    acts.pb({2, 2, 600, 690, 4, 720});
+    acts.pb({2, 2, 600, 690, 4, 12});
     
     activityNames[3] = "Chemistry";
-    acts.pb({3, 3, 570, 660, 3, 690});
+    acts.pb({3, 3, 570, 660, 3, 11});
     
     activityNames[4] = "CS-Lab";
-    acts.pb({4, 4, 660, 780, 5, 840});
+    acts.pb({4, 4, 660, 780, 5, 14});
     
     activityNames[5] = "English";
-    acts.pb({5, 5, 690, 750, 2, 810});
+    acts.pb({5, 5, 690, 750, 2, 13});
     
     activityNames[6] = "DSA";
-    acts.pb({6, 6, 780, 870, 5, 900});
+    acts.pb({6, 6, 780, 870, 5, 15});
     
     activityNames[7] = "Sports";
-    acts.pb({7, 7, 840, 900, 1, 960});
+    acts.pb({7, 7, 840, 900, 1, 16});
     
     activityNames[8] = "Library";
-    acts.pb({8, 8, 900, 990, 3, 1020});
+    acts.pb({8, 8, 900, 990, 3, 17});
     
     activityNames[9] = "Workshop";
-    acts.pb({9, 9, 960, 1080, 4, 1080});
+    acts.pb({9, 9, 960, 1080, 4, 18});
     
     activityNames[10] = "Seminar";
-    acts.pb({10, 10, 870, 960, 4, 990});
+    acts.pb({10, 10, 870, 960, 4, 16});
     
     return acts;
 }
@@ -504,7 +568,7 @@ vector<Activity> getUserInput() {
         cout << "  Priority/Weight (1-10): ";
         cin >> weight;
         
-        cout << "  Deadline (HH:MM): ";
+        cout << "  Deadline (HH:MM, used as hour slot): ";
         cin >> dlStr;
         
         int start = timeToMinutes(startStr);
@@ -545,8 +609,9 @@ void runFullAnalysis(vector<Activity> acts) {
     printHeader("3. JOB SEQUENCING WITH DEADLINES (DSU)");
     auto sel3 = jobSequencingDSU(acts);
     displayActivities(sel3, "Scheduled Jobs (Profit Maximization)");
-    auto analytics3 = computeAnalytics(acts, sel3);
-    displayAnalytics(analytics3);
+    displayJobSequencingSummary(acts, sel3);
+    int jobProfit = 0;
+    rep(i, 0, sz(sel3)) jobProfit += sel3[i].weight;
     
     // ALGORITHM 4
     printHeader("4. MINIMUM ROOMS REQUIRED (Min Heap)");
@@ -576,9 +641,9 @@ void runFullAnalysis(vector<Activity> acts) {
          << setw(12) << analytics2.totalWeight
          << fixed << setprecision(1) << setw(12) << analytics2.utilizationPercent << "%\n";
     cout << left << setw(40) << "3. Job Sequencing (DSU)"
-         << setw(12) << analytics3.selectedActivities
-         << setw(12) << analytics3.totalWeight
-         << fixed << setprecision(1) << setw(12) << analytics3.utilizationPercent << "%\n";
+            << setw(12) << sz(sel3)
+            << setw(12) << jobProfit
+            << setw(12) << "-" << "\n";
     cout << left << setw(40) << "4. Min Rooms (Heap)" << setw(12) << acts.size()
          << setw(12) << "-" << setw(12) << "100%" << "\n";
     cout << left << setw(40) << "5. Weighted Interval (DP-OPTIMAL) ★"
@@ -608,7 +673,12 @@ void advancedMenu(vector<Activity>& acts) {
              << "  5. Compare resource utilization\n"
              << "  6. Back to main menu\n" << RESET << "Choice: ";
         int choice;
-        cin >> choice;
+        if (!(cin >> choice)) {
+            cin.clear();
+            cin.ignore(10000, '\n');
+            cout << RED << "Invalid input. Please enter a number.\n" << RESET;
+            continue;
+        }
         
         if (choice == 6) break;
         
@@ -620,7 +690,12 @@ void advancedMenu(vector<Activity>& acts) {
         } else if (choice == 3) {
             cout << "\nChoose algorithm: 1-5: ";
             int algo;
-            cin >> algo;
+            if (!(cin >> algo)) {
+                cin.clear();
+                cin.ignore(10000, '\n');
+                cout << RED << "Invalid input. Returning to advanced menu.\n" << RESET;
+                continue;
+            }
             vector<Activity> result;
             if (algo == 1) result = activitySelection(acts);
             else if (algo == 2) result = weightedScheduling(acts);
@@ -628,14 +703,17 @@ void advancedMenu(vector<Activity>& acts) {
             else if (algo == 5) result = weightedIntervalSchedulingDP(acts);
             
             if (sz(result) > 0) {
-                auto res = computeAnalytics(acts, result);
-                displayAnalytics(res);
+                if (algo == 3) {
+                    displayJobSequencingSummary(acts, result);
+                } else {
+                    auto res = computeAnalytics(acts, result);
+                    displayAnalytics(res);
+                }
             }
         } else if (choice == 4) {
             cout << "Filename (default: schedule.csv): ";
             string fname;
-            cin.ignore();
-            getline(cin, fname);
+            getline(cin >> ws, fname);
             if (fname.empty()) fname = "schedule.csv";
             exportToCSV(weightedIntervalSchedulingDP(acts), fname);
         } else if (choice == 5) {
@@ -660,37 +738,42 @@ void advancedMenu(vector<Activity>& acts) {
 // ============================================================================
 int main() {
     fastio;
-    cout << BOLD << CYAN << R"(
-╔═══════════════════════════════════════════════════════════════════════════╗
-║         ADVANCED GREEDY SCHEDULING SYSTEM (5 ALGORITHMS + ANALYTICS)      ║
-║     Activity Selection | Weighted Scheduling | Job Sequencing | DP Opt    ║
-║              DSU-Optimized | Priority Queue | Dynamic Programming         ║
-╚═══════════════════════════════════════════════════════════════════════════╝
-)" << RESET;
+    clearScreen();
+    displayMainBanner();
+    displayMainOverview();
+    displayQuickStats();
+    displayUsageHint();
     
     while (true) {
-        cout << "\n" << BOLD << YELLOW
-             << "MAIN MENU:\n"
-             << "  1. Run with sample university timetable\n"
-             << "  2. Enter custom activities\n"
-             << "  3. Advanced options & analytics\n"
-             << "  4. Exit\n"
-             << RESET << "Choice: ";
+        displayMainMenu();
+        cout << BOLD << YELLOW << "\nChoose an option: " << RESET;
         int choice;
-        cin >> choice;
+        if (!(cin >> choice)) {
+            cin.clear();
+            cin.ignore(10000, '\n');
+            cout << RED << "Invalid input. Please enter a number.\n" << RESET;
+            continue;
+        }
         
         if (choice == 1) {
+            clearScreen();
             auto acts = getSampleData();
             runFullAnalysis(acts);
+            cout << "\n";
         } else if (choice == 2) {
+            clearScreen();
             auto acts = getUserInput();
             if (sz(acts) > 0) runFullAnalysis(acts);
+            cout << "\n";
         } else if (choice == 3) {
+            clearScreen();
             auto acts = getSampleData();
             advancedMenu(acts);
         } else if (choice == 4) {
             cout << GREEN << "Exiting. Goodbye!\n" << RESET;
             break;
+        } else {
+            cout << RED << "Invalid choice. Try 1, 2, 3, or 4.\n" << RESET;
         }
     }
     return 0;
