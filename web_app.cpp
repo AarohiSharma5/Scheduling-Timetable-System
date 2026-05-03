@@ -608,68 +608,100 @@ string renderFooter() {
 </div>
 <script>
 document.addEventListener('DOMContentLoaded', function(){
-    const textarea = document.getElementById('activities-textarea');
-    const analyzeForm = document.getElementById('analyze-form');
+    // Find all textareas on the page and set up auto-sizing
+    const allTextareas = document.querySelectorAll('textarea[name="activities"]');
+    allTextareas.forEach(function(ta){
+        // auto-size each textarea
+        function autosize(el){ if (!el) return; el.style.height = 'auto'; el.style.height = (el.scrollHeight) + 'px'; }
+        autosize(ta);
+        ta.addEventListener('input', function(){ autosize(this); });
+    });
 
-    // Add sample & copy buttons to action toolbars that are inside a card with a textarea
+    // Add sample & copy buttons to action toolbars inside cards
     const actionContainers = document.querySelectorAll('.actions');
-    if (actionContainers.length) {
-        actionContainers.forEach(function(ac){
-            // find nearest ancestor with class 'card'
-            let node = ac;
-            let card = null;
-            while (node) {
-                if (node.classList && node.classList.contains('card')) { card = node; break; }
-                node = node.parentElement;
-            }
-            if (!card) return; // only modify action bars that belong to a card
-            // card must contain a visible textarea to get sample/copy buttons
-            if (!card.querySelector('textarea')) return;
-            if (!ac.querySelector('.btn-sample')) {
-                const btnSample = document.createElement('button');
-                btnSample.type = 'button';
-                btnSample.className = 'btn btn-secondary btn-sample';
-                btnSample.textContent = 'Load Sample';
-                btnSample.addEventListener('click', async function(){
-                    try {
-                        const res = await fetch('/sample-data');
-                        const text = await res.text();
-                        if (textarea) { textarea.value = text; textarea.dispatchEvent(new Event('input')); }
-                    } catch (e) { alert('Failed to load sample data'); }
-                });
-
-                const btnCopy = document.createElement('button');
-                btnCopy.type = 'button';
-                btnCopy.className = 'btn btn-secondary';
-                btnCopy.textContent = 'Copy';
-                btnCopy.addEventListener('click', function(){
-                    if (!textarea) return;
-                    if (navigator.clipboard && navigator.clipboard.writeText) {
-                        navigator.clipboard.writeText(textarea.value);
-                    } else {
-                        textarea.select(); document.execCommand('copy');
-                    }
-                });
-
-                ac.insertBefore(btnSample, ac.firstChild);
-                ac.insertBefore(btnCopy, ac.firstChild);
+    actionContainers.forEach(function(ac){
+        // Find the nearest ancestor card
+        let node = ac;
+        let card = null;
+        while (node) {
+            if (node.classList && node.classList.contains('card')) { card = node; break; }
+            node = node.parentElement;
+        }
+        if (!card) return;
+        
+        // Find the textarea inside THIS card (scoped to this card)
+        const cardTextarea = card.querySelector('textarea[name="activities"]');
+        if (!cardTextarea) return;
+        
+        // Skip if buttons already added
+        if (ac.querySelector('.btn-sample')) return;
+        
+        // Create Load Sample button
+        const btnSample = document.createElement('button');
+        btnSample.type = 'button';
+        btnSample.className = 'btn btn-secondary btn-sample';
+        btnSample.textContent = 'Load Sample';
+        btnSample.addEventListener('click', async function(e){
+            e.preventDefault();
+            try {
+                const res = await fetch('/sample-data');
+                const text = await res.text();
+                cardTextarea.value = text;
+                cardTextarea.dispatchEvent(new Event('input'));
+                cardTextarea.focus();
+            } catch (err) {
+                alert('Failed to load sample data: ' + err.message);
             }
         });
-    }
-
-    if (analyzeForm) {
-        analyzeForm.addEventListener('submit', function(e){
-            if (!textarea || !textarea.value.trim()) {
+        
+        // Create Copy button
+        const btnCopy = document.createElement('button');
+        btnCopy.type = 'button';
+        btnCopy.className = 'btn btn-secondary';
+        btnCopy.textContent = 'Copy';
+        btnCopy.addEventListener('click', function(e){
+            e.preventDefault();
+            if (!cardTextarea || !cardTextarea.value) {
+                alert('Nothing to copy.');
+                return;
+            }
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(cardTextarea.value).then(function(){
+                    btnCopy.textContent = 'Copied!';
+                    setTimeout(function(){ btnCopy.textContent = 'Copy'; }, 1500);
+                }).catch(function(err){
+                    alert('Copy failed: ' + err);
+                });
+            } else {
+                cardTextarea.select();
+                try {
+                    document.execCommand('copy');
+                    btnCopy.textContent = 'Copied!';
+                    setTimeout(function(){ btnCopy.textContent = 'Copy'; }, 1500);
+                } catch (err) {
+                    alert('Copy failed: ' + err);
+                }
+            }
+        });
+        
+        // Insert buttons at the start of the action container
+        ac.insertBefore(btnSample, ac.firstChild);
+        ac.insertBefore(btnCopy, ac.firstChild);
+    });
+    
+    // Validate non-empty textarea on form submit
+    const analyzeForms = document.querySelectorAll('form[method="POST"][action="/analyze"]');
+    analyzeForms.forEach(function(form){
+        const formTextarea = form.querySelector('textarea[name="activities"]');
+        form.addEventListener('submit', function(e){
+            if (!formTextarea || !formTextarea.value.trim()) {
                 e.preventDefault();
-                alert('Please enter at least one activity (one per line).');
-                if (textarea) textarea.focus();
+                alert('Please enter at least one activity (one per line, format: Name,Start,Finish,Priority,Deadline).');
+                if (formTextarea) formTextarea.focus();
+                return false;
             }
         });
-    }
-
-    function autosize(el){ if (!el) return; el.style.height = 'auto'; el.style.height = (el.scrollHeight) + 'px'; }
-    autosize(textarea);
-    if (textarea) textarea.addEventListener('input', function(){ autosize(this); });
+    });
 });
 </script>
 </body>
