@@ -55,6 +55,285 @@ struct ConflictReport {
     bool hasConflicts;
 };
 
+struct SchoolProfile {
+    string institutionName;
+    string academicYear;
+    int studentCount;
+    int averageClassSize;
+    int daysPerWeek;
+    int periodsPerDay;
+    int periodMinutes;
+    int breakMinutes;
+    int subjectCount;
+    int teacherCount;
+    int targetCoreSubjects;
+    int targetElectiveSubjects;
+    int electiveChoiceLimit;
+};
+
+struct TeacherProfile {
+    string name;
+    int contactHours;
+    string expertise;
+};
+
+struct SubjectProfile {
+    string name;
+    string teacher;
+    string category;
+    int weeklyPeriods;
+};
+
+struct TimetableCell {
+    string dayName;
+    int dayIndex;
+    int periodIndex;
+    string subject;
+    string teacher;
+    bool elective;
+};
+
+struct PlannerSnapshot {
+    SchoolProfile school;
+    vector<TeacherProfile> teachers;
+    vector<SubjectProfile> subjects;
+    vector<SubjectProfile> selectedElectives;
+    vector<SubjectProfile> selectedSubjects;
+    vector<TimetableCell> timetable;
+    vector<string> warnings;
+};
+
+const vector<string> WEEK_DAYS = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};
+
+string htmlEscape(const string& s);
+
+string getFormValue(const map<string, string>& form, const string& key, const string& fallback = "") {
+    auto it = form.find(key);
+    return it == form.end() ? fallback : it->second;
+}
+
+int getFormInt(const map<string, string>& form, const string& key, int fallback) {
+    auto it = form.find(key);
+    if (it == form.end()) return fallback;
+    try {
+        return stoi(it->second);
+    } catch (...) {
+        return fallback;
+    }
+}
+
+string hiddenInput(const string& name, const string& value) {
+    return "<input type='hidden' name='" + htmlEscape(name) + "' value='" + htmlEscape(value) + "'>";
+}
+
+string fieldLabel(const string& text) {
+    return "<span class='field-label'>" + htmlEscape(text) + "</span>";
+}
+
+string textField(const string& label, const string& name, const string& value, const string& placeholder = "", const string& extra = "") {
+    string out = "<label class='field'>" + fieldLabel(label);
+    out += "<input type='text' name='" + htmlEscape(name) + "' value='" + htmlEscape(value) + "' placeholder='" + htmlEscape(placeholder) + "' " + extra + ">";
+    out += "</label>";
+    return out;
+}
+
+string numberField(const string& label, const string& name, int value, int minValue, int maxValue, const string& extra = "") {
+    string out = "<label class='field'>" + fieldLabel(label);
+    out += "<input type='number' name='" + htmlEscape(name) + "' value='" + to_string(value) + "' min='" + to_string(minValue) + "' max='" + to_string(maxValue) + "' " + extra + ">";
+    out += "</label>";
+    return out;
+}
+
+string selectField(const string& label, const string& name, const vector<pair<string, string>>& options, const string& selected = "") {
+    string out = "<label class='field'>" + fieldLabel(label);
+    out += "<select name='" + htmlEscape(name) + "'>";
+    for (const auto& option : options) {
+        out += "<option value='" + htmlEscape(option.first) + "'";
+        if (option.first == selected) out += " selected";
+        out += ">" + htmlEscape(option.second) + "</option>";
+    }
+    out += "</select></label>";
+    return out;
+}
+
+SchoolProfile parseSchoolProfile(const map<string, string>& form) {
+    SchoolProfile school{};
+    school.institutionName = getFormValue(form, "institution_name", "Northlake Academic Planner");
+    school.academicYear = getFormValue(form, "academic_year", "2026-2027");
+    school.studentCount = getFormInt(form, "student_count", 640);
+    school.averageClassSize = getFormInt(form, "average_class_size", 40);
+    school.daysPerWeek = getFormInt(form, "days_per_week", 5);
+    school.periodsPerDay = getFormInt(form, "periods_per_day", 8);
+    school.periodMinutes = getFormInt(form, "period_minutes", 45);
+    school.breakMinutes = getFormInt(form, "break_minutes", 10);
+    school.subjectCount = getFormInt(form, "subject_count", 10);
+    school.teacherCount = getFormInt(form, "teacher_count", 8);
+    school.targetCoreSubjects = getFormInt(form, "core_subject_target", 6);
+    school.targetElectiveSubjects = getFormInt(form, "elective_subject_target", 4);
+    school.electiveChoiceLimit = getFormInt(form, "elective_choice_limit", 2);
+    return school;
+}
+
+vector<TeacherProfile> parseTeachers(const map<string, string>& form, int count) {
+    vector<TeacherProfile> teachers;
+    teachers.reserve(max(0, count));
+    for (int i = 1; i <= count; ++i) {
+        TeacherProfile teacher{};
+        teacher.name = getFormValue(form, "teacher_name_" + to_string(i), "Teacher " + to_string(i));
+        teacher.contactHours = getFormInt(form, "teacher_hours_" + to_string(i), 18);
+        teacher.expertise = getFormValue(form, "teacher_expertise_" + to_string(i), "Core subject support");
+        teachers.push_back(teacher);
+    }
+    return teachers;
+}
+
+vector<SubjectProfile> parseSubjects(const map<string, string>& form, int count) {
+    vector<SubjectProfile> subjects;
+    subjects.reserve(max(0, count));
+    for (int i = 1; i <= count; ++i) {
+        SubjectProfile subject{};
+        subject.name = getFormValue(form, "subject_name_" + to_string(i), "Subject " + to_string(i));
+        subject.teacher = getFormValue(form, "subject_teacher_" + to_string(i), "Teacher " + to_string(i));
+        subject.category = getFormValue(form, "subject_category_" + to_string(i), (i <= count / 2 ? "core" : "elective"));
+        subject.weeklyPeriods = getFormInt(form, "subject_periods_" + to_string(i), subject.category == "core" ? 5 : 3);
+        subjects.push_back(subject);
+    }
+    return subjects;
+}
+
+string prettyCategory(const string& category) {
+    if (category == "core") return "Core";
+    if (category == "elective") return "Elective";
+    return category;
+}
+
+vector<SubjectProfile> selectElectives(const SchoolProfile& school, const vector<SubjectProfile>& subjects) {
+    vector<SubjectProfile> electives;
+    for (const auto& subject : subjects) {
+        if (subject.category == "elective") electives.push_back(subject);
+    }
+    sort(electives.begin(), electives.end(), [](const SubjectProfile& a, const SubjectProfile& b) {
+        if (a.weeklyPeriods != b.weeklyPeriods) return a.weeklyPeriods > b.weeklyPeriods;
+        return a.name < b.name;
+    });
+    if (school.electiveChoiceLimit >= 0 && static_cast<int>(electives.size()) > school.electiveChoiceLimit) {
+        electives.resize(school.electiveChoiceLimit);
+    }
+    return electives;
+}
+
+vector<SubjectProfile> selectScheduledSubjects(const SchoolProfile& school, const vector<SubjectProfile>& subjects) {
+    vector<SubjectProfile> core;
+    vector<SubjectProfile> electives = selectElectives(school, subjects);
+    for (const auto& subject : subjects) {
+        if (subject.category == "core") core.push_back(subject);
+    }
+    sort(core.begin(), core.end(), [](const SubjectProfile& a, const SubjectProfile& b) {
+        if (a.weeklyPeriods != b.weeklyPeriods) return a.weeklyPeriods > b.weeklyPeriods;
+        return a.name < b.name;
+    });
+    vector<SubjectProfile> scheduled = core;
+    scheduled.insert(scheduled.end(), electives.begin(), electives.end());
+    return scheduled;
+}
+
+PlannerSnapshot buildPlannerSnapshot(const SchoolProfile& school, const vector<TeacherProfile>& teachers, const vector<SubjectProfile>& subjects) {
+    PlannerSnapshot snapshot;
+    snapshot.school = school;
+    snapshot.teachers = teachers;
+    snapshot.subjects = subjects;
+    snapshot.selectedElectives = selectElectives(school, subjects);
+    snapshot.selectedSubjects = selectScheduledSubjects(school, subjects);
+
+    map<string, int> teacherLoad;
+    for (const auto& teacher : teachers) {
+        teacherLoad[teacher.name] = 0;
+    }
+
+    vector<SubjectProfile> sessions;
+    for (const auto& subject : snapshot.selectedSubjects) {
+        int occurrences = max(1, subject.weeklyPeriods);
+        for (int i = 0; i < occurrences; ++i) sessions.push_back(subject);
+        teacherLoad[subject.teacher] += occurrences;
+    }
+
+    int slotCount = max(1, school.daysPerWeek) * max(1, school.periodsPerDay);
+    if (static_cast<int>(sessions.size()) > slotCount) {
+        snapshot.warnings.push_back("The requested weekly subject load exceeds the available timetable slots. Some subjects will be rotated or truncated.");
+    }
+
+    vector<int> dayLoad(max(1, school.daysPerWeek), 0);
+    vector<vector<bool>> occupied(max(1, school.daysPerWeek), vector<bool>(max(1, school.periodsPerDay), false));
+    size_t sessionIndex = 0;
+    while (sessionIndex < sessions.size()) {
+        int bestDay = -1;
+        int bestLoad = INT_MAX;
+        for (int day = 0; day < school.daysPerWeek; ++day) {
+            if (dayLoad[day] >= school.periodsPerDay) continue;
+            if (dayLoad[day] < bestLoad) {
+                bestLoad = dayLoad[day];
+                bestDay = day;
+            }
+        }
+        if (bestDay == -1) break;
+
+        int bestPeriod = -1;
+        for (int period = 0; period < school.periodsPerDay; ++period) {
+            if (!occupied[bestDay][period]) {
+                bestPeriod = period;
+                break;
+            }
+        }
+        if (bestPeriod == -1) {
+            dayLoad[bestDay] = school.periodsPerDay;
+            continue;
+        }
+
+        occupied[bestDay][bestPeriod] = true;
+        dayLoad[bestDay]++;
+        TimetableCell cell;
+        cell.dayIndex = bestDay;
+        cell.periodIndex = bestPeriod;
+        cell.dayName = WEEK_DAYS[bestDay % WEEK_DAYS.size()];
+        cell.subject = sessions[sessionIndex].name;
+        cell.teacher = sessions[sessionIndex].teacher;
+        cell.elective = sessions[sessionIndex].category == "elective";
+        snapshot.timetable.push_back(cell);
+        ++sessionIndex;
+    }
+
+    if (sessionIndex < sessions.size()) {
+        snapshot.warnings.push_back("Not all session requests could be placed into the weekly grid. Increase periods per day or reduce weekly subject load.");
+    }
+
+    for (const auto& teacher : teachers) {
+        auto it = teacherLoad.find(teacher.name);
+        int assigned = it == teacherLoad.end() ? 0 : it->second;
+        if (assigned > teacher.contactHours) {
+            snapshot.warnings.push_back(teacher.name + " is over capacity: " + to_string(assigned) + " assigned periods vs " + to_string(teacher.contactHours) + " contact hours.");
+        }
+    }
+
+    for (const auto& subject : subjects) {
+        bool matchedTeacher = false;
+        for (const auto& teacher : teachers) {
+            if (subject.teacher == teacher.name) {
+                matchedTeacher = true;
+                break;
+            }
+        }
+        if (!matchedTeacher) {
+            snapshot.warnings.push_back("No teacher profile was provided for " + subject.name + ". The subject will still appear in the schedule.");
+        }
+    }
+
+    return snapshot;
+}
+
+string renderMetric(const string& label, const string& value, const string& accentClass = "") {
+    return "<div class='metric" + (accentClass.empty() ? string() : " " + accentClass) + "'><span>" + htmlEscape(label) + "</span><strong>" + htmlEscape(value) + "</strong></div>";
+}
+
 class DSU {
 public:
     vi parent;
@@ -1051,6 +1330,254 @@ string renderComparison(const AnalyticsResult& a1, const AnalyticsResult& a2, co
     return out;
 }
 
+string renderPlannerHeader(const string& title, const string& subtitle) {
+    string out;
+    out += "<!doctype html><html lang='en'><head><meta charset='utf-8'>";
+    out += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    out += "<title>" + htmlEscape(title) + "</title>";
+    out += "<style>";
+    out += ":root{--bg:#07111f;--panel:#101a2c;--panel-2:#17253b;--line:rgba(255,255,255,.08);--text:#eef4ff;--muted:#aebad0;--accent:#7dd3fc;--accent-2:#a78bfa;--good:#4ade80;--warn:#fbbf24;--bad:#fb7185;--shadow:0 22px 60px rgba(0,0,0,.35)}";
+    out += "*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:radial-gradient(circle at top left,rgba(125,211,252,.18),transparent 28%),radial-gradient(circle at top right,rgba(167,139,250,.14),transparent 26%),linear-gradient(180deg,#060b15,#0b1320 46%,#07111f);color:var(--text)}";
+    out += ".wrap{max-width:1280px;margin:0 auto;padding:28px 20px 48px}.topbar{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:20px}.brand{font-weight:800;letter-spacing:-.03em;font-size:1.05rem;color:var(--text)}.nav-links{display:flex;flex-wrap:wrap;gap:10px}.nav-links a{color:var(--muted);text-decoration:none;padding:8px 12px;border:1px solid var(--line);border-radius:999px;background:rgba(255,255,255,.03)}.nav-links a:hover{color:var(--text);border-color:rgba(125,211,252,.35)}";
+    out += ".hero{padding:34px;border-radius:26px;background:linear-gradient(135deg,rgba(16,26,44,.98),rgba(23,37,59,.92));border:1px solid var(--line);box-shadow:var(--shadow);overflow:hidden;position:relative}.hero:before{content:'';position:absolute;inset:0 0 auto 0;height:1px;background:linear-gradient(90deg,transparent,rgba(125,211,252,.45),transparent)}.eyebrow{display:inline-flex;gap:8px;align-items:center;padding:7px 12px;border-radius:999px;border:1px solid rgba(125,211,252,.25);background:rgba(125,211,252,.08);color:#c8f0ff;font-size:.82rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase}.title{margin:14px 0 10px;font-size:clamp(2rem,4vw,3.45rem);line-height:1.02;letter-spacing:-.04em;font-weight:900}.subtitle{margin:0;max-width:900px;color:var(--muted);line-height:1.75;font-size:1.01rem}.grid{display:grid;grid-template-columns:1.1fr .9fr;gap:18px;margin-top:18px}.card{background:linear-gradient(135deg,rgba(16,26,44,.96),rgba(13,20,35,.92));border:1px solid var(--line);border-radius:22px;box-shadow:var(--shadow);overflow:hidden}.card h2,.card h3{margin:0}.card-head{padding:18px 22px;border-bottom:1px solid var(--line);background:linear-gradient(135deg,rgba(125,211,252,.08),rgba(167,139,250,.05));color:var(--text);font-size:1.05rem;font-weight:800}.card-body{padding:22px}.stack{display:grid;gap:16px}.summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:18px}.metric{padding:15px 16px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid var(--line)}.metric span{display:block;color:var(--muted);font-size:.8rem;letter-spacing:.03em;text-transform:uppercase}.metric strong{display:block;margin-top:8px;font-size:1.08rem;line-height:1.3}.metric.accent{border-color:rgba(125,211,252,.22);background:linear-gradient(135deg,rgba(125,211,252,.11),rgba(167,139,250,.06))}.metric.good{border-color:rgba(74,222,128,.22);background:linear-gradient(135deg,rgba(74,222,128,.11),rgba(74,222,128,.05))}.metric.warn{border-color:rgba(251,191,36,.22);background:linear-gradient(135deg,rgba(251,191,36,.11),rgba(251,191,36,.05))}.field-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.field-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}.field-grid.four{grid-template-columns:repeat(4,minmax(0,1fr))}.field{display:grid;gap:8px}.field-label{color:var(--muted);font-size:.9rem;font-weight:600}.field input,.field select,.field textarea{width:100%;padding:12px 14px;border-radius:14px;border:1px solid var(--line);background:rgba(255,255,255,.03);color:var(--text);font:inherit;outline:none;transition:border-color .2s ease,box-shadow .2s ease,transform .2s ease}.field textarea{min-height:120px;resize:vertical}.field input:focus,.field select:focus,.field textarea:focus{border-color:rgba(125,211,252,.85);box-shadow:0 0 0 4px rgba(125,211,252,.12)}.hint{margin-top:10px;color:var(--muted);line-height:1.7;font-size:.94rem}.actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:18px}.btn{appearance:none;border:0;border-radius:14px;padding:12px 18px;font:inherit;font-weight:700;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;transition:transform .2s ease,box-shadow .2s ease,background .2s ease}.btn:hover{transform:translateY(-1px)}.btn-primary{background:linear-gradient(135deg,var(--accent),#60a5fa);color:#08111d;box-shadow:0 10px 30px rgba(96,165,250,.25)}.btn-secondary{background:rgba(255,255,255,.05);color:var(--text);border:1px solid var(--line)}.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}.section{margin-top:24px}.section h3{margin:0 0 14px;font-size:1.05rem;color:#d8f1ff;letter-spacing:-.01em}.warning,.success,.info{padding:14px 16px;border-radius:16px;border:1px solid var(--line);line-height:1.6}.warning{background:linear-gradient(135deg,rgba(251,191,36,.12),rgba(251,191,36,.05));border-color:rgba(251,191,36,.22);color:#fde68a}.success{background:linear-gradient(135deg,rgba(74,222,128,.12),rgba(74,222,128,.05));border-color:rgba(74,222,128,.22);color:#bbf7d0}.info{background:linear-gradient(135deg,rgba(125,211,252,.12),rgba(125,211,252,.05));border-color:rgba(125,211,252,.22);color:#d7f2ff}.table-wrap{overflow:auto;border-radius:18px;border:1px solid var(--line)}table{width:100%;border-collapse:collapse;background:rgba(255,255,255,.02)}th,td{padding:12px 14px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{position:sticky;top:0;background:rgba(12,18,31,.96);color:#c7ecff;font-size:.9rem;font-weight:800}tr:hover td{background:rgba(125,211,252,.03)}.table-muted{color:var(--muted)}.timetable{table-layout:fixed}.timetable td{min-height:86px}.slot{display:block;min-height:54px;padding:10px 10px;border-radius:12px;background:rgba(255,255,255,.03);border:1px solid transparent}.slot strong{display:block;font-size:.92rem}.slot span{display:block;color:var(--muted);font-size:.8rem;margin-top:4px}.slot.open{background:rgba(255,255,255,.015);border-color:rgba(255,255,255,.04);color:var(--muted)}.slot.elective{background:linear-gradient(135deg,rgba(167,139,250,.18),rgba(125,211,252,.1));border-color:rgba(167,139,250,.18)}.slot.core{background:linear-gradient(135deg,rgba(74,222,128,.16),rgba(125,211,252,.08));border-color:rgba(74,222,128,.18)}.page-note{margin-top:16px;color:var(--muted);font-size:.92rem;line-height:1.7}.small{font-size:.88rem;color:var(--muted)}@media (max-width: 980px){.grid,.field-grid,.summary{grid-template-columns:1fr}.topbar{flex-direction:column;align-items:flex-start}}";
+    out += "</style></head><body><div class='wrap'>";
+    out += "<div class='topbar'><div class='brand'>Timetable Planning Studio</div><div class='nav-links'><a href='/'>Setup</a><a href='/sample-data'>Sample Data</a></div></div>";
+    out += "<section class='hero'><span class='eyebrow'>" + htmlEscape(title) + "</span><h1 class='title'>" + htmlEscape(title) + "</h1><p class='subtitle'>" + htmlEscape(subtitle) + "</p></section>";
+    return out;
+}
+
+string renderPlannerFooter() {
+    return R"HTML(
+</div>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  document.querySelectorAll('textarea[data-autosize="true"]').forEach(function (ta) {
+    function resize() {
+      ta.style.height = 'auto';
+      ta.style.height = ta.scrollHeight + 'px';
+    }
+    resize();
+    ta.addEventListener('input', resize);
+  });
+});
+</script>
+</body>
+</html>
+)HTML";
+}
+
+string renderPlannerHomePage() {
+    SchoolProfile defaults = parseSchoolProfile({});
+    string out = renderPlannerHeader(
+        "Timetable Planning Studio",
+        "Design an institutional timetable in stages: enter school context first, then define teachers and subjects, then review a professional weekly schedule with capacity checks and elective selection."
+    );
+
+    out += "<div class='grid'>";
+    out += "<div class='card'><div class='card-head'>Institution Setup</div><div class='card-body'><form method='POST' action='/setup'><div class='stack'>";
+    out += "<div class='field-grid'>";
+    out += textField("Institution name", "institution_name", defaults.institutionName, "Example: Greenfield School");
+    out += textField("Academic year", "academic_year", defaults.academicYear, "Example: 2026-2027");
+    out += textField("School / campus", "campus_name", "Main campus", "Optional label");
+    out += textField("Planner owner", "planner_owner", "Academic office", "Optional note");
+    out += "</div>";
+    out += "<div class='field-grid three'>";
+    out += numberField("Total students", "student_count", defaults.studentCount, 1, 100000);
+    out += numberField("Average class size", "average_class_size", defaults.averageClassSize, 1, 500);
+    out += numberField("Days per week", "days_per_week", defaults.daysPerWeek, 3, 7);
+    out += numberField("Periods per day", "periods_per_day", defaults.periodsPerDay, 2, 20);
+    out += numberField("Period length (min)", "period_minutes", defaults.periodMinutes, 15, 240);
+    out += numberField("Break length (min)", "break_minutes", defaults.breakMinutes, 0, 120);
+    out += "</div>";
+    out += "<div class='field-grid three'>";
+    out += numberField("Total subjects", "subject_count", defaults.subjectCount, 1, 100);
+    out += numberField("Teachers", "teacher_count", defaults.teacherCount, 1, 100);
+    out += numberField("Core subject target", "core_subject_target", defaults.targetCoreSubjects, 0, 100);
+    out += numberField("Elective subject target", "elective_subject_target", defaults.targetElectiveSubjects, 0, 100);
+    out += numberField("Elective choices per student", "elective_choice_limit", defaults.electiveChoiceLimit, 0, 100);
+    out += "</div>";
+    out += "<div class='actions'><button class='btn btn-primary' type='submit'>Continue to curriculum design</button><button class='btn btn-secondary' type='reset'>Reset</button></div>";
+    out += "<p class='page-note'>This first step captures the institutional constraints that drive the timetable: capacity, time structure, and how many teachers and subjects need to be scheduled.</p>";
+    out += "</div></form></div></div>";
+
+    out += "<div class='card'><div class='card-head'>What the planner produces</div><div class='card-body'>";
+    out += renderMetric("Workflow", "Setup -> Curriculum -> Review", "accent");
+    out += renderMetric("Core planning", "Teacher load, subject coverage, and class size", "good");
+    out += renderMetric("Electives", "Choice-limited, capacity-aware selection", "warn");
+    out += "<p class='hint'>The review page will generate a weekly grid, show teacher load against contact hours, and highlight any gaps or overloads before you export the plan.</p>";
+    out += "<div class='section'><h3>Design focus</h3><div class='info'>The project now models a school or institute rather than generic activities. That means the interface can ask for the right planning inputs: subjects, teachers, student count, core and elective balance, and the timetable shape.</div></div>";
+    out += "</div></div>";
+    out += "</div>";
+    out += renderPlannerFooter();
+    return out;
+}
+
+string renderCurriculumPage(const SchoolProfile& school, const vector<TeacherProfile>& teachers, const vector<SubjectProfile>& subjects) {
+    string out = renderPlannerHeader(
+        "Curriculum Designer",
+        "Define who teaches what. Fill teacher contact hours, subject ownership, and whether each subject belongs to the core or elective pool."
+    );
+
+    out += "<div class='summary'>";
+    out += renderMetric("Institution", school.institutionName, "accent");
+    out += renderMetric("Students", to_string(school.studentCount), "good");
+    out += renderMetric("Subjects", to_string(school.subjectCount), "warn");
+    out += renderMetric("Teachers", to_string(school.teacherCount), "accent");
+    out += "</div>";
+
+    out += "<div class='card section'><div class='card-head'>Curriculum inputs</div><div class='card-body'><form method='POST' action='/review'>";
+    out += hiddenInput("institution_name", school.institutionName);
+    out += hiddenInput("academic_year", school.academicYear);
+    out += hiddenInput("student_count", to_string(school.studentCount));
+    out += hiddenInput("average_class_size", to_string(school.averageClassSize));
+    out += hiddenInput("days_per_week", to_string(school.daysPerWeek));
+    out += hiddenInput("periods_per_day", to_string(school.periodsPerDay));
+    out += hiddenInput("period_minutes", to_string(school.periodMinutes));
+    out += hiddenInput("break_minutes", to_string(school.breakMinutes));
+    out += hiddenInput("subject_count", to_string(school.subjectCount));
+    out += hiddenInput("teacher_count", to_string(school.teacherCount));
+    out += hiddenInput("core_subject_target", to_string(school.targetCoreSubjects));
+    out += hiddenInput("elective_subject_target", to_string(school.targetElectiveSubjects));
+    out += hiddenInput("elective_choice_limit", to_string(school.electiveChoiceLimit));
+
+    out += "<div class='section'><h3>Teacher roster</h3><div class='stack'>";
+    for (int i = 1; i <= school.teacherCount; ++i) {
+        const TeacherProfile teacher = i <= static_cast<int>(teachers.size()) ? teachers[i - 1] : TeacherProfile{"Teacher " + to_string(i), 18, "Core subject support"};
+        out += "<div class='field-grid three'>";
+        out += textField("Teacher name", "teacher_name_" + to_string(i), teacher.name, "Example: Dr. Patel");
+        out += numberField("Contact hours", "teacher_hours_" + to_string(i), teacher.contactHours, 1, 80);
+        out += textField("Expertise / notes", "teacher_expertise_" + to_string(i), teacher.expertise, "Example: Mathematics and statistics");
+        out += "</div>";
+    }
+    out += "</div></div>";
+
+    out += "<div class='section'><h3>Subject catalog</h3><div class='stack'>";
+    for (int i = 1; i <= school.subjectCount; ++i) {
+        const SubjectProfile subject = i <= static_cast<int>(subjects.size()) ? subjects[i - 1] : SubjectProfile{"Subject " + to_string(i), "Teacher " + to_string(i), (i <= school.targetCoreSubjects ? "core" : "elective"), (i <= school.targetCoreSubjects ? 5 : 3)};
+        out += "<div class='field-grid four'>";
+        out += textField("Subject name", "subject_name_" + to_string(i), subject.name, "Example: Algebra");
+        out += textField("Assigned teacher", "subject_teacher_" + to_string(i), subject.teacher, "Teacher responsible");
+        out += selectField("Category", "subject_category_" + to_string(i), {{"core", "Core"}, {"elective", "Elective"}}, subject.category);
+        out += numberField("Weekly periods", "subject_periods_" + to_string(i), subject.weeklyPeriods, 1, 20);
+        out += "</div>";
+    }
+    out += "</div></div>";
+
+    out += "<div class='actions'><button class='btn btn-primary' type='submit'>Review timetable</button><a class='btn btn-secondary' href='/'>Back to setup</a></div>";
+    out += "<p class='page-note'>Tip: make the number of core subjects and elective subjects align with the targets from the previous step. If they do not, the review page will flag the mismatch rather than silently hiding it.</p>";
+    out += "</form></div></div>";
+    out += renderPlannerFooter();
+    return out;
+}
+
+string renderTimetableGrid(const PlannerSnapshot& snapshot) {
+    int days = max(1, snapshot.school.daysPerWeek);
+    int periods = max(1, snapshot.school.periodsPerDay);
+    vector<vector<string>> display(days, vector<string>(periods, ""));
+    vector<vector<string>> teacher(days, vector<string>(periods, ""));
+    vector<vector<string>> tone(days, vector<string>(periods, "open"));
+
+    for (const auto& cell : snapshot.timetable) {
+        if (cell.dayIndex < 0 || cell.dayIndex >= days || cell.periodIndex < 0 || cell.periodIndex >= periods) continue;
+        display[cell.dayIndex][cell.periodIndex] = cell.subject;
+        teacher[cell.dayIndex][cell.periodIndex] = cell.teacher;
+        tone[cell.dayIndex][cell.periodIndex] = cell.elective ? "elective" : "core";
+    }
+
+    string out = "<div class='table-wrap'><table class='timetable'><thead><tr><th>Period</th>";
+    for (int day = 0; day < days; ++day) {
+        out += "<th>" + htmlEscape(WEEK_DAYS[day % WEEK_DAYS.size()]) + "</th>";
+    }
+    out += "</tr></thead><tbody>";
+    for (int period = 0; period < periods; ++period) {
+        out += "<tr><td><strong>Period " + to_string(period + 1) + "</strong><div class='small'>" + to_string(snapshot.school.periodMinutes) + " min</div></td>";
+        for (int day = 0; day < days; ++day) {
+            string subject = display[day][period];
+            string teacherName = teacher[day][period];
+            string slotClass = tone[day][period];
+            if (subject.empty()) {
+                out += "<td><div class='slot open'>Open slot<span>Buffer / independent study</span></div></td>";
+            } else {
+                out += "<td><div class='slot " + slotClass + "'><strong>" + htmlEscape(subject) + "</strong><span>" + htmlEscape(teacherName) + "</span></div></td>";
+            }
+        }
+        out += "</tr>";
+    }
+    out += "</tbody></table></div>";
+    return out;
+}
+
+string renderPlannerResultsPage(const PlannerSnapshot& snapshot) {
+    string out = renderPlannerHeader(
+        "Timetable Review",
+        "The weekly grid has been assembled from your institution, teacher, and subject inputs. Review the plan, check overloads, and export the structure for further refinement."
+    );
+
+    int totalAssigned = static_cast<int>(snapshot.timetable.size());
+    int totalSlots = max(1, snapshot.school.daysPerWeek) * max(1, snapshot.school.periodsPerDay);
+    int estimatedSections = max(1, (snapshot.school.studentCount + max(1, snapshot.school.averageClassSize) - 1) / max(1, snapshot.school.averageClassSize));
+
+    out += "<div class='summary'>";
+    out += renderMetric("Students", to_string(snapshot.school.studentCount), "accent");
+    out += renderMetric("Estimated sections", to_string(estimatedSections), "good");
+    out += renderMetric("Assigned sessions", to_string(totalAssigned), "warn");
+    out += renderMetric("Available slots", to_string(totalSlots), "accent");
+    out += "</div>";
+
+    if (!snapshot.warnings.empty()) {
+        out += "<div class='section warning'><strong>Planning warnings</strong><ul>";
+        for (const auto& warning : snapshot.warnings) {
+            out += "<li>" + htmlEscape(warning) + "</li>";
+        }
+        out += "</ul></div>";
+    } else {
+        out += "<div class='section success'>No structural issues were detected in the supplied timetable data.</div>";
+    }
+
+    out += "<div class='grid'>";
+    out += "<div class='card section'><div class='card-head'>School snapshot</div><div class='card-body'><div class='field-grid three'>";
+    out += renderMetric("Institution", snapshot.school.institutionName, "accent");
+    out += renderMetric("Academic year", snapshot.school.academicYear, "accent");
+    out += renderMetric("Elective choice limit", to_string(snapshot.school.electiveChoiceLimit), "warn");
+    out += "</div><p class='page-note'>Period length: " + to_string(snapshot.school.periodMinutes) + " minutes. Break length: " + to_string(snapshot.school.breakMinutes) + " minutes. Core target: " + to_string(snapshot.school.targetCoreSubjects) + ", elective target: " + to_string(snapshot.school.targetElectiveSubjects) + ".</p></div></div>";
+
+    out += "<div class='card section'><div class='card-head'>Teacher load</div><div class='card-body'><div class='table-wrap'><table><thead><tr><th>Teacher</th><th>Contact hours</th><th>Assigned periods</th><th>Status</th></tr></thead><tbody>";
+    map<string, int> teacherLoad;
+    for (const auto& teacher : snapshot.teachers) teacherLoad[teacher.name] = 0;
+    for (const auto& subject : snapshot.selectedSubjects) teacherLoad[subject.teacher] += max(1, subject.weeklyPeriods);
+    for (const auto& teacher : snapshot.teachers) {
+        int assigned = teacherLoad[teacher.name];
+        string status = assigned > teacher.contactHours ? "Overload" : (assigned == teacher.contactHours ? "Full" : "Balanced");
+        out += "<tr><td>" + htmlEscape(teacher.name) + "</td><td>" + to_string(teacher.contactHours) + "</td><td>" + to_string(assigned) + "</td><td>" + htmlEscape(status) + "</td></tr>";
+    }
+    out += "</tbody></table></div></div></div>";
+    out += "</div>";
+
+    out += "<div class='section'><h3>Subject catalogue</h3><div class='table-wrap'><table><thead><tr><th>Subject</th><th>Type</th><th>Teacher</th><th>Weekly periods</th></tr></thead><tbody>";
+    for (const auto& subject : snapshot.subjects) {
+        out += "<tr><td>" + htmlEscape(subject.name) + "</td><td>" + htmlEscape(prettyCategory(subject.category)) + "</td><td>" + htmlEscape(subject.teacher) + "</td><td>" + to_string(subject.weeklyPeriods) + "</td></tr>";
+    }
+    out += "</tbody></table></div></div>";
+
+    out += "<div class='section'><h3>Weekly timetable</h3>";
+    out += renderTimetableGrid(snapshot);
+    out += "</div>";
+
+    out += "<div class='section'><h3>Elective selection</h3><div class='table-wrap'><table><thead><tr><th>Chosen electives</th><th>Teacher</th><th>Weekly periods</th></tr></thead><tbody>";
+    if (snapshot.selectedElectives.empty()) {
+        out += "<tr><td colspan='3' class='table-muted'>No elective subjects were selected for the current choice limit.</td></tr>";
+    } else {
+        for (const auto& elective : snapshot.selectedElectives) {
+            out += "<tr><td>" + htmlEscape(elective.name) + "</td><td>" + htmlEscape(elective.teacher) + "</td><td>" + to_string(elective.weeklyPeriods) + "</td></tr>";
+        }
+    }
+    out += "</tbody></table></div></div>";
+
+    out += "<div class='actions'><a class='btn btn-primary' href='/'>Start another plan</a><a class='btn btn-secondary' href='/sample-data'>Load sample data</a></div>";
+    out += renderPlannerFooter();
+    return out;
+}
+
 string renderHomePage(const string& prefill, const string& message = "") {
     string out = renderHeader();
     out += R"HTML(
@@ -1303,76 +1830,50 @@ bool readHttpRequest(int client, HttpRequest& req) {
 }
 
 string handleHome() {
-    return renderHomePage(sampleActivitiesText());
+    return renderPlannerHomePage();
 }
 
-string handleAnalyze(const string& body) {
+string handleSetup(const string& body) {
     auto form = parseFormUrlEncoded(body);
-    string input = form.count("activities") ? form["activities"] : sampleActivitiesText();
-    vector<string> errors;
-    vector<Activity> acts = parseActivitiesFromText(input, errors);
-    if (acts.empty() && errors.empty()) {
-        errors.pb("No valid activities were provided.");
-    }
-    return renderResultsPage(input, acts, errors, form);
+    SchoolProfile school = parseSchoolProfile(form);
+    vector<TeacherProfile> teachers = parseTeachers(form, school.teacherCount);
+    vector<SubjectProfile> subjects = parseSubjects(form, school.subjectCount);
+    return renderCurriculumPage(school, teachers, subjects);
+}
+
+string handleReview(const string& body) {
+    auto form = parseFormUrlEncoded(body);
+    SchoolProfile school = parseSchoolProfile(form);
+    vector<TeacherProfile> teachers = parseTeachers(form, school.teacherCount);
+    vector<SubjectProfile> subjects = parseSubjects(form, school.subjectCount);
+    PlannerSnapshot snapshot = buildPlannerSnapshot(school, teachers, subjects);
+    return renderPlannerResultsPage(snapshot);
+}
+
+string handleSampleData() {
+    return renderPlannerHomePage();
 }
 
 string handleDownload(const string& body) {
-    auto form = parseFormUrlEncoded(body);
-    string input = form.count("activities") ? form["activities"] : sampleActivitiesText();
-    vector<string> errors;
-    vector<Activity> acts = parseActivitiesFromText(input, errors);
-    string which = form.count("download_algo") ? form["download_algo"] : string("dp");
-    string csv;
-    string filename = "schedule_output.csv";
-
-    if (which == "act") {
-        auto sel = activitySelection(acts);
-        csv = renderCsv(sel);
-        filename = "activity_selection.csv";
-    } else if (which == "weighted") {
-        auto sel = weightedScheduling(acts);
-        csv = renderCsv(sel);
-        filename = "weighted_greedy.csv";
-    } else if (which == "jobseq") {
-        auto sel = jobSequencingDSU(acts);
-        csv = renderCsv(sel);
-        filename = "job_sequencing.csv";
-    } else if (which == "rooms") {
-        vector<vector<Activity>> rooms;
-        minRoomsRequired(acts, rooms);
-        // CSV header: Room,ID,Activity,Start,Finish,Duration,Priority
-        ostringstream out;
-        out << "Room,ID,Activity,Start,Finish,Duration(min),Priority\n";
-        for (size_t r = 0; r < rooms.size(); ++r) {
-            for (const auto& a : rooms[r]) {
-                out << (r+1) << "," << a.id << "," << activityNames[a.name_id] << "," << minutesToTime(a.start) << "," << minutesToTime(a.finish) << "," << (a.finish - a.start) << "," << a.weight << "\n";
-            }
-        }
-        csv = out.str();
-        filename = "rooms_allocation.csv";
-    } else {
-        auto optimal = weightedIntervalSchedulingDP(acts);
-        csv = renderCsv(optimal);
-        filename = "optimal_schedule.csv";
-    }
-
-    return buildResponse("200 OK", "text/csv; charset=utf-8", csv,
-                         string("Content-Disposition: attachment; filename=\"") + filename + "\"\r\n");
+    (void)body;
+    return buildResponse("200 OK", "text/html; charset=utf-8", renderPlannerHomePage());
 }
 
 string handleRequest(const HttpRequest& req) {
     if (req.method == "GET" && (req.path == "/" || req.path == "/index.html")) {
         return buildResponse("200 OK", "text/html; charset=utf-8", handleHome());
     }
-    if (req.method == "POST" && req.path == "/analyze") {
-        return buildResponse("200 OK", "text/html; charset=utf-8", handleAnalyze(req.body));
+    if (req.method == "POST" && req.path == "/setup") {
+        return buildResponse("200 OK", "text/html; charset=utf-8", handleSetup(req.body));
+    }
+    if (req.method == "POST" && (req.path == "/review" || req.path == "/analyze")) {
+        return buildResponse("200 OK", "text/html; charset=utf-8", handleReview(req.body));
     }
     if (req.method == "POST" && req.path == "/download") {
         return handleDownload(req.body);
     }
     if (req.method == "GET" && req.path == "/sample-data") {
-        return buildResponse("200 OK", "text/plain; charset=utf-8", sampleActivitiesText());
+        return buildResponse("200 OK", "text/html; charset=utf-8", handleSampleData());
     }
     const string notFound = "<h1>404 Not Found</h1><p>The requested route was not found.</p>";
     return buildResponse("404 Not Found", "text/html; charset=utf-8", notFound);
