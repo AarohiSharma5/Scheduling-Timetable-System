@@ -11,7 +11,7 @@ export const CurriculumEditorComponent: React.FC<{
   const [newTeacher, setNewTeacher] = useState({ name: "", contact_hours: 24 });
   const [newSubject, setNewSubject] = useState({
     name: "",
-    teacher_id: teachers[0]?.id || 1,
+    teacher_id: 0,
     is_core: true,
     periods_required: 1,
   });
@@ -33,19 +33,24 @@ export const CurriculumEditorComponent: React.FC<{
   };
 
   const addSubject = () => {
-    if (newSubject.name.trim()) {
-      const subject: Subject = {
-        id: Date.now(),
-        ...newSubject,
-      };
-      onSubjectsChange([...subjects, subject]);
-      setNewSubject({
-        name: "",
-        teacher_id: teachers[0]?.id || 1,
-        is_core: true,
-        periods_required: 1,
-      });
+    if (!newSubject.name.trim()) {
+      return;
     }
+    if (!newSubject.teacher_id) {
+      alert("Please select a teacher for this subject");
+      return;
+    }
+    const subject: Subject = {
+      id: Date.now(),
+      ...newSubject,
+    };
+    onSubjectsChange([...subjects, subject]);
+    setNewSubject({
+      name: "",
+      teacher_id: 0,
+      is_core: true,
+      periods_required: 1,
+    });
   };
 
   const removeSubject = (id: number) => {
@@ -126,9 +131,10 @@ export const CurriculumEditorComponent: React.FC<{
             onChange={(e) => setNewSubject({ ...newSubject, name: e.target.value })}
           />
           <select
-            value={newSubject.teacher_id}
+            value={newSubject.teacher_id || ""}
             onChange={(e) => setNewSubject({ ...newSubject, teacher_id: +e.target.value })}
           >
+            <option value="">-- Select Teacher --</option>
             {teachers.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.name}
