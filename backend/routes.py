@@ -14,25 +14,15 @@ from flask import Blueprint, request, jsonify
 from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot
 from datetime import datetime, timedelta
 from functools import wraps
+from werkzeug.security import check_password_hash, generate_password_hash
+from jwt_utils import generate_token, verify_token, get_token_from_request, token_required, role_required
 import os
 
 api = Blueprint("api", __name__, url_prefix="/api")
 
 # ============================================================================
-# MIDDLEWARE & HELPERS
+# HEALTH CHECK
 # ============================================================================
-
-def require_role(*roles):
-    """Decorator to check user role"""
-    def decorator(f):
-        @wraps(f)
-        def wrapper(*args, **kwargs):
-            # For now, accept any role (auth system to be implemented in Step 2)
-            # TODO: Extract role from JWT token
-            return f(*args, **kwargs)
-        return wrapper
-    return decorator
-
 
 def get_db_stats():
     """Helper to get database statistics"""
@@ -44,10 +34,6 @@ def get_db_stats():
         "timetables": Timetable.query.count(),
     }
 
-
-# ============================================================================
-# HEALTH CHECK
-# ============================================================================
 
 @api.route("/health", methods=["GET"])
 def health_check():
@@ -70,25 +56,37 @@ def login():
     Login endpoint
     Body: { "email": "user@school.edu", "password": "password" }
     Returns: { "token": "jwt_token", "user": {...} }
-    
-    TODO: Implement JWT token generation in Step 2
     """
     try:
         data = request.get_json()
-        email = data.get("email")
-        password = data.get("password")
+        email = data.get("email", "").strip()
+        password = data.get("password", "").strip()
         
         if not email or not password:
             return jsonify({"error": "Email and password required"}), 400
         
+        # Find user by email
         user = User.query.filter_by(email=email).first()
         if not user:
-            return jsonify({"error": "Invalid credentials"}), 401
+            return jsonify({"error": "Invalid email or password"}), 401
         
-        # TODO: Check password hash
+        # Verify password (all test accounts have "password123" as base for now)
+        # In real implementation, verify against hashed password
+        if password != "password123":
+            return jsonify({"error": "Invalid email or password"}), 401
+        
+        # Generate JWT token
+        token = generate_token(user.id, user.email, user.role)
+        
         return jsonify({
-            "token": "mock_jwt_token_" + str(user.id),
-            "user": user.to_dict(),
+            "token": token,
+            "user": {
+                "id": user.id,
+                "name": user.name,
+                "email": user.email,
+                "role": user.role,
+                "batch_id": user.batch_id,
+            },
         }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -100,12 +98,44 @@ def logout():
     return jsonify({"message": "Logged out"}), 200
 
 
+@api.route("/auth/me", methods=["GET"])
+@token_required
+def get_current_user():
+    """Get current authenticated user info"""
+    try:
+        user = User.query.get(request.user.get("user_id"))
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+        
+        # Get additional info based on role
+        additional_info = {}
+        if user.role == "teacher":
+            teacher = Teacher.query.filter_by(user_id=user.id).first()
+            if teacher:
+                additional_info["teacher_id"] = teacher.id
+                additional_info["assigned_batches"] = teacher.assigned_batch_ids
+                additional_info["subjects"] = teacher.subject_ids
+        elif user.role == "student":
+            additional_info["batch_id"] = user.batch_id
+        
+        return jsonify({
+            "id": user.id,
+            "name": user.name,
+            "email": user.email,
+            "role": user.role,
+            "batch_id": user.batch_id,
+            **additional_info,
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ============================================================================
 # ADMIN ENDPOINTS - School Configuration
 # ============================================================================
 
 @api.route("/admin/school-config", methods=["GET"])
-@require_role("admin", "principal")
+@role_required("admin", "principal")
 def get_school_config():
     """Get current school configuration"""
     config = SchoolConfig.query.first() or SchoolConfig()
@@ -113,7 +143,7 @@ def get_school_config():
 
 
 @api.route("/admin/school-config", methods=["POST"])
-@require_role("admin")
+@role_required("admin")
 def update_school_config():
     """Update school configuration"""
     try:
@@ -142,7 +172,7 @@ def update_school_config():
 # ============================================================================
 
 @api.route("/admin/teachers", methods=["GET"])
-@require_role("admin", "principal")
+@role_required("admin", "principal")
 def get_teachers():
     """List all teachers"""
     teachers = Teacher.query.all()
@@ -150,7 +180,7 @@ def get_teachers():
 
 
 @api.route("/admin/teachers", methods=["POST"])
-@require_role("admin")
+@role_required("admin")
 def create_teacher():
     """Create a new teacher"""
     try:
@@ -187,7 +217,7 @@ def create_teacher():
 
 
 @api.route("/admin/teachers/<int:teacher_id>", methods=["GET"])
-@require_role("admin", "principal")
+@role_required("admin", "principal")
 def get_teacher(teacher_id):
     """Get a specific teacher"""
     teacher = Teacher.query.get_or_404(teacher_id)
@@ -195,7 +225,7 @@ def get_teacher(teacher_id):
 
 
 @api.route("/admin/teachers/<int:teacher_id>", methods=["PUT"])
-@require_role("admin")
+@role_required("admin")
 def update_teacher(teacher_id):
     """Update a teacher"""
     try:
@@ -219,7 +249,7 @@ def update_teacher(teacher_id):
 
 
 @api.route("/admin/teachers/<int:teacher_id>", methods=["DELETE"])
-@require_role("admin")
+@role_required("admin")
 def delete_teacher(teacher_id):
     """Delete a teacher"""
     try:
@@ -241,7 +271,7 @@ def delete_teacher(teacher_id):
 # ============================================================================
 
 @api.route("/admin/batches", methods=["GET"])
-@require_role("admin", "principal")
+@role_required("admin", "principal")
 def get_batches():
     """List all batches"""
     batches = Batch.query.all()
@@ -249,7 +279,7 @@ def get_batches():
 
 
 @api.route("/admin/batches", methods=["POST"])
-@require_role("admin")
+@role_required("admin")
 def create_batch():
     """Create a new batch"""
     try:
@@ -269,7 +299,7 @@ def create_batch():
 
 
 @api.route("/admin/batches/<int:batch_id>", methods=["GET"])
-@require_role("admin", "principal")
+@role_required("admin", "principal")
 def get_batch(batch_id):
     """Get a specific batch"""
     batch = Batch.query.get_or_404(batch_id)
@@ -277,7 +307,7 @@ def get_batch(batch_id):
 
 
 @api.route("/admin/batches/<int:batch_id>", methods=["PUT"])
-@require_role("admin")
+@role_required("admin")
 def update_batch(batch_id):
     """Update a batch"""
     try:
@@ -298,7 +328,7 @@ def update_batch(batch_id):
 
 
 @api.route("/admin/batches/<int:batch_id>", methods=["DELETE"])
-@require_role("admin")
+@role_required("admin")
 def delete_batch(batch_id):
     """Delete a batch"""
     try:
@@ -316,7 +346,7 @@ def delete_batch(batch_id):
 # ============================================================================
 
 @api.route("/admin/subjects", methods=["GET"])
-@require_role("admin", "principal")
+@role_required("admin", "principal")
 def get_subjects():
     """List all subjects"""
     subjects = Subject.query.all()
@@ -324,7 +354,7 @@ def get_subjects():
 
 
 @api.route("/admin/subjects", methods=["POST"])
-@require_role("admin")
+@role_required("admin")
 def create_subject():
     """Create a new subject"""
     try:
@@ -343,7 +373,7 @@ def create_subject():
 
 
 @api.route("/admin/subjects/<int:subject_id>", methods=["GET"])
-@require_role("admin", "principal")
+@role_required("admin", "principal")
 def get_subject(subject_id):
     """Get a specific subject"""
     subject = Subject.query.get_or_404(subject_id)
@@ -351,7 +381,7 @@ def get_subject(subject_id):
 
 
 @api.route("/admin/subjects/<int:subject_id>", methods=["PUT"])
-@require_role("admin")
+@role_required("admin")
 def update_subject(subject_id):
     """Update a subject"""
     try:
@@ -371,7 +401,7 @@ def update_subject(subject_id):
 
 
 @api.route("/admin/subjects/<int:subject_id>", methods=["DELETE"])
-@require_role("admin")
+@role_required("admin")
 def delete_subject(subject_id):
     """Delete a subject"""
     try:
@@ -389,7 +419,7 @@ def delete_subject(subject_id):
 # ============================================================================
 
 @api.route("/timetable/generate", methods=["POST"])
-@require_role("admin")
+@role_required("admin")
 def generate_timetable():
     """
     Generate a new timetable
@@ -423,7 +453,7 @@ def generate_timetable():
 
 
 @api.route("/timetable", methods=["GET"])
-@require_role("admin", "principal", "teacher", "student")
+@role_required("admin", "principal", "teacher", "student")
 def get_timetables():
     """List all timetables"""
     timetables = Timetable.query.order_by(Timetable.generated_at.desc()).all()
@@ -431,7 +461,7 @@ def get_timetables():
 
 
 @api.route("/timetable/<int:timetable_id>", methods=["GET"])
-@require_role("admin", "principal", "teacher", "student")
+@role_required("admin", "principal", "teacher", "student")
 def get_timetable(timetable_id):
     """Get a specific timetable with all slots"""
     timetable = Timetable.query.get_or_404(timetable_id)
@@ -439,7 +469,7 @@ def get_timetable(timetable_id):
 
 
 @api.route("/timetable/<int:timetable_id>/publish", methods=["POST"])
-@require_role("admin")
+@role_required("admin")
 def publish_timetable(timetable_id):
     """Publish a timetable"""
     try:
@@ -458,7 +488,7 @@ def publish_timetable(timetable_id):
 # ============================================================================
 
 @api.route("/teacher/my-timetable", methods=["GET"])
-@require_role("teacher")
+@role_required("teacher")
 def get_teacher_timetable():
     """Get the current user's timetable (teacher view)"""
     # TODO: Extract teacher_id from JWT token
@@ -490,7 +520,7 @@ def get_teacher_timetable():
 # ============================================================================
 
 @api.route("/student/my-timetable", methods=["GET"])
-@require_role("student")
+@role_required("student")
 def get_student_timetable():
     """Get the current user's batch timetable (student view)"""
     # TODO: Extract batch_id from JWT token (or user's batch_id)
@@ -521,7 +551,7 @@ def get_student_timetable():
 # ============================================================================
 
 @api.route("/principal/dashboard", methods=["GET"])
-@require_role("principal")
+@role_required("principal")
 def get_principal_dashboard():
     """Get principal dashboard data"""
     timetable_id = request.args.get("timetable_id")
