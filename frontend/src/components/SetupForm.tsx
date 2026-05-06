@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React from "react";
 import type { SchoolProfile } from "../types";
 
 export const SetupFormComponent: React.FC<{

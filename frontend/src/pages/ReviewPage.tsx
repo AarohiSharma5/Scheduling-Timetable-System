@@ -1,6 +1,5 @@
 import React, { useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { Download } from "lucide-react";
 import { api } from "../api";
 import { usePlanStore } from "../store";
 import { Alert, LoadingSpinner } from "../components/Common";
@@ -14,7 +13,7 @@ const ReviewPage: React.FC = () => {
 
   useEffect(() => {
     loadPlan();
-  }, [id]);
+  }, [id, setLoading, setCurrentPlan, setError]);
 
   const loadPlan = async () => {
     if (!id) return;

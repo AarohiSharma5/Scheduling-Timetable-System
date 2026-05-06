@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Plan, SchoolProfile, Teacher, Subject } from "./types";
+import type { Plan } from "./types";
 
 interface PlanState {
   plans: Plan[];

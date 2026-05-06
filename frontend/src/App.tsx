@@ -8,7 +8,7 @@ import ReviewPage from "./pages/ReviewPage";
 
 const App: React.FC = () => {
   return (
-    <BrowserRouter>
+    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <div className="min-h-screen bg-gray-50">
         <Header />
         <Routes>

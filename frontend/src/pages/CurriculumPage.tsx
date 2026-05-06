@@ -14,7 +14,7 @@ const CurriculumPage: React.FC = () => {
 
   useEffect(() => {
     loadPlan();
-  }, [id]);
+  }, [id, setLoading, setCurrentPlan, setError]);
 
   const loadPlan = async () => {
     if (!id) return;

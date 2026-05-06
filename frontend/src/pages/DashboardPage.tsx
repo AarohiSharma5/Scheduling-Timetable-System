@@ -12,7 +12,7 @@ const DashboardPage: React.FC = () => {
 
   useEffect(() => {
     loadPlans();
-  }, []);
+  }, [setLoading, setPlans, setError]);
 
   const loadPlans = async () => {
     try {

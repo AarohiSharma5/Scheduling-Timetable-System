@@ -2,15 +2,15 @@ services:
   postgres:
     image: postgres:15-alpine
     environment:
-      POSTGRES_USER: planner
-      POSTGRES_PASSWORD: password
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: timetable_db
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U planner"]
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -18,10 +18,10 @@ services:
   backend:
     build: ./backend
     ports:
-      - "5000:5000"
+      - "8000:5000"
     environment:
-      DATABASE_URL: postgresql://planner:password@postgres:5432/timetable_db
-      FLASK_ENV: production
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/timetable_db
+      FLASK_ENV: development
     depends_on:
       postgres:
         condition: service_healthy
@@ -33,7 +33,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      REACT_APP_API_URL: http://localhost:5000/api
+      REACT_APP_API_URL: http://localhost:8000/api
     depends_on:
       - backend
     volumes:
