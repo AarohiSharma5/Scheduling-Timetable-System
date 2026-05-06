@@ -1,7 +1,0 @@
-ID,Activity,Start,Finish,Duration(min),Priority
-1,Math,09:00,10:00,60,5
-2,Physics,10:00,11:30,90,4
-5,English,11:30,12:30,60,2
-6,DSA,13:00,14:30,90,5
-10,Seminar,14:30,16:00,90,4
-9,Workshop,16:00,18:00,120,4
