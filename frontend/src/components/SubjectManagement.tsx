@@ -27,7 +27,7 @@ export default function SubjectManagement() {
     try {
       setLoading(true);
       const res = await api.admin.subjects.list();
-      setSubjects(res.data);
+      setSubjects(res || []);
     } catch (err) {
       setError("Failed to load subjects");
       console.error(err);

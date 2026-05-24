@@ -37,9 +37,9 @@ export default function ConfigurationForm() {
     try {
       setLoading(true);
       const res = await api.admin.config.get();
-      if (res.data) {
-        setConfig(res.data);
-        setFormData(res.data);
+      if (res) {
+        setConfig(res);
+        setFormData(res);
       }
     } catch (err) {
       setError("Failed to load configuration");

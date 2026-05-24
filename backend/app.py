@@ -7,9 +7,9 @@ def create_app(config_name=None):
     if config_name is None:
         config_name = os.getenv("FLASK_ENV", "development")
     
-    # Serve React frontend from build folder
+    # Serve React frontend from build folder - use proper static file serving
     react_build_path = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'build')
-    app = Flask(__name__, static_folder=react_build_path, static_url_path='')
+    app = Flask(__name__, static_folder=os.path.join(react_build_path, 'static'), static_url_path='/static')
     app.config.from_object(config[config_name])
     
     db.init_app(app)
@@ -25,15 +25,19 @@ def create_app(config_name=None):
     app.register_blueprint(api)
     app.register_blueprint(timetable_bp)
     
-    # Serve React index.html for all non-API routes (for React Router)
+    # Serve React index.html for all non-API/non-static routes (for React Router)
     @app.route('/', defaults={'path': ''})
-    @app.route('/<path:path>')
+    @app.route('/<path:path>', methods=['GET'])
     def serve_react(path):
-        if path and (path.startswith('api/') or path.endswith(('.js', '.css', '.png', '.jpg', '.svg', '.ico', '.woff', '.woff2', '.ttf', '.eot'))):
-            if os.path.exists(os.path.join(react_build_path, path)):
-                return send_from_directory(react_build_path, path)
+        # Don't catch static files or API requests
+        if path.startswith('api/') or path.startswith('static/'):
             return {'error': 'Not found'}, 404
-        return send_from_directory(react_build_path, 'index.html')
+        # Serve index.html for all React routes
+        index_path = os.path.join(react_build_path, 'index.html')
+        if os.path.exists(index_path):
+            with open(index_path, 'r') as f:
+                return f.read(), 200, {'Content-Type': 'text/html; charset=utf-8'}
+        return {'error': 'index.html not found'}, 500
     
     with app.app_context():
         db.create_all()
@@ -42,4 +46,4 @@ def create_app(config_name=None):
 
 if __name__ == "__main__":
     app = create_app()
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=8000, debug=True)

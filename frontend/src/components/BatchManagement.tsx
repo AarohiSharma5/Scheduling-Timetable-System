@@ -29,7 +29,7 @@ export default function BatchManagement() {
     try {
       setLoading(true);
       const res = await api.admin.batches.list();
-      setBatches(res.data);
+      setBatches(res || []);
     } catch (err) {
       setError("Failed to load batches");
       console.error(err);
