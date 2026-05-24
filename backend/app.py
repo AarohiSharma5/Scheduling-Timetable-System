@@ -21,7 +21,9 @@ def create_app(config_name=None):
         pass
     
     from routes import api
+    from timetable_routes import timetable_bp
     app.register_blueprint(api)
+    app.register_blueprint(timetable_bp)
     
     # Serve React index.html for all non-API routes (for React Router)
     @app.route('/', defaults={'path': ''})

@@ -184,7 +184,7 @@ export const api = {
 
   timetable: {
     list: async () => {
-      const { data } = await axiosInstance.get("/timetable");
+      const { data } = await axiosInstance.get("/timetable/list");
       return data;
     },
     get: async (id: number) => {
@@ -200,6 +200,14 @@ export const api = {
     },
     publish: async (id: number) => {
       const { data } = await axiosInstance.post(`/timetable/${id}/publish`);
+      return data;
+    },
+    delete: async (id: number) => {
+      const { data } = await axiosInstance.delete(`/timetable/${id}`);
+      return data;
+    },
+    getBatchSchedule: async (batchId: number) => {
+      const { data } = await axiosInstance.get(`/timetable/batch/${batchId}`);
       return data;
     },
   },
