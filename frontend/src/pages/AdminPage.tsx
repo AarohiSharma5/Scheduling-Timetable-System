@@ -1,0 +1,70 @@
+import React, { useState } from "react";
+import { useAuthStore } from "../stores/authStore";
+import TeacherManagement from "../components/TeacherManagement";
+import BatchManagement from "../components/BatchManagement";
+import SubjectManagement from "../components/SubjectManagement";
+import ConfigurationForm from "../components/ConfigurationForm";
+
+type Tab = "teachers" | "batches" | "subjects" | "config";
+
+const tabs: Record<Tab, { icon: string; label: string }> = {
+  teachers: { icon: "👨‍🏫", label: "Teachers" },
+  batches: { icon: "📚", label: "Batches" },
+  subjects: { icon: "📖", label: "Subjects" },
+  config: { icon: "⚙️", label: "Configuration" },
+};
+
+export default function AdminPage() {
+  const { user, logout } = useAuthStore();
+  const [activeTab, setActiveTab] = useState<Tab>("teachers");
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
+      {/* Header */}
+      <header className="bg-white shadow">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+          <h1 className="text-3xl font-bold text-slate-900">📊 Admin Dashboard</h1>
+          <div className="flex items-center gap-4">
+            <span className="text-sm text-slate-600">👤 {user?.name}</span>
+            <button
+              onClick={() => logout()}
+              className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded font-medium"
+            >
+              Logout
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Tab Navigation */}
+      <div className="bg-white border-b border-slate-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex gap-2">
+          {(Object.entries(tabs) as [Tab, typeof tabs[Tab]][]).map(([key, { icon, label }]) => (
+            <button
+              key={key}
+              onClick={() => setActiveTab(key)}
+              className={`px-4 py-3 font-medium flex items-center gap-2 border-b-2 transition ${
+                activeTab === key
+                  ? "border-blue-600 text-blue-600"
+                  : "border-transparent text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              <span className="text-lg">{icon}</span>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Content */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="bg-white rounded-lg shadow-md p-6">
+          {activeTab === "teachers" && <TeacherManagement />}
+          {activeTab === "batches" && <BatchManagement />}
+          {activeTab === "subjects" && <SubjectManagement />}
+          {activeTab === "config" && <ConfigurationForm />}
+        </div>
+      </main>
+    </div>
+  );
+}

@@ -1,23 +1,72 @@
-import React from "react";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import { Header } from "./components/Common";
-import DashboardPage from "./pages/DashboardPage";
-import SetupPage from "./pages/SetupPage";
-import CurriculumPage from "./pages/CurriculumPage";
-import ReviewPage from "./pages/ReviewPage";
+import React, { useEffect } from "react";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { useAuthStore } from "./stores/authStore";
+import ProtectedRoute from "./components/ProtectedRoute";
+
+// Pages
+import LoginPage from "./pages/LoginPage";
+import AdminPage from "./pages/AdminPage";
+import PrincipalPage from "./pages/PrincipalPage";
+import TeacherPage from "./pages/TeacherPage";
+import StudentPage from "./pages/StudentPage";
 
 const App: React.FC = () => {
+  const { restoreSession, error } = useAuthStore();
+
+  useEffect(() => {
+    restoreSession();
+  }, [restoreSession]);
+
+  useEffect(() => {
+    if (error) {
+      console.error("Auth error:", error);
+    }
+  }, [error]);
+
   return (
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-      <div className="min-h-screen bg-gray-50">
-        <Header />
-        <Routes>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/plans/:id/setup" element={<SetupPage />} />
-          <Route path="/plans/:id/curriculum" element={<CurriculumPage />} />
-          <Route path="/plans/:id/review" element={<ReviewPage />} />
-        </Routes>
-      </div>
+      <Routes>
+        {/* Public Routes */}
+        <Route path="/login" element={<LoginPage />} />
+
+        {/* Protected Routes */}
+        <Route
+          path="/admin"
+          element={
+            <ProtectedRoute requiredRole="admin">
+              <AdminPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/principal"
+          element={
+            <ProtectedRoute requiredRole="principal">
+              <PrincipalPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/teacher"
+          element={
+            <ProtectedRoute requiredRole="teacher">
+              <TeacherPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/student"
+          element={
+            <ProtectedRoute requiredRole="student">
+              <StudentPage />
+            </ProtectedRoute>
+          }
+        />
+
+        {/* Default redirect to login */}
+        <Route path="/" element={<Navigate to="/login" replace />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
     </BrowserRouter>
   );
 };
