@@ -176,6 +176,8 @@ class Timetable(db.Model):
     generated_at = db.Column(db.DateTime, default=datetime.utcnow)
     published_at = db.Column(db.DateTime)
     warnings = db.Column(db.JSON, default=list)  # Any constraint violations or warnings
+    school_name = db.Column(db.String(255))  # For PDF export header
+    school_logo_path = db.Column(db.String(255))  # Path to logo image
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -190,7 +192,75 @@ class Timetable(db.Model):
             "generated_at": self.generated_at.isoformat() if self.generated_at else None,
             "published_at": self.published_at.isoformat() if self.published_at else None,
             "warnings": self.warnings or [],
+            "school_name": self.school_name,
+            "school_logo_path": self.school_logo_path,
         }
         if include_slots:
             result["slots"] = [slot.to_dict() for slot in self.slots]
         return result
+
+
+# ============================================================================
+# LEAVE REQUEST MODEL - Teacher leave management
+# ============================================================================
+class LeaveRequest(db.Model):
+    __tablename__ = "leave_requests"
+    id = db.Column(db.Integer, primary_key=True)
+    teacher_id = db.Column(db.Integer, db.ForeignKey("teachers.id"), nullable=False)
+    leave_date = db.Column(db.Date, nullable=False)
+    reason = db.Column(db.Text, nullable=False)
+    leave_type = db.Column(db.String(50), default="sick")  # 'sick', 'casual', 'emergency', 'other'
+    status = db.Column(db.String(20), default="pending")  # 'pending', 'approved', 'rejected'
+    approved_by = db.Column(db.Integer, db.ForeignKey("users.id"))  # Admin/Principal who approved
+    substitute_teacher_id = db.Column(db.Integer, db.ForeignKey("teachers.id"))  # Assigned substitute
+    rejection_reason = db.Column(db.Text)  # Reason if rejected
+    timetable_adjustments = db.Column(db.JSON, default=dict)  # How periods were rescheduled
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "teacher_id": self.teacher_id,
+            "leave_date": self.leave_date.isoformat() if self.leave_date else None,
+            "reason": self.reason,
+            "leave_type": self.leave_type,
+            "status": self.status,
+            "approved_by": self.approved_by,
+            "substitute_teacher_id": self.substitute_teacher_id,
+            "rejection_reason": self.rejection_reason,
+            "timetable_adjustments": self.timetable_adjustments or {},
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+# ============================================================================
+# NOTIFICATION MODEL - User notifications
+# ============================================================================
+class Notification(db.Model):
+    __tablename__ = "notifications"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    title = db.Column(db.String(255), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    notification_type = db.Column(db.String(50), nullable=False)  # 'timetable_generated', 'timetable_updated', 'teacher_substituted', 'timing_changed', 'leave_approved', etc.
+    related_id = db.Column(db.Integer)  # ID of related object (timetable_id, leave_request_id, etc.)
+    is_read = db.Column(db.Boolean, default=False)
+    action_url = db.Column(db.String(255))  # Where to redirect on click
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    expires_at = db.Column(db.DateTime)  # Auto-delete after expiration
+    
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "title": self.title,
+            "message": self.message,
+            "notification_type": self.notification_type,
+            "related_id": self.related_id,
+            "is_read": self.is_read,
+            "action_url": self.action_url,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+        }

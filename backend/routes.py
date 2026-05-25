@@ -11,7 +11,7 @@ Endpoints organized by module:
 """
 
 from flask import Blueprint, request, jsonify
-from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot
+from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification
 from datetime import datetime, timedelta
 from functools import wraps
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -888,4 +888,358 @@ def seed_data():
             "stats": get_db_stats(),
         }), 200
     except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# PDF EXPORT ENDPOINTS
+# ============================================================================
+
+@api.route("/export/timetable/batch/<int:timetable_id>", methods=["GET"])
+@token_required
+@role_required(["admin", "principal"])
+def export_batch_timetable(timetable_id):
+    """Export timetable as PDF (batch-wise layout)"""
+    try:
+        from pdf_utils import export_batch_timetable
+        
+        timetable = Timetable.query.get(timetable_id)
+        if not timetable:
+            return jsonify({"error": "Timetable not found"}), 404
+        
+        pdf_buffer = export_batch_timetable(timetable_id, school_name=timetable.school_name or "School")
+        
+        return pdf_buffer.getvalue(), 200, {
+            "Content-Disposition": f'attachment; filename="timetable_batch_{timetable_id}.pdf"',
+            "Content-Type": "application/pdf"
+        }
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/export/timetable/teacher/<int:timetable_id>", methods=["GET"])
+@token_required
+@role_required(["admin", "principal", "teacher"])
+def export_teacher_timetable(timetable_id):
+    """Export timetable as PDF (teacher-wise layout)"""
+    try:
+        from pdf_utils import export_teacher_timetable
+        
+        timetable = Timetable.query.get(timetable_id)
+        if not timetable:
+            return jsonify({"error": "Timetable not found"}), 404
+        
+        pdf_buffer = export_teacher_timetable(timetable_id, school_name=timetable.school_name or "School")
+        
+        return pdf_buffer.getvalue(), 200, {
+            "Content-Disposition": f'attachment; filename="timetable_teacher_{timetable_id}.pdf"',
+            "Content-Type": "application/pdf"
+        }
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# LEAVE MANAGEMENT ENDPOINTS
+# ============================================================================
+
+@api.route("/leaves/request", methods=["POST"])
+@token_required
+@role_required(["teacher"])
+def request_leave():
+    """Teacher requests leave"""
+    try:
+        from leave_service import LeaveService
+        from models import LeaveRequest
+        
+        data = request.get_json()
+        user_id = request.user.get("user_id")
+        
+        # Get teacher for this user
+        user = User.query.get(user_id)
+        teacher = Teacher.query.filter_by(user_id=user_id).first()
+        
+        if not teacher:
+            return jsonify({"error": "Teacher profile not found"}), 404
+        
+        leave_date = datetime.fromisoformat(data.get("leave_date")).date() if isinstance(data.get("leave_date"), str) else data.get("leave_date")
+        reason = data.get("reason", "")
+        leave_type = data.get("leave_type", "casual")
+        
+        result = LeaveService.request_leave(teacher.id, leave_date, reason, leave_type)
+        
+        if result["success"]:
+            leave_request = LeaveRequest.query.get(result["leave_request_id"])
+            return jsonify(leave_request.to_dict()), 201
+        else:
+            return jsonify(result), 400
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/leaves", methods=["GET"])
+@token_required
+def get_leaves():
+    """Get leave requests (with optional filters)"""
+    try:
+        from leave_service import LeaveService
+        
+        user_id = request.user.get("user_id")
+        user = User.query.get(user_id)
+        
+        filters = {}
+        
+        # Students only see their own teacher's leaves
+        if user.role == "teacher":
+            teacher = Teacher.query.filter_by(user_id=user_id).first()
+            if teacher:
+                filters["teacher_id"] = teacher.id
+        
+        # Apply query parameters
+        if request.args.get("status"):
+            filters["status"] = request.args.get("status")
+        if request.args.get("from_date"):
+            filters["from_date"] = request.args.get("from_date")
+        if request.args.get("to_date"):
+            filters["to_date"] = request.args.get("to_date")
+        
+        leave_requests = LeaveService.get_leave_requests(filters)
+        return jsonify([lr.to_dict() for lr in leave_requests]), 200
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/leaves/<int:leave_request_id>", methods=["GET"])
+@token_required
+def get_leave(leave_request_id):
+    """Get a specific leave request"""
+    try:
+        from models import LeaveRequest
+        
+        leave_request = LeaveRequest.query.get(leave_request_id)
+        if not leave_request:
+            return jsonify({"error": "Leave request not found"}), 404
+        
+        return jsonify(leave_request.to_dict()), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/leaves/<int:leave_request_id>/approve", methods=["POST"])
+@token_required
+@role_required(["admin", "principal"])
+def approve_leave(leave_request_id):
+    """Approve a leave request"""
+    try:
+        from leave_service import LeaveService
+        
+        data = request.get_json()
+        approved_by_id = request.user.get("user_id")
+        substitute_teacher_id = data.get("substitute_teacher_id")
+        auto_adjust = data.get("auto_adjust", True)
+        
+        result = LeaveService.approve_leave(leave_request_id, approved_by_id, substitute_teacher_id, auto_adjust)
+        
+        if result["success"]:
+            return jsonify(result["leave_request"]), 200
+        else:
+            return jsonify(result), 400
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/leaves/<int:leave_request_id>/reject", methods=["POST"])
+@token_required
+@role_required(["admin", "principal"])
+def reject_leave(leave_request_id):
+    """Reject a leave request"""
+    try:
+        from leave_service import LeaveService
+        
+        data = request.get_json()
+        rejection_reason = data.get("rejection_reason", "")
+        
+        result = LeaveService.reject_leave(leave_request_id, rejection_reason)
+        
+        if result["success"]:
+            return jsonify(result["leave_request"]), 200
+        else:
+            return jsonify(result), 400
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/teachers/<int:teacher_id>/mark-absent", methods=["POST"])
+@token_required
+@role_required(["admin", "principal"])
+def mark_teacher_absent(teacher_id):
+    """Mark a teacher as absent for a specific date"""
+    try:
+        from leave_service import LeaveService
+        
+        data = request.get_json()
+        absent_date = datetime.fromisoformat(data.get("date")).date() if isinstance(data.get("date"), str) else data.get("date")
+        
+        result = LeaveService.mark_teacher_absent(teacher_id, absent_date)
+        
+        if result["success"]:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/leaves/<int:leave_request_id>/substitute-options", methods=["GET"])
+@token_required
+@role_required(["admin", "principal"])
+def get_substitute_options(leave_request_id):
+    """Get available substitutes for a leave request"""
+    try:
+        from models import LeaveRequest, Teacher, Subject
+        from leave_service import LeaveService
+        
+        leave_request = LeaveRequest.query.get(leave_request_id)
+        if not leave_request:
+            return jsonify({"error": "Leave request not found"}), 404
+        
+        teacher = Teacher.query.get(leave_request.teacher_id)
+        if not teacher:
+            return jsonify({"error": "Teacher not found"}), 404
+        
+        # Find teachers who can substitute
+        available_substitutes = []
+        
+        for subject_id in (teacher.subject_ids or []):
+            potential_subs = Teacher.query.all()
+            for sub in potential_subs:
+                if sub.id != teacher.id and LeaveService._is_substitute_available(sub.id, leave_request.leave_date):
+                    available_substitutes.append({
+                        "id": sub.id,
+                        "name": sub.name,
+                        "subjects": [Subject.query.get(s).name for s in sub.subject_ids if Subject.query.get(s)],
+                        "load": len([1 for _ in sub.assigned_batch_ids or []])
+                    })
+        
+        # Remove duplicates
+        seen_ids = set()
+        unique_subs = []
+        for sub in available_substitutes:
+            if sub["id"] not in seen_ids:
+                seen_ids.add(sub["id"])
+                unique_subs.append(sub)
+        
+        return jsonify(unique_subs), 200
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# NOTIFICATION ENDPOINTS
+# ============================================================================
+
+@api.route("/notifications", methods=["GET"])
+@token_required
+def get_notifications():
+    """Get user notifications"""
+    try:
+        from models import Notification
+        
+        user_id = request.user.get("user_id")
+        limit = request.args.get("limit", 20, type=int)
+        unread_only = request.args.get("unread_only", False, type=lambda x: x.lower() == 'true')
+        
+        query = Notification.query.filter_by(user_id=user_id)
+        
+        if unread_only:
+            query = query.filter_by(is_read=False)
+        
+        notifications = query.order_by(Notification.created_at.desc()).limit(limit).all()
+        return jsonify([n.to_dict() for n in notifications]), 200
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/notifications/unread-count", methods=["GET"])
+@token_required
+def get_unread_notification_count():
+    """Get count of unread notifications"""
+    try:
+        from models import Notification
+        
+        user_id = request.user.get("user_id")
+        unread_count = Notification.query.filter_by(user_id=user_id, is_read=False).count()
+        
+        return jsonify({"unread_count": unread_count}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/notifications/<int:notification_id>/mark-read", methods=["POST"])
+@token_required
+def mark_notification_read(notification_id):
+    """Mark a notification as read"""
+    try:
+        from models import Notification
+        
+        notification = Notification.query.get(notification_id)
+        if not notification:
+            return jsonify({"error": "Notification not found"}), 404
+        
+        if notification.user_id != request.user.get("user_id"):
+            return jsonify({"error": "Unauthorized"}), 403
+        
+        notification.is_read = True
+        db.session.commit()
+        
+        return jsonify(notification.to_dict()), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/notifications/mark-all-read", methods=["POST"])
+@token_required
+def mark_all_notifications_read():
+    """Mark all user notifications as read"""
+    try:
+        from models import Notification
+        
+        user_id = request.user.get("user_id")
+        Notification.query.filter_by(user_id=user_id, is_read=False).update({"is_read": True})
+        db.session.commit()
+        
+        return jsonify({"message": "All notifications marked as read"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/notifications/<int:notification_id>", methods=["DELETE"])
+@token_required
+def delete_notification(notification_id):
+    """Delete a notification"""
+    try:
+        from models import Notification
+        
+        notification = Notification.query.get(notification_id)
+        if not notification:
+            return jsonify({"error": "Notification not found"}), 404
+        
+        if notification.user_id != request.user.get("user_id"):
+            return jsonify({"error": "Unauthorized"}), 403
+        
+        db.session.delete(notification)
+        db.session.commit()
+        
+        return jsonify({"message": "Notification deleted"}), 200
+    except Exception as e:
+        db.session.rollback()
         return jsonify({"error": str(e)}), 500

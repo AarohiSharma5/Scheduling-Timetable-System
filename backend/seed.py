@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, '.')
 
 from app import create_app
-from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot
+from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification
 from datetime import datetime
 from werkzeug.security import generate_password_hash
 
@@ -288,6 +288,71 @@ def seed_database():
             print(f"   ❌ Error creating timetable slots: {str(e)}")
             import traceback
             traceback.print_exc()
+        
+        # ===================================================================
+        # SAMPLE LEAVE REQUESTS
+        # ===================================================================
+        print("\n📋 Creating sample leave requests...")
+        try:
+            from models import LeaveRequest
+            from datetime import date, timedelta
+            
+            leave_requests = [
+                (teachers[0].id, date(2026, 5, 28), "Medical appointment", "sick", "pending", None),
+                (teachers[1].id, date(2026, 5, 29), "Personal work", "casual", "approved", admin_user.id),
+                (teachers[2].id, date(2026, 6, 1), "Family emergency", "emergency", "pending", None),
+            ]
+            
+            for teacher_id, leave_date, reason, leave_type, status, approved_by in leave_requests:
+                leave_req = LeaveRequest(
+                    teacher_id=teacher_id,
+                    leave_date=leave_date,
+                    reason=reason,
+                    leave_type=leave_type,
+                    status=status,
+                    approved_by=approved_by,
+                    substitute_teacher_id=teachers[3].id if status == "approved" else None
+                )
+                db.session.add(leave_req)
+            
+            db.session.commit()
+            print(f"   ✅ Created {len(leave_requests)} sample leave requests")
+        except Exception as e:
+            db.session.rollback()
+            print(f"   ⚠️  Could not create leave requests: {str(e)}")
+        
+        # ===================================================================
+        # SAMPLE NOTIFICATIONS
+        # ===================================================================
+        print("\n🔔 Creating sample notifications...")
+        try:
+            from models import Notification
+            
+            notifications = [
+                (admin_user.id, "Timetable Generated", "May 2026 timetable has been generated successfully", "timetable_generated", timetable.id, "/admin/timetable/1"),
+                (principal_user.id, "Timetable Generated", "May 2026 timetable has been generated successfully", "timetable_generated", timetable.id, "/principal/timetable/1"),
+                (teachers[0].user_id, "Leave Request Pending", "Your leave request for 28 May 2026 is pending approval", "leave_request_pending", 1, "/teacher/leaves/1"),
+                (teachers[1].user_id, "Leave Approved", "Your leave request for 29 May 2026 has been approved. Vikram Patel will take your classes.", "leave_approved", 2, "/teacher/leaves/2"),
+                (teachers[3].user_id, "Teacher Substitution", "You have been assigned as substitute for Rajesh Kumar on 29 May 2026", "teacher_substituted", 2, "/teacher/timetable"),
+            ]
+            
+            for user_id, title, message, notif_type, related_id, action_url in notifications:
+                notification = Notification(
+                    user_id=user_id,
+                    title=title,
+                    message=message,
+                    notification_type=notif_type,
+                    related_id=related_id,
+                    action_url=action_url,
+                    is_read=False
+                )
+                db.session.add(notification)
+            
+            db.session.commit()
+            print(f"   ✅ Created {len(notifications)} sample notifications")
+        except Exception as e:
+            db.session.rollback()
+            print(f"   ⚠️  Could not create notifications: {str(e)}")
         
         # ===================================================================
         # SUMMARY
