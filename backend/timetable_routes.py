@@ -89,6 +89,98 @@ def generate_timetable():
 
 
 # ============================================================================
+# CONFLICT DETECTION & VALIDATION
+# ============================================================================
+
+@timetable_bp.route("/<int:timetable_id>/validate", methods=["GET"])
+@token_required
+def validate_timetable(timetable_id):
+    """
+    Validate timetable for conflicts and issues
+    
+    Response includes:
+    - is_valid: boolean
+    - errors: critical conflicts (double booking, gaps, etc)
+    - warnings: non-critical issues (overload, incomplete)
+    - gaps: unscheduled subject-batch periods
+    - stats: timetable statistics
+    """
+    try:
+        from conflict_detector import ConflictDetector
+        
+        detector = ConflictDetector(timetable_id)
+        report = detector.validate()
+        
+        return jsonify(report.to_dict()), 200
+    
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": f"Validation error: {str(e)}"}), 500
+
+
+@timetable_bp.route("/<int:timetable_id>/conflicts/summary", methods=["GET"])
+@token_required
+def get_conflict_summary(timetable_id):
+    """
+    Get brief conflict summary (for dashboard display)
+    
+    Returns only counts and critical issues
+    """
+    try:
+        from conflict_detector import ConflictDetector
+        
+        detector = ConflictDetector(timetable_id)
+        report = detector.validate()
+        
+        return jsonify({
+            "timetable_id": timetable_id,
+            "is_valid": report.is_valid,
+            "critical_errors": len(report.errors),
+            "warnings": len(report.warnings),
+            "incomplete_subjects": len(report.gaps),
+            "health_score": max(0, 100 - (len(report.errors) * 20 + len(report.warnings) * 5)),
+            "status": "CONFLICT_FREE" if report.is_valid else "HAS_ISSUES",
+        }), 200
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@timetable_bp.route("/<int:timetable_id>/conflicts/by-type", methods=["GET"])
+@token_required
+def get_conflicts_by_type(timetable_id):
+    """
+    Get conflicts grouped by type for detailed analysis
+    
+    Useful for admin dashboards
+    """
+    try:
+        from conflict_detector import ConflictDetector
+        
+        detector = ConflictDetector(timetable_id)
+        report = detector.validate()
+        
+        # Group by type
+        by_type = {}
+        for error in report.errors:
+            error_type = error["type"]
+            if error_type not in by_type:
+                by_type[error_type] = []
+            by_type[error_type].append(error)
+        
+        return jsonify({
+            "timetable_id": timetable_id,
+            "conflicts_by_type": by_type,
+            "total_conflicts": len(report.errors),
+            "types": list(by_type.keys())
+        }), 200
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
 # TIMETABLE RETRIEVAL
 # ============================================================================
 

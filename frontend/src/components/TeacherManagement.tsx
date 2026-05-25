@@ -52,9 +52,9 @@ export default function TeacherManagement() {
         api.admin.subjects.list(),
         api.admin.batches.list(),
       ]);
-      setTeachers(teachersRes.data || []);
-      setSubjects(subjectsRes.data || []);
-      setBatches(batchesRes.data || []);
+      setTeachers(Array.isArray(teachersRes) ? teachersRes : teachersRes.data || []);
+      setSubjects(Array.isArray(subjectsRes) ? subjectsRes : subjectsRes.data || []);
+      setBatches(Array.isArray(batchesRes) ? batchesRes : batchesRes.data || []);
     } catch (err) {
       setError("Failed to load data");
       console.error(err);
@@ -152,11 +152,11 @@ export default function TeacherManagement() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1">Batches</label>
+              <label className="block text-sm font-medium mb-1">Classes</label>
               <select multiple value={formData.assigned_batch_ids.map(String)} onChange={(e) => setFormData({ ...formData, assigned_batch_ids: Array.from(e.target.selectedOptions, (opt) => Number(opt.value)) })} className="border rounded px-3 py-2 w-full">
                 {batches.map((b) => (
                   <option key={b.id} value={b.id}>
-                    {b.grade}-{b.section}
+                    Grade {b.grade} - Section {b.section}
                   </option>
                 ))}
               </select>
@@ -188,7 +188,7 @@ export default function TeacherManagement() {
               <th className="px-4 py-2 text-left">Name</th>
               <th className="px-4 py-2 text-left">Email</th>
               <th className="px-4 py-2 text-left">Subjects</th>
-              <th className="px-4 py-2 text-left">Batches</th>
+              <th className="px-4 py-2 text-left">Classes</th>
               <th className="px-4 py-2 text-left">Actions</th>
             </tr>
           </thead>
@@ -198,7 +198,7 @@ export default function TeacherManagement() {
                 <td className="px-4 py-2">{teacher.name}</td>
                 <td className="px-4 py-2">{teacher.email}</td>
                 <td className="px-4 py-2 text-sm">{subjects.filter((s) => teacher.subject_ids.includes(s.id)).map((s) => s.name).join(", ")}</td>
-                <td className="px-4 py-2 text-sm">{batches.filter((b) => teacher.assigned_batch_ids.includes(b.id)).map((b) => `${b.grade}-${b.section}`).join(", ")}</td>
+                <td className="px-4 py-2 text-sm">{batches.filter((b) => teacher.assigned_batch_ids.includes(b.id)).map((b) => `Grade ${b.grade} - ${b.section}`).join(", ")}</td>
                 <td className="px-4 py-2 space-x-2">
                   <button onClick={() => handleEdit(teacher)} className="text-blue-600 hover:underline text-sm">
                     Edit

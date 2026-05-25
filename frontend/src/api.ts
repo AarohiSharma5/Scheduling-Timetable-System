@@ -210,6 +210,20 @@ export const api = {
       const { data } = await axiosInstance.get(`/timetable/batch/${batchId}`);
       return data;
     },
+    
+    // Conflict Detection & Validation
+    validate: async (id: number) => {
+      const { data } = await axiosInstance.get(`/timetable/${id}/validate`);
+      return data;
+    },
+    getSummary: async (id: number) => {
+      const { data } = await axiosInstance.get(`/timetable/${id}/conflicts/summary`);
+      return data;
+    },
+    getConflictsByType: async (id: number) => {
+      const { data } = await axiosInstance.get(`/timetable/${id}/conflicts/by-type`);
+      return data;
+    },
   },
 
   stats: async () => {
