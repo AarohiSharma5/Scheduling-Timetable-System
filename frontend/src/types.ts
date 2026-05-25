@@ -43,3 +43,38 @@ export interface Plan {
   created_at: string;
   updated_at: string;
 }
+
+// Teacher Dashboard Interfaces
+export interface ScheduleClass {
+  periodIndex: number;
+  subjectName: string;
+  subjectId: number;
+  batchName: string;
+  batchId: number;
+  isCore: boolean;
+  day: "Monday" | "Tuesday" | "Wednesday" | "Thursday" | "Friday";
+  dayIndex: number;
+  time?: string;
+}
+
+export interface TeacherSchedule {
+  teacherId: number;
+  teacherName: string;
+  dailyClasses: {
+    [key: string]: (ScheduleClass | null)[];
+  };
+  todaysClasses: ScheduleClass[];
+  totalPeriodsThisWeek: number;
+  freePeriodsToday: number[];
+}
+
+export interface PeriodInfo {
+  index: number;
+  time?: string;
+}
+
+export interface DaySchedule {
+  dayName: string;
+  dayIndex: number;
+  periods: (ScheduleClass | null)[];
+}
