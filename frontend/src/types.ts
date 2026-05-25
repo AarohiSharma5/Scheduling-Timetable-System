@@ -52,7 +52,7 @@ export interface ScheduleClass {
   batchName: string;
   batchId: number;
   isCore: boolean;
-  day: "Monday" | "Tuesday" | "Wednesday" | "Thursday" | "Friday";
+  day: "Monday" | "Tuesday" | "Wednesday" | "Thursday" | "Friday" | "Saturday" | "Sunday";
   dayIndex: number;
   time?: string;
 }
@@ -77,4 +77,99 @@ export interface DaySchedule {
   dayName: string;
   dayIndex: number;
   periods: (ScheduleClass | null)[];
+}
+
+// Student Dashboard Interfaces
+export interface StudentClass {
+  periodIndex: number;
+  subjectName: string;
+  subjectId: number;
+  teacherName: string;
+  teacherId: number;
+  isCore: boolean;
+  duration: string;
+  room?: string;
+  day: string;
+  dayIndex: number;
+}
+
+export interface StudentSchedule {
+  studentId: number;
+  studentName: string;
+  batchName: string;
+  batchId: number;
+  dailyClasses: {
+    [key: string]: (StudentClass | null)[];
+  };
+  todaysClasses: StudentClass[];
+  totalPeriodsThisWeek: number;
+  freePeriodsToday: number[];
+  lunchtimeSlot: number;
+}
+
+export interface StudentTimetableDay {
+  dayName: string;
+  dayIndex: number;
+  periods: (StudentClass | null)[];
+  freePeriodsCount: number;
+}
+
+// Principal Dashboard Analytics Interfaces
+export interface TeacherAnalytics {
+  teacherId: number;
+  teacherName: string;
+  subjectName: string;
+  totalPeriodsAssigned: number;
+  maxPeriodsCapacity: number;
+  workloadPercentage: number;
+  assignedBatches: number;
+  hasSpecialDuties: boolean;
+  daysLate?: string[];
+}
+
+export interface BatchCompletion {
+  batchId: number;
+  batchName: string;
+  studentCount: number;
+  totalSlotsAvailable: number;
+  slotsFilled: number;
+  completionPercentage: number;
+  missingSubjects: string[];
+}
+
+export interface SubjectAssignment {
+  subjectId: number;
+  subjectName: string;
+  periodsRequired: number;
+  periodsAssigned: number;
+  assignedTeachers: number;
+  isFullyAssigned: boolean;
+  batchesNeedingIt: string[];
+}
+
+export interface TimetableAnalytics {
+  totalTeachers: number;
+  totalBatches: number;
+  totalSubjects: number;
+  totalPeriodsAvailable: number;
+  totalPeriodsAssigned: number;
+  occupancyPercentage: number;
+  averageTeacherWorkload: number;
+  averageBatchCompletion: number;
+  teacherAnalytics: TeacherAnalytics[];
+  batchCompletion: BatchCompletion[];
+  subjectAssignments: SubjectAssignment[];
+  freeSlots: number;
+  conflictCount: number;
+  warnings: string[];
+}
+
+export interface AnalyticsCard {
+  title: string;
+  value: string | number;
+  unit: string;
+  icon: string;
+  color: "blue" | "green" | "yellow" | "red" | "purple" | "indigo";
+  trend?: "up" | "down" | "stable";
+  trendValue?: string;
 }

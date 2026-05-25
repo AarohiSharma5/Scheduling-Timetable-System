@@ -70,9 +70,8 @@ def login():
         if not user:
             return jsonify({"error": "Invalid email or password"}), 401
         
-        # Verify password (all test accounts have "password123" as base for now)
-        # In real implementation, verify against hashed password
-        if password != "password123":
+        # Verify password against hashed password
+        if not check_password_hash(user.password_hash, password):
             return jsonify({"error": "Invalid email or password"}), 401
         
         # Generate JWT token
@@ -127,6 +126,267 @@ def get_current_user():
             **additional_info,
         }), 200
     except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# PLANS ENDPOINTS - Timetable Plans (Frontend Format)
+# ============================================================================
+
+def format_timetable_as_plan(timetable):
+    """Convert Timetable object to Plan format for frontend"""
+    config = SchoolConfig.query.first() or SchoolConfig()
+    
+    # Build 2D timetable array
+    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    periods_per_day = config.periods_per_day
+    days_per_week = config.working_days
+    
+    timetable_array = []
+    
+    # Get all slots for this timetable, sorted by day and period
+    slots = TimetableSlot.query.filter_by(timetable_id=timetable.id).all()
+    slots_by_day_period = {}
+    for slot in slots:
+        key = (slot.day, slot.period_number)
+        slots_by_day_period[key] = slot
+    
+    # Build 2D array
+    for day_idx, day_name in enumerate(days):
+        day_row = []
+        for period_idx in range(periods_per_day):
+            key = (day_name, period_idx + 1)
+            slot = slots_by_day_period.get(key)
+            
+            if slot and not slot.is_lunch and slot.teacher_id:
+                # Fetch related data
+                teacher = Teacher.query.get(slot.teacher_id)
+                subject = Subject.query.get(slot.subject_id)
+                batch = Batch.query.get(slot.batch_id)
+                
+                slot_dict = {
+                    "subject": subject.name if subject else "Unknown",
+                    "teacher": teacher.name if teacher else "Unknown",
+                    "subject_id": slot.subject_id,
+                    "teacher_id": slot.teacher_id,
+                    "batch_id": slot.batch_id,
+                    "batch_name": f"Grade {batch.grade} - {batch.section}" if batch else "Unknown",
+                    "is_lunch": False,
+                }
+                day_row.append(slot_dict)
+            elif slot and slot.is_lunch:
+                day_row.append(None)  # Lunch period
+            else:
+                day_row.append(None)  # Free period
+        
+        timetable_array.append(day_row)
+    
+    # Get all teachers and subjects
+    all_teachers = Teacher.query.all()
+    all_subjects = Subject.query.all()
+    
+    return {
+        "id": timetable.id,
+        "title": timetable.name,
+        "description": timetable.description,
+        "status": timetable.status if timetable.status in ["draft", "completed"] else "completed",
+        "school_profile": {
+            "institution_name": "Sample School",
+            "days_per_week": days_per_week,
+            "periods_per_day": periods_per_day,
+            "student_count": 0,
+            "core_subjects_target": 5,
+            "elective_limit": 2,
+        },
+        "teachers": [
+            {
+                "id": t.id,
+                "name": t.name,
+                "contact_hours": 24,
+                "expertise": [Subject.query.get(sid).name for sid in t.subject_ids if Subject.query.get(sid)],
+            }
+            for t in all_teachers
+        ],
+        "subjects": [
+            {
+                "id": s.id,
+                "name": s.name,
+                "teacher_id": 1,
+                "is_core": True,
+                "periods_required": s.periods_per_week,
+            }
+            for s in all_subjects
+        ],
+        "timetable": timetable_array,
+        "warnings": timetable.warnings or [],
+        "created_at": timetable.created_at.isoformat() if timetable.created_at else None,
+        "updated_at": timetable.updated_at.isoformat() if timetable.updated_at else None,
+    }
+
+
+@api.route("/plans", methods=["GET"])
+def get_plans():
+    """Get all published plans/timetables"""
+    try:
+        # Get published timetables
+        timetables = Timetable.query.filter_by(status="published").all()
+        
+        if not timetables:
+            # Fall back to any timetable if none published
+            timetables = Timetable.query.limit(1).all()
+        
+        plans = [format_timetable_as_plan(t) for t in timetables]
+        return jsonify(plans), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/plans/<int:timetable_id>", methods=["GET"])
+def get_plan(timetable_id):
+    """Get a specific plan/timetable"""
+    try:
+        timetable = Timetable.query.get(timetable_id)
+        if not timetable:
+            return jsonify({"error": "Plan not found"}), 404
+        
+        plan = format_timetable_as_plan(timetable)
+        return jsonify(plan), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# ANALYTICS ENDPOINTS - Principal Analytics
+# ============================================================================
+
+@api.route("/analytics/<int:timetable_id>", methods=["GET"])
+@role_required("principal", "admin")
+def get_timetable_analytics(timetable_id):
+    """Get comprehensive timetable analytics"""
+    try:
+        timetable = Timetable.query.get(timetable_id)
+        if not timetable:
+            return jsonify({"error": "Timetable not found"}), 404
+
+        teachers = Teacher.query.all()
+        batches = Batch.query.all()
+        subjects = Subject.query.all()
+        config = SchoolConfig.query.first() or SchoolConfig()
+
+        # Get all slots for this timetable
+        slots = TimetableSlot.query.filter_by(timetable_id=timetable_id).all()
+        
+        # Calculate teacher analytics
+        teacher_analytics = []
+        for teacher in teachers:
+            teacher_slots = [s for s in slots if s.teacher_id == teacher.id and not s.is_lunch]
+            periods_assigned = len(teacher_slots)
+            max_capacity = teacher.max_periods_per_week or 24
+            workload_pct = int((periods_assigned / max_capacity) * 100) if max_capacity > 0 else 0
+            
+            # Get assigned batches
+            assigned_batches = set(s.batch_id for s in teacher_slots if s.batch_id)
+            
+            # Get subject names
+            subject_names = [Subject.query.get(sid).name for sid in teacher.subject_ids if Subject.query.get(sid)]
+            
+            teacher_analytics.append({
+                "teacherId": teacher.id,
+                "teacherName": teacher.name,
+                "subjectName": ", ".join(subject_names) if subject_names else "N/A",
+                "totalPeriodsAssigned": periods_assigned,
+                "maxPeriodsCapacity": max_capacity,
+                "workloadPercentage": workload_pct,
+                "assignedBatches": len(assigned_batches),
+                "hasSpecialDuties": teacher.has_duties,
+            })
+
+        # Calculate batch completion
+        total_periods_per_batch = (config.periods_per_day or 6) * (config.working_days or 5)
+        batch_completion = []
+        for batch in batches:
+            batch_slots = [s for s in slots if s.batch_id == batch.id and not s.is_lunch]
+            filled = len(batch_slots)
+            completion_pct = int((filled / total_periods_per_batch) * 100) if total_periods_per_batch > 0 else 0
+            
+            # Find missing subjects
+            assigned_subject_ids = set(s.subject_id for s in batch_slots if s.subject_id)
+            missing_subjects = [s.name for s in subjects if s.id not in assigned_subject_ids]
+            
+            batch_completion.append({
+                "batchId": batch.id,
+                "batchName": f"Grade {batch.grade} - {batch.section}",
+                "studentCount": batch.student_count,
+                "totalSlotsAvailable": total_periods_per_batch,
+                "slotsFilled": filled,
+                "completionPercentage": completion_pct,
+                "missingSubjects": missing_subjects,
+            })
+
+        # Calculate subject assignments
+        subject_assignments = []
+        for subject in subjects:
+            subject_slots = [s for s in slots if s.subject_id == subject.id and not s.is_lunch]
+            assigned = len(subject_slots)
+            required = subject.periods_per_week or 0
+            assigned_teachers = len(set(s.teacher_id for s in subject_slots))
+            is_fully_assigned = required > 0 and assigned >= required
+            
+            # Get batches needing this subject
+            batches_needing = [b.id for b in batches if subject.id in (b.subject_ids or [])]
+            batch_names = [f"Grade {Batch.query.get(b).grade}" for b in batches_needing if Batch.query.get(b)]
+            
+            subject_assignments.append({
+                "subjectId": subject.id,
+                "subjectName": subject.name,
+                "periodsRequired": required,
+                "periodsAssigned": assigned,
+                "assignedTeachers": assigned_teachers,
+                "isFullyAssigned": is_fully_assigned,
+                "batchesNeedingIt": batch_names,
+            })
+
+        # Calculate overall metrics
+        total_slots = len([s for s in slots if not s.is_lunch])
+        assigned_slots = len([s for s in slots if s.teacher_id and not s.is_lunch])
+        available_slots = total_periods_per_batch * len(batches)
+        occupancy_pct = int((assigned_slots / available_slots) * 100) if available_slots > 0 else 0
+        
+        avg_workload = int(sum(ta["workloadPercentage"] for ta in teacher_analytics) / len(teacher_analytics)) if teacher_analytics else 0
+        avg_completion = int(sum(bc["completionPercentage"] for bc in batch_completion) / len(batch_completion)) if batch_completion else 0
+
+        # Build warnings
+        warnings = []
+        if occupancy_pct < 60:
+            warnings.append("⚠️ Low occupancy rate - many periods unassigned")
+        for ta in teacher_analytics:
+            if ta["workloadPercentage"] > 90:
+                warnings.append(f"🔴 {ta['teacherName']} is overloaded ({ta['workloadPercentage']}%)")
+        free_slots = available_slots - assigned_slots
+        if free_slots > (available_slots * 0.2):
+            warnings.append(f"📊 {free_slots} free slots available - schedule could be optimized")
+
+        analytics = {
+            "totalTeachers": len(teachers),
+            "totalBatches": len(batches),
+            "totalSubjects": len(subjects),
+            "totalPeriodsAvailable": available_slots,
+            "totalPeriodsAssigned": assigned_slots,
+            "occupancyPercentage": occupancy_pct,
+            "averageTeacherWorkload": avg_workload,
+            "averageBatchCompletion": avg_completion,
+            "teacherAnalytics": teacher_analytics,
+            "batchCompletion": batch_completion,
+            "subjectAssignments": subject_assignments,
+            "freeSlots": free_slots,
+            "conflictCount": 0,  # TODO: Implement conflict detection
+            "warnings": warnings,
+        }
+
+        return jsonify(analytics), 200
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 

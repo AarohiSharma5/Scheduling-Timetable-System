@@ -191,18 +191,103 @@ def seed_database():
         print(f"   ✅ Created {len(students)} student accounts")
         
         # ===================================================================
-        # 6. SAMPLE TIMETABLE (OPTIONAL)
+        # 6. SAMPLE TIMETABLE WITH SLOTS
         # ===================================================================
-        print("\n📅 Creating sample timetable...")
+        print("\n📅 Creating sample timetable with full schedule...")
         timetable = Timetable(
             name="Week 1 - May 2026",
             description="Sample timetable for demonstration",
-            status="draft",
+            status="published",  # Published so teachers can see it
             warnings=[],
         )
         db.session.add(timetable)
-        db.session.commit()
-        print("   ✅ Sample timetable created (empty - ready for generation)")
+        db.session.flush()  # Get the ID
+        
+        print(f"   📌 Created timetable ID: {timetable.id}")
+        print(f"   🧑‍🏫 Teachers available: {len(teachers)}")
+        print(f"   📚 Subjects available: {len(subjects)}")
+        print(f"   🏫 Batches available: {len(batches)}")
+        
+        # Validate data before creating slots
+        try:
+            day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+            
+            # Create simple schedule for all 5 days
+            simple_schedule = [
+                # Monday: English, Math, Physics, Lunch, History, PE
+                [(teachers[0], subjects[0], batches[0]),
+                 (teachers[1], subjects[1], batches[0]),
+                 (teachers[2], subjects[2], batches[2]),
+                 None,
+                 (teachers[4], subjects[5], batches[0]),
+                 (teachers[5], subjects[8], batches[0])],
+                # Tuesday: Math, Chemistry, CS, Lunch, English, Civics
+                [(teachers[1], subjects[1], batches[0]),
+                 (teachers[2], subjects[3], batches[2]),
+                 (teachers[6], subjects[9], batches[2]),
+                 None,
+                 (teachers[0], subjects[0], batches[0]),
+                 (teachers[7], subjects[7], batches[0])],
+                # Wednesday: Physics, Biology, English, Lunch, Math, PE
+                [(teachers[2], subjects[2], batches[2]),
+                 (teachers[3], subjects[4], batches[2]),
+                 (teachers[0], subjects[0], batches[0]),
+                 None,
+                 (teachers[1], subjects[1], batches[0]),
+                 (teachers[5], subjects[8], batches[0])],
+                # Thursday: History, CS, Math, Lunch, Chemistry, Civics
+                [(teachers[4], subjects[5], batches[0]),
+                 (teachers[6], subjects[9], batches[2]),
+                 (teachers[1], subjects[1], batches[0]),
+                 None,
+                 (teachers[2], subjects[3], batches[2]),
+                 (teachers[7], subjects[7], batches[0])],
+                # Friday: English, Biology, Geography, Lunch, CS, PE
+                [(teachers[0], subjects[0], batches[0]),
+                 (teachers[3], subjects[4], batches[2]),
+                 (teachers[4], subjects[6], batches[0]),
+                 None,
+                 (teachers[6], subjects[9], batches[2]),
+                 (teachers[5], subjects[8], batches[0])],
+            ]
+            
+            slot_count = 0
+            for day_idx, day_name in enumerate(day_names):
+                for period_idx, slot_data in enumerate(simple_schedule[day_idx]):
+                    if slot_data is None:
+                        # Lunch period
+                        slot = TimetableSlot(
+                            timetable_id=timetable.id,
+                            day=day_name,
+                            period_number=period_idx + 1,
+                            batch_id=None,
+                            teacher_id=None,
+                            subject_id=None,
+                            is_lunch=True,
+                        )
+                    else:
+                        teacher_obj, subject_obj, batch_obj = slot_data
+                        slot = TimetableSlot(
+                            timetable_id=timetable.id,
+                            day=day_name,
+                            period_number=period_idx + 1,
+                            batch_id=batch_obj.id,
+                            teacher_id=teacher_obj.id,
+                            subject_id=subject_obj.id,
+                            is_lunch=False,
+                        )
+                    
+                    db.session.add(slot)
+                    slot_count += 1
+                    
+            db.session.commit()
+            print(f"   ✅ Generated {slot_count} timetable slots (5 days × 6 periods)")
+            
+        except Exception as e:
+            db.session.rollback()
+            print(f"   ❌ Error creating timetable slots: {str(e)}")
+            import traceback
+            traceback.print_exc()
         
         # ===================================================================
         # SUMMARY

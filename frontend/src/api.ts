@@ -226,6 +226,13 @@ export const api = {
     },
   },
 
+  analytics: {
+    get: async (planId: number) => {
+      const { data } = await axiosInstance.get(`/analytics/${planId}`);
+      return data;
+    },
+  },
+
   stats: async () => {
     const { data } = await axiosInstance.get("/stats");
     return data;
