@@ -18,27 +18,16 @@ services:
   backend:
     build: ./backend
     ports:
-      - "8000:5000"
+      - "3000:3000"
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/timetable_db
-      FLASK_ENV: development
+      FLASK_ENV: production
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
       - ./backend:/app
-
-  frontend:
-    build: ./frontend
-    ports:
-      - "3000:3000"
-    environment:
-      REACT_APP_API_URL: http://localhost:8000/api
-    depends_on:
-      - backend
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
+      - ./frontend/build:/app/../frontend/build
 
 volumes:
   postgres_data:

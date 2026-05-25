@@ -52,9 +52,9 @@ export default function TeacherManagement() {
         api.admin.subjects.list(),
         api.admin.batches.list(),
       ]);
-      setTeachers(teachersRes.data);
-      setSubjects(subjectsRes.data);
-      setBatches(batchesRes.data);
+      setTeachers(teachersRes.data || []);
+      setSubjects(subjectsRes.data || []);
+      setBatches(batchesRes.data || []);
     } catch (err) {
       setError("Failed to load data");
       console.error(err);

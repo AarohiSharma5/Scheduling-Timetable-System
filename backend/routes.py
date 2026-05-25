@@ -186,6 +186,10 @@ def create_teacher():
     try:
         data = request.get_json()
         
+        # Validate required fields
+        if not data.get("name") or not data.get("email"):
+            return jsonify({"error": "Name and email are required"}), 400
+        
         # Create user first
         user = User(
             name=data.get("name"),
@@ -213,6 +217,8 @@ def create_teacher():
         return jsonify(teacher.to_dict()), 201
     except Exception as e:
         db.session.rollback()
+        import traceback
+        traceback.print_exc()  # Print to backend logs
         return jsonify({"error": str(e)}), 500
 
 

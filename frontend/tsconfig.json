@@ -15,7 +15,7 @@
     "sourceMap": true,
     "outDir": "./dist",
     "jsx": "react-jsx",
-    "types": ["node"]
+    "types": ["react-scripts", "node"]
   },
   "include": ["src"],
   "references": [{ "path": "./tsconfig.node.json" }]
