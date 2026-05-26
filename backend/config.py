@@ -4,7 +4,7 @@ from datetime import timedelta
 class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     JSON_SORT_KEYS = False
-    CORS_ORIGINS = ["http://localhost:3000", "http://localhost:5000"]
+    CORS_ORIGINS = ["http://localhost:3000", "http://localhost:3001", "http://localhost:5000"]
     SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key")
 
 class DevelopmentConfig(Config):

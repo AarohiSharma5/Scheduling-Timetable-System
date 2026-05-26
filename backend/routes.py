@@ -533,6 +533,53 @@ def delete_teacher(teacher_id):
 
 
 # ============================================================================
+# STUDENT ENDPOINTS
+# ============================================================================
+
+@api.route("/students", methods=["GET"])
+@token_required
+def get_students():
+    """
+    Get students by class and section
+    Query params:
+    - class: class grade (e.g., "7", "12 Science")
+    - section: section (e.g., "A", "B")
+    """
+    try:
+        class_grade = request.args.get('class')
+        section = request.args.get('section')
+        
+        if not class_grade or not section:
+            return jsonify({"error": "class and section parameters required"}), 400
+        
+        # Import Student model
+        from models import Student
+        
+        # Query students by class and section
+        students = Student.query.filter_by(
+            class_grade=class_grade,
+            section=section
+        ).all()
+        
+        return jsonify([{
+            'id': s.id,
+            'student_id': s.student_id,
+            'admission_no': s.admission_no,
+            'first_name': s.first_name,
+            'last_name': s.last_name,
+            'gender': s.gender,
+            'date_of_birth': s.date_of_birth.isoformat() if s.date_of_birth else None,
+            'class_grade': s.class_grade,
+            'section': s.section,
+            'roll_no': s.roll_no,
+            'house_name': s.house_name if hasattr(s, 'house_name') else 'Not Assigned',
+            'contact_number': s.contact_number,
+            'status': s.status
+        } for s in students]), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ============================================================================
 # ADMIN ENDPOINTS - Batch Management
 # ============================================================================
 
