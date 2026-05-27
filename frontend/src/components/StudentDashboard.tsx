@@ -16,8 +16,8 @@ interface StudentDashboardProps {
   batchName: string;
 }
 
-const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
-const DAYS_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const DAYS_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 export default function StudentDashboard({
   plan,
@@ -26,7 +26,7 @@ export default function StudentDashboard({
   batchName,
 }: StudentDashboardProps) {
   const [selectedDay, setSelectedDay] = useState<number>(
-    Math.max(0, Math.min(4, new Date().getDay() - 1))
+    Math.max(0, Math.min(6, new Date().getDay() - 1))
   );
 
   // Parse timetable data for this batch/student
@@ -50,7 +50,7 @@ export default function StudentDashboard({
     const { periods_per_day } = plan.school_profile;
     let totalPeriods = 0;
     const today = new Date().getDay();
-    const todayIndex = Math.max(0, Math.min(4, today - 1));
+    const todayIndex = Math.max(0, Math.min(6, today - 1));
 
     // Iterate through timetable and extract classes for this batch
     plan.timetable.forEach((daySchedule, dayIndex) => {
@@ -65,28 +65,23 @@ export default function StudentDashboard({
           periodsForDay.push(null);
           freePeriodsForDay.push(periodIndex);
         } else {
-          // Check if this slot belongs to the student's batch
-          const slotBatch = slot.batch_name || slot.batchName;
-          if (slotBatch === batchName || slotBatch?.includes(batchName)) {
-            const studentClass: StudentClass = {
-              periodIndex,
-              subjectName: slot.subject || slot.subjectName || "Unknown",
-              subjectId: slot.subject_id || slot.subjectId || 0,
-              teacherName: slot.teacher || slot.teacherName || "TBA",
-              teacherId: slot.teacher_id || slot.teacherId || 0,
-              isCore: slot.is_core !== false,
-              duration: "45 mins",
-              day: dayName,
-              dayIndex,
-            };
-            periodsForDay.push(studentClass);
+          // Timetable slots are already filtered for this batch
+          const studentClass: StudentClass = {
+            periodIndex,
+            subjectName: slot.subject || "Unknown",
+            subjectId: slot.subject_id || 0,
+            teacherName: slot.teacher || "TBA",
+            teacherId: slot.teacher_id || 0,
+            isCore: true,
+            duration: "45 mins",
+            day: dayName,
+            dayIndex,
+          };
+          periodsForDay.push(studentClass);
 
-            // Add to today's classes if it's today
-            if (dayIndex === todayIndex) {
-              schedule.todaysClasses.push(studentClass);
-            }
-          } else {
-            periodsForDay.push(null);
+          // Add to today's classes if it's today
+          if (dayIndex === todayIndex) {
+            schedule.todaysClasses.push(studentClass);
           }
         }
       });

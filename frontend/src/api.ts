@@ -1,7 +1,7 @@
 import axios from "axios";
 import type { Plan, SchoolProfile, Teacher, Subject } from "./types";
 
-const API_BASE = process.env.REACT_APP_API_URL || "/api";
+const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:5001/api";
 
 // Create axios instance with request interceptor
 const axiosInstance = axios.create({
@@ -237,4 +237,11 @@ export const api = {
     const { data } = await axiosInstance.get("/stats");
     return data;
   },
+
+  // Direct HTTP methods for flexible endpoints
+  get: (url: string, config?: any) => axiosInstance.get(url, config),
+  post: (url: string, data?: any, config?: any) => axiosInstance.post(url, data, config),
+  put: (url: string, data?: any, config?: any) => axiosInstance.put(url, data, config),
+  delete: (url: string, config?: any) => axiosInstance.delete(url, config),
+  patch: (url: string, data?: any, config?: any) => axiosInstance.patch(url, data, config),
 };

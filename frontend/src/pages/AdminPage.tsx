@@ -1,22 +1,30 @@
 import React, { useState } from "react";
 import { useAuthStore } from "../stores/authStore";
 import TeacherManagement from "../components/TeacherManagement";
+import StudentManagement from "../components/StudentManagement";
 import BatchManagement from "../components/BatchManagement";
 import SubjectManagement from "../components/SubjectManagement";
 import ConfigurationForm from "../components/ConfigurationForm";
+import TimetableGenerator from "../components/TimetableGenerator";
+import LeaveManagement from "../components/LeaveManagement";
+import NotificationsCenter from "../components/NotificationsCenter";
 
-type Tab = "teachers" | "batches" | "subjects" | "config";
+type Tab = "timetable" | "students" | "teachers" | "batches" | "subjects" | "leaves" | "notifications" | "config";
 
 const tabs: Record<Tab, { icon: string; label: string }> = {
+  timetable: { icon: "📊", label: "Timetable" },
+  students: { icon: "👥", label: "Students" },
   teachers: { icon: "👨‍🏫", label: "Teachers" },
   batches: { icon: "📚", label: "Batches" },
   subjects: { icon: "📖", label: "Subjects" },
+  leaves: { icon: "📋", label: "Leave Requests" },
+  notifications: { icon: "🔔", label: "Notifications" },
   config: { icon: "⚙️", label: "Configuration" },
 };
 
 export default function AdminPage() {
   const { user, logout } = useAuthStore();
-  const [activeTab, setActiveTab] = useState<Tab>("teachers");
+  const [activeTab, setActiveTab] = useState<Tab>("timetable");
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
@@ -59,9 +67,13 @@ export default function AdminPage() {
       {/* Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="bg-white rounded-lg shadow-md p-6">
+          {activeTab === "timetable" && <TimetableGenerator />}
+          {activeTab === "students" && <StudentManagement />}
           {activeTab === "teachers" && <TeacherManagement />}
           {activeTab === "batches" && <BatchManagement />}
           {activeTab === "subjects" && <SubjectManagement />}
+          {activeTab === "leaves" && <LeaveManagement />}
+          {activeTab === "notifications" && <NotificationsCenter />}
           {activeTab === "config" && <ConfigurationForm />}
         </div>
       </main>

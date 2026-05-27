@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-const API_BASE = process.env.REACT_APP_API_URL || "/api";
+const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:5001/api";
 
 export interface User {
   id: number;
