@@ -8,7 +8,7 @@
 ## 📄 PDF Export Endpoints
 
 ```bash
-# Batch-wise timetable (one grade per page)
+ # Batch-wise timetable (one grade per page)
 GET /export/timetable/batch/{timetable_id}
   Authorization: Bearer {token}
   Roles: admin, principal
