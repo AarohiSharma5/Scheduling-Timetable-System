@@ -14,17 +14,51 @@ ALGORITHM = "HS256"
 TOKEN_EXPIRY_HOURS = 24
 
 
-def generate_token(user_id: int, email: str, role: str) -> str:
-    """Generate JWT token for user"""
+def generate_token(user_id: int, email: str, role: str, organization_id: int | None = None) -> str:
+    """Generate JWT token for a user, optionally scoped to an organization"""
     payload = {
         "user_id": user_id,
         "email": email,
         "role": role,
+        "organization_id": organization_id,
         "exp": datetime.utcnow() + timedelta(hours=TOKEN_EXPIRY_HOURS),
         "iat": datetime.utcnow(),
     }
     token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
     return token
+
+
+ORG_TOKEN_EXPIRY_DAYS = 30
+
+
+def generate_org_token(organization_id: int, slug: str) -> str:
+    """Generate a long-lived JWT token representing an authenticated organization."""
+    payload = {
+        "organization_id": organization_id,
+        "slug": slug,
+        "scope": "organization",
+        "exp": datetime.utcnow() + timedelta(days=ORG_TOKEN_EXPIRY_DAYS),
+        "iat": datetime.utcnow(),
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def get_org_token_from_request() -> str | None:
+    """Extract org token from the X-Org-Token header."""
+    return request.headers.get("X-Org-Token")
+
+
+def verify_org_token(token: str) -> dict:
+    """Verify an org token. Returns payload or { 'error': ... }."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("scope") != "organization":
+            return {"error": "Not an organization token"}
+        return payload
+    except jwt.ExpiredSignatureError:
+        return {"error": "Organization session expired"}
+    except jwt.InvalidTokenError:
+        return {"error": "Invalid organization token"}
 
 
 def verify_token(token: str) -> dict:

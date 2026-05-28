@@ -1,9 +1,12 @@
 import React, { useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useAuthStore } from "./stores/authStore";
+import { useOrgStore } from "./stores/orgStore";
 import ProtectedRoute from "./components/ProtectedRoute";
 
 // Pages
+import LandingPage from "./pages/LandingPage";
+import OrgLoginPage from "./pages/OrgLoginPage";
 import LoginPage from "./pages/LoginPage";
 import AdminPage from "./pages/AdminPage";
 import PrincipalPage from "./pages/PrincipalPage";
@@ -12,10 +15,12 @@ import StudentPage from "./pages/StudentPage";
 
 const App: React.FC = () => {
   const { restoreSession, error } = useAuthStore();
+  const { restoreOrgSession } = useOrgStore();
 
   useEffect(() => {
+    restoreOrgSession();
     restoreSession();
-  }, [restoreSession]);
+  }, [restoreOrgSession, restoreSession]);
 
   useEffect(() => {
     if (error) {
@@ -24,12 +29,16 @@ const App: React.FC = () => {
   }, [error]);
 
   return (
-    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <BrowserRouter
+      future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+    >
       <Routes>
         {/* Public Routes */}
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/org-login" element={<OrgLoginPage />} />
         <Route path="/login" element={<LoginPage />} />
 
-        {/* Protected Routes */}
+        {/* Protected Routes (require org session + user auth) */}
         <Route
           path="/admin"
           element={
@@ -63,9 +72,8 @@ const App: React.FC = () => {
           }
         />
 
-        {/* Default redirect to login */}
-        <Route path="/" element={<Navigate to="/login" replace />} />
-        <Route path="*" element={<Navigate to="/login" replace />} />
+        {/* Fallback to landing page */}
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   );

@@ -8,12 +8,16 @@ const axiosInstance = axios.create({
   baseURL: API_BASE,
 });
 
-// Add JWT token to all requests
+// Add JWT token AND organization token to all requests
 axiosInstance.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem("auth_token");
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
+    }
+    const orgToken = localStorage.getItem("org_token");
+    if (orgToken) {
+      config.headers["X-Org-Token"] = orgToken;
     }
     return config;
   },
@@ -22,13 +26,18 @@ axiosInstance.interceptors.request.use(
   }
 );
 
-// Handle 401 responses by clearing auth
+// Handle 401 responses by clearing user auth (but preserve org session so we
+// can drop the user back into the role-login step without re-entering the org).
 axiosInstance.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem("auth_token");
-      window.location.href = "/login";
+      const hasOrg = !!localStorage.getItem("org_token");
+      const target = hasOrg ? "/login" : "/";
+      if (window.location.pathname !== target) {
+        window.location.href = target;
+      }
     }
     return Promise.reject(error);
   }

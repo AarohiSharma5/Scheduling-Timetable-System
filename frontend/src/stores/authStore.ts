@@ -41,20 +41,27 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   login: async (email: string, password: string) => {
     set({ loading: true, error: null });
     try {
+      const orgToken = localStorage.getItem("org_token");
+      if (!orgToken) {
+        throw new Error("Please log in to your organization first.");
+      }
+
       const response = await fetch(`${API_BASE}/auth/login`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Org-Token": orgToken,
+        },
         body: JSON.stringify({ email, password }),
       });
 
       if (!response.ok) {
-        // Try to get error as JSON, fall back to status message
         let errorMessage = `Login failed: ${response.status}`;
         try {
           const data = await response.json();
           errorMessage = data.error || errorMessage;
         } catch {
-          // Response was not JSON (e.g., HTML 404), use status message
+          /* non-JSON */
         }
         throw new Error(errorMessage);
       }
@@ -110,9 +117,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
     set({ loading: true });
     try {
+      const orgToken = localStorage.getItem("org_token");
       const response = await fetch(`${API_BASE}/auth/me`, {
         headers: {
           Authorization: `Bearer ${state.token}`,
+          ...(orgToken ? { "X-Org-Token": orgToken } : {}),
         },
       });
 

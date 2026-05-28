@@ -4,12 +4,39 @@ import json
 
 db = SQLAlchemy()
 
+
+# ============================================================================
+# ORGANIZATION MODEL - Tenant / Institute level account
+# ============================================================================
+class Organization(db.Model):
+    __tablename__ = "organizations"
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200), nullable=False)
+    slug = db.Column(db.String(120), unique=True, nullable=False, index=True)
+    password_hash = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text)
+    logo_url = db.Column(db.String(500))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "slug": self.slug,
+            "description": self.description,
+            "logo_url": self.logo_url,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 # ============================================================================
 # USER MODEL - Authentication & Role Management
 # ============================================================================
 class User(db.Model):
     __tablename__ = "users"
     id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
     name = db.Column(db.String(120), nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     role = db.Column(db.String(20), nullable=False)  # 'admin', 'principal', 'teacher', 'student'
@@ -20,9 +47,10 @@ class User(db.Model):
     
     def to_dict(self):
         return {
-            "id": self.id, 
-            "name": self.name, 
-            "email": self.email, 
+            "id": self.id,
+            "organization_id": self.organization_id,
+            "name": self.name,
+            "email": self.email,
             "role": self.role,
             "batch_id": self.batch_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,

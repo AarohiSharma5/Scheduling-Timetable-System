@@ -11,12 +11,21 @@ from app import create_app
 from models import (
     db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot,
     LeaveRequest, Notification, Student, Classroom, House, Principal, Coordinator,
-    SubjectMaster
+    SubjectMaster, Organization
 )
 from datetime import datetime, date, timedelta
 from werkzeug.security import generate_password_hash
 import random
 import string
+
+
+# ---------------------------------------------------------------------------
+# Default organization for the seeded dataset.
+# Used by the "Login as Organisation" flow on the frontend.
+# ---------------------------------------------------------------------------
+DEFAULT_ORG_NAME = "Test Sample Institute"
+DEFAULT_ORG_SLUG = "test-sample-institute"
+DEFAULT_ORG_PASSWORD = "institute123"
 
 # Data generation helpers
 FIRST_NAMES_MALE = [
@@ -147,7 +156,23 @@ def seed_database():
         
         print("📊 Creating all tables...")
         db.create_all()
-        
+
+        # =====================================================================
+        # 0. ORGANIZATION (tenant)
+        # =====================================================================
+        print(f"\n🏫 Creating organization: {DEFAULT_ORG_NAME}...")
+        organization = Organization(
+            name=DEFAULT_ORG_NAME,
+            slug=DEFAULT_ORG_SLUG,
+            password_hash=generate_password_hash(DEFAULT_ORG_PASSWORD),
+            description="Demo institute pre-loaded with 2,800 students, 75 teachers, and a full timetable.",
+            logo_url="/scheduler-logo.png",
+        )
+        db.session.add(organization)
+        db.session.commit()
+        org_id = organization.id
+        print(f"   ✅ Organization created (id={org_id}, slug={DEFAULT_ORG_SLUG}, password={DEFAULT_ORG_PASSWORD})")
+
         # =====================================================================
         # 1. SCHOOL CONFIGURATION
         # =====================================================================
@@ -238,8 +263,22 @@ def seed_database():
         # =====================================================================
         # 6. PRINCIPALS
         # =====================================================================
+        # Admin user (needed for managing the system)
+        print("\n🛠️  Creating admin user...")
+        admin_user = User(
+            organization_id=org_id,
+            name="School Admin",
+            email="admin@school.edu",
+            role="admin",
+            password_hash=generate_password_hash("admin123"),
+        )
+        db.session.add(admin_user)
+        db.session.commit()
+        print("   ✅ Admin user created (admin@school.edu / admin123)")
+
         print("\n👔 Creating principal...")
         principal_user = User(
+            organization_id=org_id,
             name="Dr. Meera Kapoor",
             email="principal@school.edu",
             role="principal",
@@ -277,6 +316,7 @@ def seed_database():
         coordinators = []
         for coord_id, name, designation, responsibility, email in coordinators_data:
             coord_user = User(
+                organization_id=org_id,
                 name=name,
                 email=email,
                 role="coordinator",
@@ -370,6 +410,7 @@ def seed_database():
         teacher_count = 0
         for name, email, designation, subject, assigned_batches in teacher_data_list[:75]:  # Limit to 75
             teacher_user = User(
+                organization_id=org_id,
                 name=name,
                 email=email,
                 role="teacher",
@@ -496,12 +537,17 @@ def seed_database():
         for key, count in stats.items():
             print(f"   • {key}: {count}")
         
-        print("\n🎯 TEST CREDENTIALS:")
-        print("   Admin: admin@school.edu / admin123")
-        print("   Principal: principal@school.edu / principal123")
+        print("\n🏫 ORGANIZATION LOGIN (step 1):")
+        print(f"   Name:     {DEFAULT_ORG_NAME}")
+        print(f"   Slug:     {DEFAULT_ORG_SLUG}")
+        print(f"   Password: {DEFAULT_ORG_PASSWORD}")
+
+        print("\n🎯 USER CREDENTIALS (step 2 — after organization login):")
+        print("   Admin:       admin@school.edu / admin123")
+        print("   Principal:   principal@school.edu / principal123")
         print("   Coordinator: anjali@school.edu / coordinator123")
-        print("   Teacher: priya.sharma@school.edu / teacher123")
-        
+        print("   Teacher:     priya.sharma@school.edu / teacher123")
+
         print("\n🚀 Ready to start the application!\n")
 
 

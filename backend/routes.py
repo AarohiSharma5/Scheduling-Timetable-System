@@ -11,11 +11,20 @@ Endpoints organized by module:
 """
 
 from flask import Blueprint, request, jsonify
-from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification
+from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification, Organization
 from datetime import datetime, timedelta
 from functools import wraps
 from werkzeug.security import check_password_hash, generate_password_hash
-from jwt_utils import generate_token, verify_token, get_token_from_request, token_required, role_required
+from jwt_utils import (
+    generate_token,
+    verify_token,
+    get_token_from_request,
+    token_required,
+    role_required,
+    generate_org_token,
+    verify_org_token,
+    get_org_token_from_request,
+)
 import os
 
 api = Blueprint("api", __name__, url_prefix="/api")
@@ -47,36 +56,104 @@ def health_check():
 
 
 # ============================================================================
+# ORGANIZATION ENDPOINTS
+# ============================================================================
+
+def _resolve_org_from_request():
+    """Validate the X-Org-Token header and return the Organization, or (None, error_response)."""
+    token = get_org_token_from_request()
+    if not token:
+        return None, (jsonify({"error": "Organization session required"}), 401)
+    payload = verify_org_token(token)
+    if "error" in payload:
+        return None, (jsonify(payload), 401)
+    org = Organization.query.get(payload.get("organization_id"))
+    if not org:
+        return None, (jsonify({"error": "Organization no longer exists"}), 404)
+    return org, None
+
+
+@api.route("/organizations/login", methods=["POST"])
+def organization_login():
+    """
+    Authenticate an organization (tenant) before user login.
+    Body: { "identifier": "test-sample-institute" | "Test Sample Institute", "password": "..." }
+    Returns: { "org_token": "...", "organization": {...} }
+    """
+    try:
+        data = request.get_json() or {}
+        identifier = (data.get("identifier") or data.get("name") or data.get("slug") or "").strip()
+        password = (data.get("password") or "").strip()
+
+        if not identifier or not password:
+            return jsonify({"error": "Organization name and password are required"}), 400
+
+        slug = identifier.lower().replace(" ", "-")
+        org = (
+            Organization.query.filter_by(slug=slug).first()
+            or Organization.query.filter(db.func.lower(Organization.name) == identifier.lower()).first()
+        )
+        if not org or not check_password_hash(org.password_hash, password):
+            return jsonify({"error": "Invalid organization or password"}), 401
+
+        token = generate_org_token(org.id, org.slug)
+        return jsonify({
+            "org_token": token,
+            "organization": org.to_dict(),
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/organizations/me", methods=["GET"])
+def organization_me():
+    """Return the organization associated with the current X-Org-Token header."""
+    org, err = _resolve_org_from_request()
+    if err:
+        return err
+    return jsonify(org.to_dict()), 200
+
+
+@api.route("/organizations/list", methods=["GET"])
+def organizations_list():
+    """Public list of organization names/slugs (no auth) to populate the login dropdown."""
+    orgs = Organization.query.order_by(Organization.name.asc()).all()
+    return jsonify([{"id": o.id, "name": o.name, "slug": o.slug, "logo_url": o.logo_url} for o in orgs]), 200
+
+
+# ============================================================================
 # AUTH ENDPOINTS (Step 2)
 # ============================================================================
 
 @api.route("/auth/login", methods=["POST"])
 def login():
     """
-    Login endpoint
+    Login endpoint (requires X-Org-Token header from a prior /organizations/login).
     Body: { "email": "user@school.edu", "password": "password" }
     Returns: { "token": "jwt_token", "user": {...} }
     """
     try:
+        org, err = _resolve_org_from_request()
+        if err:
+            return err
+
         data = request.get_json()
         email = data.get("email", "").strip()
         password = data.get("password", "").strip()
-        
+
         if not email or not password:
             return jsonify({"error": "Email and password required"}), 400
-        
-        # Find user by email
+
         user = User.query.filter_by(email=email).first()
-        if not user:
+        if not user or not check_password_hash(user.password_hash, password):
             return jsonify({"error": "Invalid email or password"}), 401
-        
-        # Verify password against hashed password
-        if not check_password_hash(user.password_hash, password):
-            return jsonify({"error": "Invalid email or password"}), 401
-        
-        # Generate JWT token
-        token = generate_token(user.id, user.email, user.role)
-        
+
+        # Enforce that user belongs to the organization they're logging into.
+        if user.organization_id is not None and user.organization_id != org.id:
+            return jsonify({"error": "This account does not belong to the selected organization"}), 403
+
+        token = generate_token(user.id, user.email, user.role, organization_id=org.id)
+
         return jsonify({
             "token": token,
             "user": {
@@ -85,7 +162,9 @@ def login():
                 "email": user.email,
                 "role": user.role,
                 "batch_id": user.batch_id,
+                "organization_id": org.id,
             },
+            "organization": org.to_dict(),
         }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500

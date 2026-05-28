@@ -8,9 +8,13 @@ import sys
 sys.path.insert(0, '.')
 
 from app import create_app
-from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification
+from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification, Organization
 from datetime import datetime
 from werkzeug.security import generate_password_hash
+
+DEFAULT_ORG_NAME = "Test Sample Institute"
+DEFAULT_ORG_SLUG = "test-sample-institute"
+DEFAULT_ORG_PASSWORD = "institute123"
 
 
 def seed_database():
@@ -24,7 +28,23 @@ def seed_database():
         
         print("📊 Creating all tables...")
         db.create_all()
-        
+
+        # ===================================================================
+        # 0. ORGANIZATION (tenant)
+        # ===================================================================
+        print(f"\n🏫 Creating organization: {DEFAULT_ORG_NAME}...")
+        organization = Organization(
+            name=DEFAULT_ORG_NAME,
+            slug=DEFAULT_ORG_SLUG,
+            password_hash=generate_password_hash(DEFAULT_ORG_PASSWORD),
+            description="Demo institute for the School Timetable Scheduler.",
+            logo_url="/scheduler-logo.png",
+        )
+        db.session.add(organization)
+        db.session.commit()
+        org_id = organization.id
+        print(f"   ✅ Organization created (slug={DEFAULT_ORG_SLUG}, password={DEFAULT_ORG_PASSWORD})")
+
         # ===================================================================
         # 1. SCHOOL CONFIGURATION
         # ===================================================================
@@ -105,15 +125,17 @@ def seed_database():
         
         # Admin User
         admin_user = User(
+            organization_id=org_id,
             name="School Admin",
             email="admin@school.edu",
             role="admin",
             password_hash=generate_password_hash("admin123"),
         )
         db.session.add(admin_user)
-        
+
         # Principal User
         principal_user = User(
+            organization_id=org_id,
             name="Dr. Rajesh Sharma",
             email="principal@school.edu",
             role="principal",
@@ -138,6 +160,7 @@ def seed_database():
         teachers = []
         for name, email, subject_names, assigned_batches, is_class_teacher, class_batch, has_duties in teachers_data:
             teacher_user = User(
+                organization_id=org_id,
                 name=name,
                 email=email,
                 role="teacher",
@@ -178,6 +201,7 @@ def seed_database():
         for batch in batches:
             for i in range(3):  # Add 3 sample students per batch
                 student_user = User(
+                    organization_id=org_id,
                     name=f"Student {i+1} - {batch.grade}{batch.section}",
                     email=f"student{batch.grade}{batch.section}{i+1}@school.edu",
                     role="student",
@@ -360,7 +384,11 @@ def seed_database():
         print("\n" + "=" * 60)
         print("✅ DATABASE SEEDING COMPLETE!")
         print("=" * 60)
-        print("\n📋 TEST ACCOUNTS:\n")
+        print("\n🏫 ORGANIZATION LOGIN (step 1):")
+        print(f"    Name:     {DEFAULT_ORG_NAME}")
+        print(f"    Slug:     {DEFAULT_ORG_SLUG}")
+        print(f"    Password: {DEFAULT_ORG_PASSWORD}")
+        print("\n📋 USER ACCOUNTS (step 2 — after organization login):\n")
         print("  ADMIN:")
         print("    Email: admin@school.edu")
         print("    Password: admin123")
