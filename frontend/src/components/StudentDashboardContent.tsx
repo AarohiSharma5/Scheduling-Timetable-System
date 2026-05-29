@@ -23,7 +23,7 @@ export default function StudentDashboardContent() {
     try {
       setLoading(true);
       // Get student data from API
-      const response = await api.get("/api/students?class=7&section=A");
+      const response = await api.get("/students?class=7&section=A");
       const firstStudent = response.data[0];
 
       if (firstStudent) {

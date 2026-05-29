@@ -13,15 +13,15 @@ export default function TimetableGenerator() {
     try {
       setStatus({ status: "loading", message: "🔄 Generating timetable..." });
       
-      const response = await api.post("/api/planner/generate", {
-        algorithm: "greedy",
-        optimize_for: "balance",
+      const response = await api.post("/timetable/generate", {
+        name: `Timetable ${new Date().toLocaleString()}`,
+        description: "Auto-generated",
       });
 
       if (response.data.success) {
         setStatus({
           status: "success",
-          message: `✅ Timetable generated successfully! (${response.data.slots_created} periods created)`,
+          message: `✅ Timetable generated successfully! (${response.data.slots_generated} periods created)`,
         });
       } else {
         setStatus({
@@ -42,8 +42,8 @@ export default function TimetableGenerator() {
       setStatus({ status: "loading", message: `📥 Downloading ${type} timetable...` });
       
       const endpoint = type === "batch" 
-        ? `/api/export/timetable/batch/${id}`
-        : `/api/export/timetable/teacher/${id}`;
+        ? `/export/timetable/batch/${id}`
+        : `/export/timetable/teacher/${id}`;
 
       const response = await api.get(endpoint, { responseType: "blob" });
       

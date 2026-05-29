@@ -34,7 +34,7 @@ export default function LeaveManagement() {
   const fetchLeaves = async () => {
     try {
       setLoading(true);
-      const response = await api.get("/api/leaves");
+      const response = await api.get("/leaves");
       setLeaves(response.data);
     } catch (error) {
       console.error("Error fetching leaves:", error);
@@ -47,7 +47,7 @@ export default function LeaveManagement() {
   const getSubstitutes = async (leaveId: number) => {
     try {
       setLoadingSubstitutes(true);
-      const response = await api.get(`/api/leaves/${leaveId}/substitute-options`);
+      const response = await api.get(`/leaves/${leaveId}/substitute-options`);
       setSubstitutes(response.data.available_substitutes || []);
       setMessage("✅ Available substitutes loaded");
     } catch (error) {
@@ -61,7 +61,7 @@ export default function LeaveManagement() {
   const approveLeavewithSubstitute = async (leaveId: number, substituteId: number) => {
     try {
       setMessage("⏳ Approving leave...");
-      const response = await api.post(`/api/leaves/${leaveId}/approve`, {
+      const response = await api.post(`/leaves/${leaveId}/approve`, {
         substitute_teacher_id: substituteId,
         auto_adjust: true,
       });
@@ -79,7 +79,7 @@ export default function LeaveManagement() {
   const rejectLeave = async (leaveId: number) => {
     try {
       setMessage("⏳ Rejecting leave...");
-      const response = await api.post(`/api/leaves/${leaveId}/reject`, {
+      const response = await api.post(`/leaves/${leaveId}/reject`, {
         rejection_reason: "Not approved by admin",
       });
 
@@ -96,7 +96,7 @@ export default function LeaveManagement() {
   const markTeacherAbsent = async (teacherId: number) => {
     try {
       setMessage("⏳ Marking teacher absent...");
-      const response = await api.post(`/api/teachers/${teacherId}/mark-absent`, {
+      const response = await api.post(`/teachers/${teacherId}/mark-absent`, {
         date: new Date().toISOString().split("T")[0],
         reason: "Unannounced absence",
       });

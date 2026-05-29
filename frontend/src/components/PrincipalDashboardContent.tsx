@@ -26,8 +26,8 @@ export default function PrincipalDashboardContent() {
     try {
       setLoading(true);
       // Get basic stats
-      const teachersRes = await api.get("/api/teachers");
-      const leaveRes = await api.get("/api/leaves");
+      const teachersRes = await api.get("/admin/teachers");
+      const leaveRes = await api.get("/leaves");
       
       setStats({
         total_students: 2800, // From seed data

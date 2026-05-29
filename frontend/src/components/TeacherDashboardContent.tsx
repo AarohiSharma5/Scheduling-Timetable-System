@@ -21,7 +21,7 @@ export default function TeacherDashboardContent() {
     try {
       setLoading(true);
       // Get teacher data
-      const response = await api.get("/api/teachers");
+      const response = await api.get("/admin/teachers");
       const teachers = response.data;
       const firstTeacher = teachers[0];
 

@@ -27,11 +27,11 @@ export default function NotificationsCenter() {
   const fetchNotifications = async () => {
     try {
       setLoading(true);
-      const response = await api.get("/api/notifications");
+      const response = await api.get("/notifications");
       setNotifications(response.data);
 
       // Get unread count
-      const unreadResponse = await api.get("/api/notifications/unread-count");
+      const unreadResponse = await api.get("/notifications/unread-count");
       setUnreadCount(unreadResponse.data.unread_count);
     } catch (error) {
       console.error("Error fetching notifications:", error);
@@ -42,7 +42,7 @@ export default function NotificationsCenter() {
 
   const markAsRead = async (notificationId: number) => {
     try {
-      await api.post(`/api/notifications/${notificationId}/mark-read`);
+      await api.post(`/notifications/${notificationId}/mark-read`);
       setMessage("✅ Marked as read");
       fetchNotifications();
     } catch (error) {
@@ -53,7 +53,7 @@ export default function NotificationsCenter() {
   const markAllAsRead = async () => {
     try {
       setMessage("⏳ Marking all as read...");
-      await api.post("/api/notifications/mark-all-read");
+      await api.post("/notifications/mark-all-read");
       setMessage("✅ All marked as read");
       fetchNotifications();
     } catch (error) {
@@ -64,7 +64,7 @@ export default function NotificationsCenter() {
 
   const deleteNotification = async (notificationId: number) => {
     try {
-      await api.delete(`/api/notifications/${notificationId}`);
+      await api.delete(`/notifications/${notificationId}`);
       setMessage("✅ Notification deleted");
       fetchNotifications();
     } catch (error) {
