@@ -260,28 +260,47 @@ def format_timetable_as_plan(timetable):
         
         timetable_array.append(day_row)
     
-    # Get all teachers and subjects
+    # Get all teachers, subjects, and batches
     all_teachers = Teacher.query.all()
     all_subjects = Subject.query.all()
-    
+    all_batches = Batch.query.all()
+
+    # Resolve the institution name from the organization (single tenant) or the
+    # timetable's own school_name, falling back to a generic label.
+    organization = Organization.query.first()
+    institution_name = (
+        (organization.name if organization else None)
+        or timetable.school_name
+        or "School"
+    )
+
+    # Total student headcount derived from batch sizes.
+    student_count = sum((b.student_count or 0) for b in all_batches)
+
+    # Map each subject to a teacher who actually teaches it (first eligible).
+    subject_teacher_map = {}
+    for t in all_teachers:
+        for sid in (t.subject_ids or []):
+            subject_teacher_map.setdefault(sid, t.id)
+
     return {
         "id": timetable.id,
         "title": timetable.name,
         "description": timetable.description,
         "status": timetable.status if timetable.status in ["draft", "completed"] else "completed",
         "school_profile": {
-            "institution_name": "Sample School",
+            "institution_name": institution_name,
             "days_per_week": days_per_week,
             "periods_per_day": periods_per_day,
-            "student_count": 0,
-            "core_subjects_target": 5,
-            "elective_limit": 2,
+            "student_count": student_count,
+            "core_subjects_target": len(all_subjects),
+            "elective_limit": max(len(all_subjects) - 5, 0),
         },
         "teachers": [
             {
                 "id": t.id,
                 "name": t.name,
-                "contact_hours": 24,
+                "contact_hours": t.max_periods_per_week or 24,
                 "expertise": [Subject.query.get(sid).name for sid in t.subject_ids if Subject.query.get(sid)],
             }
             for t in all_teachers
@@ -290,7 +309,7 @@ def format_timetable_as_plan(timetable):
             {
                 "id": s.id,
                 "name": s.name,
-                "teacher_id": 1,
+                "teacher_id": subject_teacher_map.get(s.id),
                 "is_core": True,
                 "periods_required": s.periods_per_week,
             }
