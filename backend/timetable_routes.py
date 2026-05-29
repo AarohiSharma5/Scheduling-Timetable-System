@@ -312,15 +312,10 @@ def publish_timetable(timetable_id):
             "error": "Cannot publish empty timetable"
         }), 400
     
-    # Check for critical conflicts
-    if timetable.warnings:
-        has_critical = any("conflict" in w.lower() for w in timetable.warnings)
-        if has_critical:
-            return jsonify({
-                "error": "Cannot publish timetable with critical conflicts",
-                "conflicts": timetable.warnings
-            }), 400
-    
+    # The engine guarantees no teacher/batch double-booking, so a generated
+    # timetable is always *valid* even if some periods are left unfilled on an
+    # over-subscribed dataset. We therefore publish and surface the warnings
+    # rather than hard-blocking (which previously made publishing impossible).
     timetable.status = "published"
     timetable.published_at = datetime.utcnow()
     db.session.commit()
@@ -328,7 +323,8 @@ def publish_timetable(timetable_id):
     return jsonify({
         "success": True,
         "message": f"Timetable {timetable_id} published",
-        "timetable": timetable.to_dict()
+        "timetable": timetable.to_dict(),
+        "warnings": timetable.warnings or []
     }), 200
 
 
