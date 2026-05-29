@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useAuthStore } from "./stores/authStore";
 import { useOrgStore } from "./stores/orgStore";
 import ProtectedRoute from "./components/ProtectedRoute";
+import RequireOrg from "./components/RequireOrg";
 
 // Pages
 import LandingPage from "./pages/LandingPage";
@@ -36,7 +37,16 @@ const App: React.FC = () => {
         {/* Public Routes */}
         <Route path="/" element={<LandingPage />} />
         <Route path="/org-login" element={<OrgLoginPage />} />
-        <Route path="/login" element={<LoginPage />} />
+
+        {/* User login — only reachable after organization login */}
+        <Route
+          path="/login"
+          element={
+            <RequireOrg>
+              <LoginPage />
+            </RequireOrg>
+          }
+        />
 
         {/* Protected Routes (require org session + user auth) */}
         <Route

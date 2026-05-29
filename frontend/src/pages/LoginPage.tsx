@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../stores/authStore";
 import { useOrgStore } from "../stores/orgStore";
@@ -45,13 +45,6 @@ export default function LoginPage() {
   const { login } = useAuthStore();
   const { organization, logoutOrg } = useOrgStore();
   const navigate = useNavigate();
-
-  // Require an organization session before user login.
-  useEffect(() => {
-    if (!organization) {
-      navigate("/org-login", { replace: true });
-    }
-  }, [organization, navigate]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
