@@ -127,30 +127,37 @@ class SchedulingEngine:
     # ========================================================================
     
     def _validate_input(self, teachers, batches, subjects, config) -> List[str]:
-        """Validate that input data is complete and consistent"""
+        """Validate input data.
+
+        Only genuinely fatal problems (missing config, or no usable data at all)
+        are returned as errors. Individual teachers/batches that are not fully
+        wired up are recorded as warnings and simply skipped during scheduling,
+        so one unassigned teacher can no longer abort the entire run.
+        """
         errors = []
-        
-        # Check teachers have subjects
+
+        # Per-entity gaps are non-fatal: warn and skip.
         for teacher in teachers:
             if not teacher.subject_ids:
-                errors.append(f"Teacher {teacher.name} has no subjects assigned")
-        
-        # Check teachers have batches
-        for teacher in teachers:
+                self.warnings.append(f"Teacher {teacher.name} has no subjects assigned (skipped)")
             if not teacher.assigned_batch_ids:
-                errors.append(f"Teacher {teacher.name} has no batches assigned")
-        
-        # Check batches have subjects
+                self.warnings.append(f"Teacher {teacher.name} has no batches assigned (skipped)")
+            if not teacher.max_periods_per_week:
+                self.warnings.append(f"Teacher {teacher.name} has no max periods set (defaulting to 24)")
+
         for batch in batches:
             if not batch.subject_ids:
-                errors.append(f"Batch {batch.grade}-{batch.section} has no subjects")
-        
-        # Check max_periods_per_week is set
-        for teacher in teachers:
-            if not teacher.max_periods_per_week:
-                errors.append(f"Teacher {teacher.name} has no max_periods_per_week set")
-        
-        # Check school config times are valid
+                self.warnings.append(f"Batch {batch.grade}-{batch.section} has no subjects (skipped)")
+
+        # Fatal: no usable data at all.
+        if not teachers:
+            errors.append("No teachers available")
+        if not batches:
+            errors.append("No batches available")
+        if not subjects:
+            errors.append("No subjects available")
+
+        # Fatal: malformed school config times.
         try:
             time.fromisoformat(config.start_time)
             time.fromisoformat(config.end_time)
@@ -158,7 +165,7 @@ class SchedulingEngine:
             time.fromisoformat(config.lunch_end)
         except ValueError:
             errors.append("Invalid school configuration times")
-        
+
         return errors
     
     # ========================================================================
@@ -291,80 +298,75 @@ class SchedulingEngine:
         4. If valid, commit; else backtrack
         """
         
-        # Initialize teacher loads
+        # Build O(1) lookup caches so constraint checks don't hit the DB or
+        # iterate the whole timetable on every attempt (critical for a
+        # multi-hundred-batch school).
+        self.teacher_max = {t.id: (t.max_periods_per_week or 24) for t in teachers}
+        self.subject_periods = {s.id: s.periods_per_week for s in subjects}
         for teacher in teachers:
             self.teacher_load[teacher.id] = 0
-        
-        # Try to assign each period
-        for assignment_idx, assignment in enumerate(assignments):
+
+        # Fast conflict-tracking sets.
+        self.occupied = set()      # (day, period_num, batch_id) -> batch already busy
+        self.teacher_busy = set()  # (teacher_id, day, period_num) -> teacher already busy
+
+        # Try to assign each required period.
+        for assignment in assignments:
             placed = False
-            
-            # Try each available slot
             for slot in slots:
                 if self._is_slot_valid(assignment, slot):
-                    # Place assignment
-                    self.timetable[slot] = (
+                    # Key by (slot, batch_id) so every batch has its own grid;
+                    # the school can run many classes in the same period.
+                    self.timetable[(slot, assignment.batch_id)] = (
                         assignment.teacher_id,
                         assignment.subject_id,
-                        assignment.batch_id
+                        assignment.batch_id,
                     )
-                    
-                    # Update tracking
+                    self.occupied.add((slot.day, slot.period_num, assignment.batch_id))
+                    self.teacher_busy.add((assignment.teacher_id, slot.day, slot.period_num))
                     self.teacher_load[assignment.teacher_id] += 1
                     self.batch_schedule[assignment.batch_id][assignment.subject_id] += 1
-                    
                     placed = True
                     break
-            
+
             if not placed:
                 self.conflicts.append(
                     f"Could not place {assignment} - either teacher full or batch conflict"
                 )
-        
-        # Check if all assignments were placed
-        assignments_placed = len(self.timetable)
-        return assignments_placed == len(assignments)
-    
+
+        # True only when everything fit; partial schedules still get saved.
+        return len(self.timetable) == len(assignments)
+
     def _is_slot_valid(self, assignment: Assignment, slot: Period) -> bool:
         """
         Check all constraints for placing assignment at slot
         
         Constraints:
-        1. Slot not already occupied
-        2. Teacher not busy at this slot
-        3. Batch not busy at this slot
-        4. Teacher hasn't exceeded max periods
-        5. Subject doesn't exceed required periods
+        1. Batch not already busy at this (day, period)
+        2. Teacher not busy at this (day, period)
+        3. Teacher hasn't exceeded max periods
+        4. Subject doesn't exceed required periods for the batch
         """
-        
-        # Constraint 1: Slot not occupied
-        if slot in self.timetable:
-            return False
-        
         teacher_id = assignment.teacher_id
         batch_id = assignment.batch_id
         subject_id = assignment.subject_id
-        
-        # Constraint 2: Teacher not busy (no other batch at same time)
-        for placed_slot, (t_id, s_id, b_id) in self.timetable.items():
-            if t_id == teacher_id and placed_slot.day == slot.day and placed_slot.period_num == slot.period_num:
-                return False
-        
-        # Constraint 3: Batch not busy (no other subject at same time)
-        for placed_slot, (t_id, s_id, b_id) in self.timetable.items():
-            if b_id == batch_id and placed_slot.day == slot.day and placed_slot.period_num == slot.period_num:
-                return False
-        
-        # Constraint 4: Teacher max periods not exceeded
-        teacher = Teacher.query.get(teacher_id)
-        if self.teacher_load[teacher_id] >= teacher.max_periods_per_week:
+
+        # Constraint 1: this batch already has a class in this slot.
+        if (slot.day, slot.period_num, batch_id) in self.occupied:
             return False
-        
-        # Constraint 5: Subject periods not exceeded
-        subject = Subject.query.get(subject_id)
-        if self.batch_schedule[batch_id][subject_id] >= subject.periods_per_week:
+
+        # Constraint 2: this teacher is already teaching in this slot.
+        if (teacher_id, slot.day, slot.period_num) in self.teacher_busy:
             return False
-        
+
+        # Constraint 3: teacher max periods not exceeded.
+        if self.teacher_load.get(teacher_id, 0) >= self.teacher_max.get(teacher_id, 24):
+            return False
+
+        # Constraint 4: subject weekly quota for this batch not exceeded.
+        if self.batch_schedule[batch_id][subject_id] >= self.subject_periods.get(subject_id, 1):
+            return False
+
         return True
     
     # ========================================================================
@@ -388,8 +390,8 @@ class SchedulingEngine:
             TimetableSlot.query.filter_by(timetable_id=timetable_id).delete()
             timetable.warnings = self.conflicts + self.warnings
         
-        # Save slots
-        for slot, (teacher_id, subject_id, batch_id) in self.timetable.items():
+        # Save slots (timetable is keyed by (Period, batch_id)).
+        for (slot, _batch_id), (teacher_id, subject_id, batch_id) in self.timetable.items():
             timetable_slot = TimetableSlot(
                 timetable_id=timetable_id,
                 day=slot.day,

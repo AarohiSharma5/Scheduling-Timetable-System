@@ -239,7 +239,40 @@ def seed_database():
                 batches.append(batch)
         db.session.commit()
         print(f"   ✅ Created {len(batches)} batches")
-        
+
+        # =====================================================================
+        # 4b. SUBJECTS + BATCH WIRING (consumed by the scheduling engine)
+        # The engine reads the simple `Subject` table and `batch.subject_ids`,
+        # so we must materialise them from SUBJECTS_DATA here.
+        # =====================================================================
+        print("\n📗 Creating subjects and linking them to batches...")
+        grade_to_batches = {}
+        for b in batches:
+            grade_to_batches.setdefault(b.grade, []).append(b)
+
+        subjects = []
+        subject_by_name = {}
+        for _sid, name, _code, subject_type, applicable_classes in SUBJECTS_DATA:
+            periods = 5 if subject_type == "Core" else 2
+            applicable_batches = []
+            for grade in applicable_classes:
+                applicable_batches.extend(grade_to_batches.get(grade, []))
+            subject = Subject(
+                name=name,
+                periods_per_week=periods,
+                batch_ids=[b.id for b in applicable_batches],
+            )
+            db.session.add(subject)
+            subjects.append(subject)
+            subject_by_name[name] = subject
+        db.session.commit()
+
+        # Tell each batch which subjects it takes.
+        for b in batches:
+            b.subject_ids = [s.id for s in subjects if b.id in (s.batch_ids or [])]
+        db.session.commit()
+        print(f"   ✅ Created {len(subjects)} subjects and linked them to batches")
+
         # =====================================================================
         # 5. CLASSROOMS
         # =====================================================================
@@ -419,11 +452,12 @@ def seed_database():
             db.session.add(teacher_user)
             db.session.commit()
             
-            # Get subject IDs for this teacher
+            # Map the teacher's declared subject onto the Subject table that the
+            # scheduler actually reads (NTT/specialist subjects simply won't match).
             subject_ids = []
-            for subj_master in subject_masters:
-                if subj_master.subject_name.lower() == subject.lower() or subj_master.subject_code.lower() == subject.lower()[:3]:
-                    subject_ids.append(subj_master.id)
+            matched_subject = subject_by_name.get(subject)
+            if matched_subject:
+                subject_ids.append(matched_subject.id)
             
             # Get batch IDs for assigned batches
             assigned_batch_ids = []
@@ -449,7 +483,47 @@ def seed_database():
         
         db.session.commit()
         print(f"   ✅ Created {teacher_count} teachers")
-        
+
+        # =====================================================================
+        # 8b. SCHEDULER COVERAGE
+        # Guarantee every (batch, subject) the batch needs has at least one
+        # eligible teacher: someone who teaches that subject AND is assigned to
+        # that batch. Otherwise the engine has nothing valid to place.
+        # =====================================================================
+        print("\n🔗 Wiring teachers ↔ subjects ↔ batches for schedule coverage...")
+
+        # Pool of teachers per subject id, based on what each teacher teaches.
+        teachers_for_subject = {s.id: [] for s in subjects}
+        for t in teachers:
+            for sid in (t.subject_ids or []):
+                if sid in teachers_for_subject:
+                    teachers_for_subject[sid].append(t)
+
+        # Any subject with no teacher at all gets teachers assigned round-robin.
+        rr = 0
+        for s in subjects:
+            if not teachers_for_subject[s.id]:
+                t = teachers[rr % len(teachers)]
+                rr += 1
+                t.subject_ids = list(t.subject_ids or []) + [s.id]
+                teachers_for_subject[s.id].append(t)
+
+        # For each batch+subject pair, make sure a teacher of that subject is
+        # assigned to the batch (spread the load round-robin within each pool).
+        assign_cursor = {s.id: 0 for s in subjects}
+        for b in batches:
+            for sid in (b.subject_ids or []):
+                pool = teachers_for_subject.get(sid, [])
+                if not pool:
+                    continue
+                if any(b.id in (t.assigned_batch_ids or []) for t in pool):
+                    continue
+                t = pool[assign_cursor[sid] % len(pool)]
+                assign_cursor[sid] += 1
+                t.assigned_batch_ids = list(t.assigned_batch_ids or []) + [b.id]
+        db.session.commit()
+        print("   ✅ Teacher / subject / batch coverage ensured")
+
         # =====================================================================
         # 9. STUDENTS (~2,800 TOTAL)
         # =====================================================================
