@@ -217,7 +217,7 @@ def format_timetable_as_plan(timetable):
     config = SchoolConfig.query.first() or SchoolConfig()
     
     # Build 2D timetable array
-    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     periods_per_day = config.periods_per_day
     days_per_week = config.working_days
     
