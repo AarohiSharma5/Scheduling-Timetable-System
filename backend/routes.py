@@ -829,38 +829,10 @@ def delete_subject(subject_id):
 # TIMETABLE ENDPOINTS
 # ============================================================================
 
-@api.route("/timetable/generate", methods=["POST"])
-@role_required("admin")
-def generate_timetable():
-    """
-    Generate a new timetable
-    Body: { "name": "Week 1", "description": "..." }
-    Returns: Generated timetable with slots
-    
-    TODO: Implement actual timetable generation algorithm in Step 5
-    """
-    try:
-        data = request.get_json()
-        
-        # Create timetable record
-        timetable = Timetable(
-            name=data.get("name", "Generated Timetable"),
-            description=data.get("description", ""),
-            status="draft",
-        )
-        db.session.add(timetable)
-        db.session.commit()
-        
-        # TODO: Call timetable generation algorithm here
-        
-        return jsonify({
-            "message": "Timetable generation started",
-            "timetable_id": timetable.id,
-            "timetable": timetable.to_dict(),
-        }), 201
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({"error": str(e)}), 500
+# NOTE: The real POST /api/timetable/generate handler lives in
+# timetable_routes.py (blueprint `timetable_bp`). It runs the actual
+# SchedulingEngine. A stub used to be defined here with the same URL, which
+# shadowed the real one — it has been removed so the engine route is used.
 
 
 @api.route("/timetable", methods=["GET"])
