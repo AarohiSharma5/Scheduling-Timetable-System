@@ -105,7 +105,19 @@ def token_required(f):
 
 
 def role_required(*allowed_roles):
-    """Decorator to require specific roles"""
+    """Decorator to require specific roles.
+
+    Accepts either varargs (`role_required("admin", "principal")`) or a single
+    list/tuple (`role_required(["admin", "principal"])`); both are flattened so
+    a stray list argument can't silently forbid every request.
+    """
+    flattened = set()
+    for role in allowed_roles:
+        if isinstance(role, (list, tuple, set)):
+            flattened.update(role)
+        else:
+            flattened.add(role)
+
     def decorator(f):
         @wraps(f)
         def wrapper(*args, **kwargs):
@@ -118,8 +130,8 @@ def role_required(*allowed_roles):
             if "error" in payload:
                 return jsonify(payload), 401
             
-            if payload.get("role") not in allowed_roles:
-                return jsonify({"error": f"Forbidden: requires {allowed_roles}"}), 403
+            if payload.get("role") not in flattened:
+                return jsonify({"error": f"Forbidden: requires {sorted(flattened)}"}), 403
             
             # Add user info to request context
             request.user = payload

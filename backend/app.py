@@ -20,7 +20,7 @@ def create_app(config_name=None):
         # Development: API only
         app = Flask(__name__)
     
-    app.config.from_object(config[config_name])
+    app.config.from_object(config.get(config_name, config["default"]))
     
     db.init_app(app)
     

@@ -43,13 +43,9 @@ def generate_timetable():
     }
     """
     try:
-        print("hello")
-        data = request.get_json()
-        print("hello2")
+        data = request.get_json(silent=True) or {}
         name = data.get("name", f"Timetable {datetime.utcnow().isoformat()}")
-        print("hello3")
         description = data.get("description", "")
-        print("hello4")
         # Create new timetable record
         timetable = Timetable(
             name=name,
@@ -59,23 +55,19 @@ def generate_timetable():
         )
         db.session.add(timetable)
         db.session.flush()  # Get ID without committing
-        print("hello5")
         # Run scheduling engine
         engine = SchedulingEngine()
         success, warnings = engine.generate_timetable(timetable.id)
-        print("hello6")
         if not success:
             db.session.rollback()
             return jsonify({
                 "error": "Failed to generate timetable",
                 "details": warnings
             }), 400
-        print("hello7")
         db.session.commit()
         
         # Count generated slots
         slots_count = TimetableSlot.query.filter_by(timetable_id=timetable.id).count()
-        print("hello8")
         return jsonify({
             "success": True,
             "timetable": timetable.to_dict(),
