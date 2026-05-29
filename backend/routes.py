@@ -216,54 +216,67 @@ def format_timetable_as_plan(timetable):
     """Convert Timetable object to Plan format for frontend"""
     config = SchoolConfig.query.first() or SchoolConfig()
     
-    # Build 2D timetable array
+    # Build per-batch timetable grids
     days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     periods_per_day = config.periods_per_day
     days_per_week = config.working_days
-    
-    timetable_array = []
-    
-    # Get all slots for this timetable, sorted by day and period
-    slots = TimetableSlot.query.filter_by(timetable_id=timetable.id).all()
-    slots_by_day_period = {}
-    for slot in slots:
-        key = (slot.day, slot.period_number)
-        slots_by_day_period[key] = slot
-    
-    # Build 2D array
-    for day_idx, day_name in enumerate(days):
-        day_row = []
-        for period_idx in range(periods_per_day):
-            key = (day_name, period_idx + 1)
-            slot = slots_by_day_period.get(key)
-            
-            if slot and not slot.is_lunch and slot.teacher_id:
-                # Fetch related data
-                teacher = Teacher.query.get(slot.teacher_id)
-                subject = Subject.query.get(slot.subject_id)
-                batch = Batch.query.get(slot.batch_id)
-                
-                slot_dict = {
-                    "subject": subject.name if subject else "Unknown",
-                    "teacher": teacher.name if teacher else "Unknown",
-                    "subject_id": slot.subject_id,
-                    "teacher_id": slot.teacher_id,
-                    "batch_id": slot.batch_id,
-                    "batch_name": f"Grade {batch.grade} - {batch.section}" if batch else "Unknown",
-                    "is_lunch": False,
-                }
-                day_row.append(slot_dict)
-            elif slot and slot.is_lunch:
-                day_row.append(None)  # Lunch period
-            else:
-                day_row.append(None)  # Free period
-        
-        timetable_array.append(day_row)
-    
-    # Get all teachers, subjects, and batches
+
+    # Lookups (avoids a DB query per slot when building grids).
     all_teachers = Teacher.query.all()
     all_subjects = Subject.query.all()
     all_batches = Batch.query.all()
+    teacher_by_id = {t.id: t for t in all_teachers}
+    subject_by_id = {s.id: s for s in all_subjects}
+    batch_by_id = {b.id: b for b in all_batches}
+
+    def batch_label(batch):
+        return f"Grade {batch.grade} - {batch.section}" if batch else "Unknown"
+
+    # Group slots per batch so grids don't overwrite each other across batches.
+    slots = TimetableSlot.query.filter_by(timetable_id=timetable.id).all()
+    per_batch_slots = {}  # batch_id -> {(day, period_number): slot}
+    for slot in slots:
+        per_batch_slots.setdefault(slot.batch_id, {})[(slot.day, slot.period_number)] = slot
+
+    def build_grid(slot_map):
+        grid = []
+        for day_name in days:
+            day_row = []
+            for period_idx in range(periods_per_day):
+                slot = slot_map.get((day_name, period_idx + 1))
+                if slot and not slot.is_lunch and slot.teacher_id:
+                    teacher = teacher_by_id.get(slot.teacher_id)
+                    subject = subject_by_id.get(slot.subject_id)
+                    batch = batch_by_id.get(slot.batch_id)
+                    day_row.append({
+                        "subject": subject.name if subject else "Unknown",
+                        "teacher": teacher.name if teacher else "Unknown",
+                        "subject_id": slot.subject_id,
+                        "teacher_id": slot.teacher_id,
+                        "batch_id": slot.batch_id,
+                        "batch_name": batch_label(batch),
+                        "is_lunch": False,
+                    })
+                else:
+                    day_row.append(None)  # Lunch or free period
+            grid.append(day_row)
+        return grid
+
+    batch_timetables = [
+        {
+            "batch_id": batch_id,
+            "batch_name": batch_label(batch_by_id.get(batch_id)),
+            "timetable": build_grid(per_batch_slots[batch_id]),
+        }
+        for batch_id in sorted(per_batch_slots.keys(), key=lambda x: (x is None, x))
+    ]
+
+    # Backward-compatible single grid = first batch (or an empty grid).
+    timetable_array = (
+        batch_timetables[0]["timetable"]
+        if batch_timetables
+        else [[None for _ in range(periods_per_day)] for _ in days]
+    )
 
     # Resolve the institution name from the organization (single tenant) or the
     # timetable's own school_name, falling back to a generic label.
@@ -301,7 +314,7 @@ def format_timetable_as_plan(timetable):
                 "id": t.id,
                 "name": t.name,
                 "contact_hours": t.max_periods_per_week or 24,
-                "expertise": [Subject.query.get(sid).name for sid in t.subject_ids if Subject.query.get(sid)],
+                "expertise": [subject_by_id[sid].name for sid in (t.subject_ids or []) if sid in subject_by_id],
             }
             for t in all_teachers
         ],
@@ -316,6 +329,7 @@ def format_timetable_as_plan(timetable):
             for s in all_subjects
         ],
         "timetable": timetable_array,
+        "batch_timetables": batch_timetables,
         "warnings": timetable.warnings or [],
         "created_at": timetable.created_at.isoformat() if timetable.created_at else None,
         "updated_at": timetable.updated_at.isoformat() if timetable.updated_at else None,

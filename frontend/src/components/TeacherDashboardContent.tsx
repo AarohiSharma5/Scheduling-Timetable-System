@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { api } from "../api";
 import NotificationsCenter from "./NotificationsCenter";
+import { useAuthStore } from "../stores/authStore";
 
 interface TeacherStats {
   classes: number;
@@ -8,35 +8,26 @@ interface TeacherStats {
   subjects: number;
 }
 
+const STUDENTS_PER_CLASS_ESTIMATE = 35;
+
 export default function TeacherDashboardContent() {
+  const { user } = useAuthStore();
   const [stats, setStats] = useState<TeacherStats>({ classes: 0, students: 0, subjects: 0 });
   const [activeTab, setActiveTab] = useState<"overview" | "schedule" | "notifications">("overview");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadTeacherStats();
-  }, []);
-
-  const loadTeacherStats = async () => {
-    try {
-      setLoading(true);
-      // Get teacher data
-      const response = await api.get("/admin/teachers");
-      const teachers = response.data;
-      const firstTeacher = teachers[0];
-
-      // Extract stats from first teacher
-      setStats({
-        classes: firstTeacher.assigned_batches?.length || 0,
-        students: 30, // Average
-        subjects: firstTeacher.subject_ids?.length || 1,
-      });
-    } catch (error) {
-      console.error("Error loading teacher stats:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
+    // Derive stats from the logged-in teacher's own profile (populated by
+    // /auth/me) instead of querying the admin-only teachers endpoint.
+    const classes = user?.assigned_batches?.length || 0;
+    const subjects = user?.subjects?.length || 0;
+    setStats({
+      classes,
+      subjects,
+      students: classes * STUDENTS_PER_CLASS_ESTIMATE,
+    });
+    setLoading(false);
+  }, [user]);
 
   return (
     <div className="space-y-6">

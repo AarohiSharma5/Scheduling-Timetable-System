@@ -13,6 +13,7 @@ const ReviewPage: React.FC = () => {
     usePlanStore();
   const [timetableId, setTimetableId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<"review" | "validation">("review");
+  const [selectedBatchId, setSelectedBatchId] = useState<number | null>(null);
 
   useEffect(() => {
     loadPlan();
@@ -115,13 +116,42 @@ const ReviewPage: React.FC = () => {
           </div>
 
           {/* Content */}
-          {activeTab === "review" && (
-            <TimetableReviewComponent
-              timetable={currentPlan.timetable}
-              warnings={currentPlan.warnings || []}
-              onExport={handleExport}
-            />
-          )}
+          {activeTab === "review" && (() => {
+            const batchTimetables = currentPlan.batch_timetables || [];
+            const activeBatch =
+              batchTimetables.find((b) => b.batch_id === selectedBatchId) ||
+              batchTimetables[0];
+            const displayedGrid = activeBatch?.timetable || currentPlan.timetable || [];
+
+            return (
+              <div className="space-y-4">
+                {batchTimetables.length > 0 && (
+                  <div className="flex items-center gap-3">
+                    <label htmlFor="batch-select" className="font-medium text-gray-700">
+                      Class:
+                    </label>
+                    <select
+                      id="batch-select"
+                      value={activeBatch?.batch_id ?? ""}
+                      onChange={(e) => setSelectedBatchId(Number(e.target.value))}
+                      className="rounded-lg border border-gray-300 px-3 py-2"
+                    >
+                      {batchTimetables.map((b) => (
+                        <option key={b.batch_id} value={b.batch_id}>
+                          {b.batch_name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <TimetableReviewComponent
+                  timetable={displayedGrid}
+                  warnings={currentPlan.warnings || []}
+                  onExport={handleExport}
+                />
+              </div>
+            );
+          })()}
 
           {activeTab === "validation" && timetableId && (
             <TimetableValidation

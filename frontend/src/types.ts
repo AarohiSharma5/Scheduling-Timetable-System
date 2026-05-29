@@ -29,6 +29,12 @@ export interface TimetableSlot {
   teacher_id: number;
 }
 
+export interface BatchTimetable {
+  batch_id: number;
+  batch_name: string;
+  timetable: (TimetableSlot | null)[][];
+}
+
 export interface Plan {
   id: number;
   user_id: number;
@@ -38,6 +44,7 @@ export interface Plan {
   teachers: Teacher[];
   subjects: Subject[];
   timetable?: (TimetableSlot | null)[][];
+  batch_timetables?: BatchTimetable[];
   warnings?: string[];
   status: "draft" | "completed";
   created_at: string;
