@@ -1118,23 +1118,50 @@ def get_stats():
 # PDF EXPORT ENDPOINTS
 # ============================================================================
 
+def _safe_filename_part(text):
+    """Reduce arbitrary text to a filename-safe slug."""
+    keep = [c if c.isalnum() else "-" for c in (text or "")]
+    slug = "".join(keep).strip("-")
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return slug or "timetable"
+
+
 @api.route("/export/timetable/batch/<int:timetable_id>", methods=["GET"])
 @token_required
 @role_required(["admin", "principal"])
 def export_batch_timetable(timetable_id):
-    """Export timetable as PDF (batch-wise layout)"""
+    """Export timetable as PDF (class/batch-wise).
+
+    Optional query param ?batch_id=<id> exports a single class; omitting it
+    exports every class in the organization.
+    """
     try:
         from pdf_utils import export_batch_timetable
-        
-        timetable = Timetable.query.filter_by(id=timetable_id, organization_id=current_org_id()).first()
+
+        org_id = current_org_id()
+        timetable = Timetable.query.filter_by(id=timetable_id, organization_id=org_id).first()
         if not timetable:
             return jsonify({"error": "Timetable not found"}), 404
-        
-        pdf_buffer = export_batch_timetable(timetable_id, school_name=timetable.school_name or "School")
-        
+
+        batch_id = request.args.get("batch_id", type=int)
+        label = "all-classes"
+        if batch_id is not None:
+            batch = Batch.query.filter_by(id=batch_id, organization_id=org_id).first()
+            if not batch:
+                return jsonify({"error": "Class not found"}), 404
+            label = _safe_filename_part(f"Grade-{batch.grade}-{batch.section}")
+
+        pdf_buffer = export_batch_timetable(
+            timetable_id,
+            organization_id=org_id,
+            school_name=timetable.school_name or "School",
+            batch_id=batch_id,
+        )
+
         return pdf_buffer.getvalue(), 200, {
-            "Content-Disposition": f'attachment; filename="timetable_batch_{timetable_id}.pdf"',
-            "Content-Type": "application/pdf"
+            "Content-Disposition": f'attachment; filename="timetable_{label}.pdf"',
+            "Content-Type": "application/pdf",
         }
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1144,19 +1171,37 @@ def export_batch_timetable(timetable_id):
 @token_required
 @role_required(["admin", "principal", "teacher"])
 def export_teacher_timetable(timetable_id):
-    """Export timetable as PDF (teacher-wise layout)"""
+    """Export timetable as PDF (teacher-wise).
+
+    Optional query param ?teacher_id=<id> exports a single teacher; omitting it
+    exports every teacher in the organization.
+    """
     try:
         from pdf_utils import export_teacher_timetable
-        
-        timetable = Timetable.query.filter_by(id=timetable_id, organization_id=current_org_id()).first()
+
+        org_id = current_org_id()
+        timetable = Timetable.query.filter_by(id=timetable_id, organization_id=org_id).first()
         if not timetable:
             return jsonify({"error": "Timetable not found"}), 404
-        
-        pdf_buffer = export_teacher_timetable(timetable_id, school_name=timetable.school_name or "School")
-        
+
+        teacher_id = request.args.get("teacher_id", type=int)
+        label = "all-teachers"
+        if teacher_id is not None:
+            teacher = Teacher.query.filter_by(id=teacher_id, organization_id=org_id).first()
+            if not teacher:
+                return jsonify({"error": "Teacher not found"}), 404
+            label = _safe_filename_part(teacher.teacher_code or teacher.name)
+
+        pdf_buffer = export_teacher_timetable(
+            timetable_id,
+            organization_id=org_id,
+            school_name=timetable.school_name or "School",
+            teacher_id=teacher_id,
+        )
+
         return pdf_buffer.getvalue(), 200, {
-            "Content-Disposition": f'attachment; filename="timetable_teacher_{timetable_id}.pdf"',
-            "Content-Type": "application/pdf"
+            "Content-Disposition": f'attachment; filename="timetable_{label}.pdf"',
+            "Content-Type": "application/pdf",
         }
     except Exception as e:
         return jsonify({"error": str(e)}), 500

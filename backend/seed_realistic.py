@@ -472,6 +472,7 @@ def seed_database():
             teacher = Teacher(
                 organization_id=org_id,
                 user_id=teacher_user.id,
+                teacher_code=f"TCHR{str(teacher_count + 1).zfill(4)}",
                 name=name,
                 email=email,
                 subject_ids=subject_ids,

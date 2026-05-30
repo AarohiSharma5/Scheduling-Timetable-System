@@ -113,6 +113,7 @@ class Teacher(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, unique=True)
+    teacher_code = db.Column(db.String(50), index=True)  # Human-readable employee id, e.g. "TCHR0001"
     name = db.Column(db.String(120), nullable=False)
     email = db.Column(db.String(120), nullable=False)
     subject_ids = db.Column(db.JSON, default=list)  # Subjects they teach
@@ -128,6 +129,7 @@ class Teacher(db.Model):
         return {
             "id": self.id,
             "user_id": self.user_id,
+            "teacher_code": self.teacher_code,
             "name": self.name,
             "email": self.email,
             "subject_ids": self.subject_ids or [],

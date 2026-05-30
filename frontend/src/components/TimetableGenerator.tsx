@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 
 interface GenerationStatus {
@@ -6,13 +6,86 @@ interface GenerationStatus {
   message: string;
 }
 
+interface TimetableSummary {
+  id: number;
+  name: string;
+  status?: string;
+}
+
+interface BatchSummary {
+  id: number;
+  grade: string;
+  section: string;
+  student_count?: number;
+  display_name?: string;
+}
+
+interface TeacherSummary {
+  id: number;
+  name: string;
+  teacher_code?: string | null;
+}
+
+type ExportMode = "batch" | "teacher";
+
 export default function TimetableGenerator() {
   const [status, setStatus] = useState<GenerationStatus>({ status: "idle", message: "" });
 
+  const [timetables, setTimetables] = useState<TimetableSummary[]>([]);
+  const [batches, setBatches] = useState<BatchSummary[]>([]);
+  const [teachers, setTeachers] = useState<TeacherSummary[]>([]);
+  const [subjectCount, setSubjectCount] = useState<number>(0);
+
+  const [selectedTimetable, setSelectedTimetable] = useState<number | "">("");
+  const [exportMode, setExportMode] = useState<ExportMode>("batch");
+  // "all" or a specific batch/teacher id (as string for the <select>).
+  const [selectedTarget, setSelectedTarget] = useState<string>("all");
+
+  const loadData = async () => {
+    try {
+      const [ttRes, batchRes, teacherRes, subjectRes] = await Promise.allSettled([
+        api.timetable.list(),
+        api.admin.batches.list(),
+        api.admin.teachers.list(),
+        api.admin.subjects.list(),
+      ]);
+
+      if (ttRes.status === "fulfilled") {
+        // /timetable/list returns { timetables: [...] }; tolerate a bare array too.
+        const raw: any = ttRes.value;
+        const list: TimetableSummary[] = Array.isArray(raw) ? raw : raw?.timetables || [];
+        setTimetables(list);
+        if (list.length && selectedTimetable === "") {
+          setSelectedTimetable(list[0].id);
+        }
+      }
+      if (batchRes.status === "fulfilled") setBatches(batchRes.value || []);
+      if (teacherRes.status === "fulfilled") setTeachers(teacherRes.value || []);
+      if (subjectRes.status === "fulfilled") setSubjectCount((subjectRes.value || []).length);
+    } catch {
+      /* lists are best-effort; UI still works with empty selectors */
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Reset the target when switching between class/teacher mode.
+  useEffect(() => {
+    setSelectedTarget("all");
+  }, [exportMode]);
+
+  const studentTotal = useMemo(
+    () => batches.reduce((sum, b) => sum + (b.student_count || 0), 0),
+    [batches]
+  );
+
   const generateTimetable = async () => {
     try {
-      setStatus({ status: "loading", message: "🔄 Generating timetable..." });
-      
+      setStatus({ status: "loading", message: "Generating timetable..." });
+
       const response = await api.post("/timetable/generate", {
         name: `Timetable ${new Date().toLocaleString()}`,
         description: "Auto-generated",
@@ -21,141 +94,194 @@ export default function TimetableGenerator() {
       if (response.data.success) {
         setStatus({
           status: "success",
-          message: `✅ Timetable generated successfully! (${response.data.slots_generated} periods created)`,
+          message: `Timetable generated successfully! (${response.data.slots_generated} periods created)`,
         });
+        await loadData();
       } else {
-        setStatus({
-          status: "error",
-          message: `❌ Error: ${response.data.message}`,
-        });
+        setStatus({ status: "error", message: `Error: ${response.data.message}` });
       }
     } catch (error: any) {
       setStatus({
         status: "error",
-        message: `❌ Error: ${error.response?.data?.message || error.message}`,
+        message: `Error: ${error.response?.data?.message || error.message}`,
       });
     }
   };
 
-  const exportTimetable = async (type: "batch" | "teacher", id: number) => {
+  const handleExport = async () => {
+    if (selectedTimetable === "") {
+      setStatus({ status: "error", message: "Please generate or select a timetable first." });
+      return;
+    }
     try {
-      setStatus({ status: "loading", message: `📥 Downloading ${type} timetable...` });
-      
-      const endpoint = type === "batch" 
-        ? `/export/timetable/batch/${id}`
-        : `/export/timetable/teacher/${id}`;
+      const targetLabel =
+        selectedTarget === "all"
+          ? exportMode === "batch"
+            ? "all classes"
+            : "all teachers"
+          : exportMode === "batch"
+          ? batches.find((b) => String(b.id) === selectedTarget)?.display_name || "class"
+          : teachers.find((t) => String(t.id) === selectedTarget)?.name || "teacher";
 
-      const response = await api.get(endpoint, { responseType: "blob" });
-      
-      const url = window.URL.createObjectURL(new Blob([response.data]));
+      setStatus({ status: "loading", message: `Downloading timetable for ${targetLabel}...` });
+
+      const base = `/export/timetable/${exportMode}/${selectedTimetable}`;
+      const query =
+        selectedTarget === "all"
+          ? ""
+          : exportMode === "batch"
+          ? `?batch_id=${selectedTarget}`
+          : `?teacher_id=${selectedTarget}`;
+
+      const response = await api.get(base + query, { responseType: "blob" });
+
+      const url = window.URL.createObjectURL(new Blob([response.data], { type: "application/pdf" }));
       const link = document.createElement("a");
       link.href = url;
-      link.setAttribute("download", `${type}_${id}_timetable.pdf`);
+      const fileTarget = selectedTarget === "all" ? `all-${exportMode}s` : `${exportMode}-${selectedTarget}`;
+      link.setAttribute("download", `timetable_${fileTarget}.pdf`);
       document.body.appendChild(link);
       link.click();
       link.parentNode?.removeChild(link);
+      window.URL.revokeObjectURL(url);
 
-      setStatus({
-        status: "success",
-        message: `✅ ${type.charAt(0).toUpperCase() + type.slice(1)} timetable downloaded!`,
-      });
+      setStatus({ status: "success", message: `Timetable downloaded for ${targetLabel}.` });
     } catch (error: any) {
-      setStatus({
-        status: "error",
-        message: `❌ Error: ${error.response?.data?.message || error.message}`,
-      });
+      // Error bodies come back as a Blob when responseType is blob.
+      let message = error.message;
+      const blob = error.response?.data;
+      if (blob instanceof Blob) {
+        try {
+          const text = await blob.text();
+          message = JSON.parse(text).error || message;
+        } catch {
+          /* keep default */
+        }
+      }
+      setStatus({ status: "error", message: `Error: ${message}` });
     }
   };
+
+  const statusClasses =
+    status.status === "success"
+      ? "bg-green-100 text-green-800 border border-green-300"
+      : status.status === "error"
+      ? "bg-red-100 text-red-800 border border-red-300"
+      : "bg-blue-100 text-blue-800 border border-blue-300";
 
   return (
     <div className="space-y-6">
       {/* Generate Timetable Section */}
       <div className="bg-gradient-to-r from-blue-50 to-blue-100 rounded-lg p-6 border-2 border-blue-200">
-        <h2 className="text-2xl font-bold text-blue-900 mb-2">⏱️ Generate Timetable</h2>
+        <h2 className="text-2xl font-bold text-blue-900 mb-2">Generate Timetable</h2>
         <p className="text-blue-700 mb-4">Create an automated timetable for all classes and teachers</p>
-        
+
         <button
           onClick={generateTimetable}
           disabled={status.status === "loading"}
           className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-bold py-3 px-6 rounded-lg transition duration-200 flex items-center justify-center gap-2"
         >
-          {status.status === "loading" ? (
-            <>
-              <span className="animate-spin">⏳</span>
-              Generating...
-            </>
-          ) : (
-            <>
-              📊 Generate Timetable
-            </>
-          )}
+          {status.status === "loading" ? "Working..." : "Generate Timetable"}
         </button>
 
         {status.message && (
-          <div
-            className={`mt-4 p-3 rounded text-sm font-medium ${
-              status.status === "success"
-                ? "bg-green-100 text-green-800 border border-green-300"
-                : status.status === "error"
-                ? "bg-red-100 text-red-800 border border-red-300"
-                : "bg-blue-100 text-blue-800 border border-blue-300"
-            }`}
-          >
-            {status.message}
-          </div>
+          <div className={`mt-4 p-3 rounded text-sm font-medium ${statusClasses}`}>{status.message}</div>
         )}
       </div>
 
       {/* Export Timetables Section */}
       <div className="bg-gradient-to-r from-purple-50 to-purple-100 rounded-lg p-6 border-2 border-purple-200">
-        <h2 className="text-2xl font-bold text-purple-900 mb-2">📥 Download Timetables</h2>
-        <p className="text-purple-700 mb-4">Export timetables as PDF for classes and individual teachers</p>
+        <h2 className="text-2xl font-bold text-purple-900 mb-2">Download Timetable</h2>
+        <p className="text-purple-700 mb-4">
+          Choose a timetable, then download it class-wise or teacher-wise — for everyone or a specific
+          class/teacher.
+        </p>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Class Timetable Export */}
-          <div className="bg-white p-4 rounded-lg border border-purple-200">
-            <h3 className="font-semibold text-purple-900 mb-3">📚 Class Timetable</h3>
-            <button
-              onClick={() => exportTimetable("batch", 1)}
-              className="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold py-2 px-4 rounded transition"
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Timetable selector */}
+          <div>
+            <label className="block text-sm font-semibold text-purple-900 mb-1">Timetable</label>
+            <select
+              value={selectedTimetable}
+              onChange={(e) => setSelectedTimetable(e.target.value ? Number(e.target.value) : "")}
+              className="w-full border border-purple-300 rounded px-3 py-2 bg-white"
             >
-              📄 Download Class 1A PDF
-            </button>
-            <p className="text-xs text-gray-600 mt-2">Exports complete timetable for a class with all students</p>
+              {timetables.length === 0 && <option value="">No timetables yet</option>}
+              {timetables.map((tt) => (
+                <option key={tt.id} value={tt.id}>
+                  {tt.name}
+                  {tt.status ? ` (${tt.status})` : ""}
+                </option>
+              ))}
+            </select>
           </div>
 
-          {/* Teacher Timetable Export */}
-          <div className="bg-white p-4 rounded-lg border border-purple-200">
-            <h3 className="font-semibold text-purple-900 mb-3">👨‍🏫 Teacher Timetable</h3>
-            <button
-              onClick={() => exportTimetable("teacher", 1)}
-              className="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold py-2 px-4 rounded transition"
+          {/* Mode selector */}
+          <div>
+            <label className="block text-sm font-semibold text-purple-900 mb-1">Download by</label>
+            <select
+              value={exportMode}
+              onChange={(e) => setExportMode(e.target.value as ExportMode)}
+              className="w-full border border-purple-300 rounded px-3 py-2 bg-white"
             >
-              📄 Download Teacher 1 PDF
-            </button>
-            <p className="text-xs text-gray-600 mt-2">Exports schedule for an individual teacher</p>
+              <option value="batch">Class-wise</option>
+              <option value="teacher">Teacher-wise</option>
+            </select>
+          </div>
+
+          {/* Target selector */}
+          <div>
+            <label className="block text-sm font-semibold text-purple-900 mb-1">
+              {exportMode === "batch" ? "Class" : "Teacher"}
+            </label>
+            <select
+              value={selectedTarget}
+              onChange={(e) => setSelectedTarget(e.target.value)}
+              className="w-full border border-purple-300 rounded px-3 py-2 bg-white"
+            >
+              <option value="all">{exportMode === "batch" ? "All classes" : "All teachers"}</option>
+              {exportMode === "batch"
+                ? batches.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.display_name || `Grade ${b.grade} - ${b.section}`}
+                    </option>
+                  ))
+                : teachers.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.teacher_code ? `${t.teacher_code} — ${t.name}` : t.name}
+                    </option>
+                  ))}
+            </select>
           </div>
         </div>
+
+        <button
+          onClick={handleExport}
+          disabled={status.status === "loading" || selectedTimetable === ""}
+          className="mt-4 w-full bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white font-semibold py-2.5 px-4 rounded transition"
+        >
+          Download PDF
+        </button>
       </div>
 
       {/* Statistics */}
       <div className="bg-white rounded-lg p-6 border border-gray-200 shadow-sm">
-        <h2 className="text-xl font-bold text-gray-900 mb-4">📊 Timetable Statistics</h2>
+        <h2 className="text-xl font-bold text-gray-900 mb-4">Timetable Statistics</h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-lg">
-            <p className="text-2xl font-bold text-blue-600">73</p>
+            <p className="text-2xl font-bold text-blue-600">{batches.length}</p>
             <p className="text-sm text-gray-600">Classes</p>
           </div>
           <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-4 rounded-lg">
-            <p className="text-2xl font-bold text-purple-600">75</p>
+            <p className="text-2xl font-bold text-purple-600">{teachers.length}</p>
             <p className="text-sm text-gray-600">Teachers</p>
           </div>
           <div className="bg-gradient-to-br from-green-50 to-green-100 p-4 rounded-lg">
-            <p className="text-2xl font-bold text-green-600">2,800+</p>
+            <p className="text-2xl font-bold text-green-600">{studentTotal.toLocaleString()}</p>
             <p className="text-sm text-gray-600">Students</p>
           </div>
           <div className="bg-gradient-to-br from-orange-50 to-orange-100 p-4 rounded-lg">
-            <p className="text-2xl font-bold text-orange-600">20+</p>
+            <p className="text-2xl font-bold text-orange-600">{subjectCount}</p>
             <p className="text-sm text-gray-600">Subjects</p>
           </div>
         </div>
@@ -163,12 +289,11 @@ export default function TimetableGenerator() {
 
       {/* Help Section */}
       <div className="bg-gradient-to-r from-amber-50 to-amber-100 rounded-lg p-6 border-2 border-amber-200">
-        <h3 className="font-bold text-amber-900 mb-2">💡 How to Use</h3>
+        <h3 className="font-bold text-amber-900 mb-2">How to Use</h3>
         <ol className="text-sm text-amber-800 space-y-1 list-decimal list-inside">
           <li>Click "Generate Timetable" to create an automated schedule</li>
-          <li>Download PDF timetables for classes or individual teachers</li>
-          <li>PDFs are ready to print and distribute to stakeholders</li>
-          <li>Use for academic planning and resource allocation</li>
+          <li>Pick a timetable, choose class-wise or teacher-wise, and select a specific class/teacher or all</li>
+          <li>Click "Download PDF" — it is ready to print and distribute</li>
         </ol>
       </div>
     </div>
