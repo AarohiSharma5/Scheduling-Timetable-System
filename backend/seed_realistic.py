@@ -179,6 +179,7 @@ def seed_database():
         print("⚙️  Setting up school configuration...")
         school_config = SchoolConfig(
             id=1,
+            organization_id=org_id,
             start_time="08:00",
             end_time="15:00",
             lunch_start="12:00",
@@ -231,6 +232,7 @@ def seed_database():
         for grade, grade_data in CLASS_DISTRIBUTION.items():
             for section in grade_data["sections"]:
                 batch = Batch(
+                    organization_id=org_id,
                     grade=grade,
                     section=section,
                     student_count=grade_data["count"] // len(grade_data["sections"])
@@ -258,6 +260,7 @@ def seed_database():
             for grade in applicable_classes:
                 applicable_batches.extend(grade_to_batches.get(grade, []))
             subject = Subject(
+                organization_id=org_id,
                 name=name,
                 periods_per_week=periods,
                 batch_ids=[b.id for b in applicable_batches],
@@ -467,6 +470,7 @@ def seed_database():
                     assigned_batch_ids.append(batch.id)
             
             teacher = Teacher(
+                organization_id=org_id,
                 user_id=teacher_user.id,
                 name=name,
                 email=email,
@@ -557,6 +561,7 @@ def seed_database():
                     admission_counter += 1
                     
                     student = Student(
+                        organization_id=org_id,
                         student_id=student_id,
                         admission_no=admission_no,
                         first_name=first_name,

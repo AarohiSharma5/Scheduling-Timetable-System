@@ -10,7 +10,7 @@ Endpoints organized by module:
 - /api/principal/* - Principal dashboard
 """
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, abort
 from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification, Organization
 from datetime import datetime, timedelta
 from functools import wraps
@@ -28,6 +28,25 @@ from jwt_utils import (
 import os
 
 api = Blueprint("api", __name__, url_prefix="/api")
+
+
+def current_org_id():
+    """Organization id from the authenticated user's JWT.
+
+    Populated by the token_required / role_required decorators. Every
+    tenant-facing query must filter on this so one organization can never see
+    or mutate another's data.
+    """
+    user = getattr(request, "user", None)
+    return user.get("organization_id") if user else None
+
+
+def owned_or_404(model, obj_id):
+    """Fetch a record by id but only if it belongs to the caller's org."""
+    obj = model.query.filter_by(id=obj_id, organization_id=current_org_id()).first()
+    if obj is None:
+        abort(404)
+    return obj
 
 # ============================================================================
 # HEALTH CHECK
@@ -221,10 +240,12 @@ def format_timetable_as_plan(timetable):
     periods_per_day = config.periods_per_day
     days_per_week = config.working_days
 
-    # Lookups (avoids a DB query per slot when building grids).
-    all_teachers = Teacher.query.all()
-    all_subjects = Subject.query.all()
-    all_batches = Batch.query.all()
+    # Lookups (avoids a DB query per slot when building grids), scoped to the
+    # timetable's own organization.
+    org_id = timetable.organization_id
+    all_teachers = Teacher.query.filter_by(organization_id=org_id).all()
+    all_subjects = Subject.query.filter_by(organization_id=org_id).all()
+    all_batches = Batch.query.filter_by(organization_id=org_id).all()
     teacher_by_id = {t.id: t for t in all_teachers}
     subject_by_id = {s.id: s for s in all_subjects}
     batch_by_id = {b.id: b for b in all_batches}
@@ -337,15 +358,24 @@ def format_timetable_as_plan(timetable):
 
 
 @api.route("/plans", methods=["GET"])
+@token_required
 def get_plans():
-    """Get all published plans/timetables"""
+    """Get the caller organization's published plans/timetables"""
     try:
-        # Get published timetables
-        timetables = Timetable.query.filter_by(status="published").all()
+        org_id = current_org_id()
+        # Get published timetables for this org
+        timetables = Timetable.query.filter_by(
+            organization_id=org_id, status="published"
+        ).all()
         
         if not timetables:
-            # Fall back to any timetable if none published
-            timetables = Timetable.query.limit(1).all()
+            # Fall back to the org's most recent timetable if none published
+            timetables = (
+                Timetable.query.filter_by(organization_id=org_id)
+                .order_by(Timetable.generated_at.desc())
+                .limit(1)
+                .all()
+            )
         
         plans = [format_timetable_as_plan(t) for t in timetables]
         return jsonify(plans), 200
@@ -354,10 +384,13 @@ def get_plans():
 
 
 @api.route("/plans/<int:timetable_id>", methods=["GET"])
+@token_required
 def get_plan(timetable_id):
-    """Get a specific plan/timetable"""
+    """Get a specific plan/timetable owned by the caller's org"""
     try:
-        timetable = Timetable.query.get(timetable_id)
+        timetable = Timetable.query.filter_by(
+            id=timetable_id, organization_id=current_org_id()
+        ).first()
         if not timetable:
             return jsonify({"error": "Plan not found"}), 404
         
@@ -376,14 +409,15 @@ def get_plan(timetable_id):
 def get_timetable_analytics(timetable_id):
     """Get comprehensive timetable analytics"""
     try:
-        timetable = Timetable.query.get(timetable_id)
+        org_id = current_org_id()
+        timetable = Timetable.query.filter_by(id=timetable_id, organization_id=org_id).first()
         if not timetable:
             return jsonify({"error": "Timetable not found"}), 404
 
-        teachers = Teacher.query.all()
-        batches = Batch.query.all()
-        subjects = Subject.query.all()
-        config = SchoolConfig.query.first() or SchoolConfig()
+        teachers = Teacher.query.filter_by(organization_id=org_id).all()
+        batches = Batch.query.filter_by(organization_id=org_id).all()
+        subjects = Subject.query.filter_by(organization_id=org_id).all()
+        config = SchoolConfig.query.filter_by(organization_id=org_id).first() or SchoolConfig()
 
         # Get all slots for this timetable
         slots = TimetableSlot.query.filter_by(timetable_id=timetable_id).all()
@@ -509,8 +543,8 @@ def get_timetable_analytics(timetable_id):
 @api.route("/admin/school-config", methods=["GET"])
 @role_required("admin", "principal")
 def get_school_config():
-    """Get current school configuration"""
-    config = SchoolConfig.query.first() or SchoolConfig()
+    """Get the caller organization's school configuration"""
+    config = SchoolConfig.query.filter_by(organization_id=current_org_id()).first() or SchoolConfig()
     return jsonify(config.to_dict()), 200
 
 
@@ -519,8 +553,37 @@ def get_school_config():
 def update_school_config():
     """Update school configuration"""
     try:
-        data = request.get_json()
-        config = SchoolConfig.query.first() or SchoolConfig(id=1)
+        data = request.get_json() or {}
+
+        # Validate before persisting so we never store a config that later
+        # crashes the scheduler (bad time strings, zero period_duration, etc.).
+        from datetime import time as _time
+
+        def _valid_time(v):
+            try:
+                _time.fromisoformat(str(v))
+                return True
+            except (ValueError, TypeError):
+                return False
+
+        errors = []
+        for field in ("start_time", "end_time", "lunch_start", "lunch_end"):
+            if field in data and not _valid_time(data[field]):
+                errors.append(f"{field} must be a valid HH:MM time")
+        for field in ("period_duration", "periods_per_day", "working_days"):
+            if field in data:
+                val = data[field]
+                if not isinstance(val, int) or val <= 0:
+                    errors.append(f"{field} must be a positive integer")
+        if "working_days" in data and isinstance(data["working_days"], int) and data["working_days"] > 7:
+            errors.append("working_days cannot exceed 7")
+        if errors:
+            return jsonify({"error": "Invalid configuration", "details": errors}), 400
+
+        org_id = current_org_id()
+        config = SchoolConfig.query.filter_by(organization_id=org_id).first()
+        if not config:
+            config = SchoolConfig(organization_id=org_id)
         
         if "start_time" in data: config.start_time = data["start_time"]
         if "end_time" in data: config.end_time = data["end_time"]
@@ -546,8 +609,8 @@ def update_school_config():
 @api.route("/admin/teachers", methods=["GET"])
 @role_required("admin", "principal")
 def get_teachers():
-    """List all teachers"""
-    teachers = Teacher.query.all()
+    """List all teachers in the caller's organization"""
+    teachers = Teacher.query.filter_by(organization_id=current_org_id()).all()
     return jsonify([t.to_dict() for t in teachers]), 200
 
 
@@ -556,24 +619,36 @@ def get_teachers():
 def create_teacher():
     """Create a new teacher"""
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
+        org_id = current_org_id()
         
         # Validate required fields
         if not data.get("name") or not data.get("email"):
             return jsonify({"error": "Name and email are required"}), 400
-        
+
+        email = data.get("email")
+        if User.query.filter_by(email=email).first():
+            return jsonify({"error": "A user with this email already exists"}), 409
+
+        # Use the provided password, or fall back to a sane default the admin
+        # can communicate to the teacher. Either way it is *hashed*, never the
+        # old literal "hashed_password_here" placeholder.
+        raw_password = data.get("password") or "changeme123"
+
         # Create user first
         user = User(
             name=data.get("name"),
-            email=data.get("email"),
+            email=email,
             role="teacher",
-            password_hash="hashed_password_here",  # TODO: Hash actual password
+            organization_id=org_id,
+            password_hash=generate_password_hash(raw_password),
         )
         db.session.add(user)
         db.session.commit()
         
         # Create teacher record
         teacher = Teacher(
+            organization_id=org_id,
             user_id=user.id,
             name=data.get("name"),
             email=data.get("email"),
@@ -598,7 +673,7 @@ def create_teacher():
 @role_required("admin", "principal")
 def get_teacher(teacher_id):
     """Get a specific teacher"""
-    teacher = Teacher.query.get_or_404(teacher_id)
+    teacher = owned_or_404(Teacher, teacher_id)
     return jsonify(teacher.to_dict()), 200
 
 
@@ -607,8 +682,8 @@ def get_teacher(teacher_id):
 def update_teacher(teacher_id):
     """Update a teacher"""
     try:
-        teacher = Teacher.query.get_or_404(teacher_id)
-        data = request.get_json()
+        teacher = owned_or_404(Teacher, teacher_id)
+        data = request.get_json() or {}
         
         if "name" in data: teacher.name = data["name"]
         if "subject_ids" in data: teacher.subject_ids = data["subject_ids"]
@@ -631,7 +706,7 @@ def update_teacher(teacher_id):
 def delete_teacher(teacher_id):
     """Delete a teacher"""
     try:
-        teacher = Teacher.query.get_or_404(teacher_id)
+        teacher = owned_or_404(Teacher, teacher_id)
         user = User.query.get(teacher.user_id)
         
         db.session.delete(teacher)
@@ -667,8 +742,9 @@ def get_students():
         # Import Student model
         from models import Student
         
-        # Query students by class and section
+        # Query students by class and section, scoped to the caller's org
         students = Student.query.filter_by(
+            organization_id=current_org_id(),
             class_grade=class_grade,
             section=section
         ).all()
@@ -698,8 +774,8 @@ def get_students():
 @api.route("/admin/batches", methods=["GET"])
 @role_required("admin", "principal")
 def get_batches():
-    """List all batches"""
-    batches = Batch.query.all()
+    """List all batches in the caller's organization"""
+    batches = Batch.query.filter_by(organization_id=current_org_id()).all()
     return jsonify([b.to_dict() for b in batches]), 200
 
 
@@ -708,8 +784,9 @@ def get_batches():
 def create_batch():
     """Create a new batch"""
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
         batch = Batch(
+            organization_id=current_org_id(),
             grade=data.get("grade"),
             section=data.get("section"),
             student_count=data.get("student_count", 0),
@@ -727,7 +804,7 @@ def create_batch():
 @role_required("admin", "principal")
 def get_batch(batch_id):
     """Get a specific batch"""
-    batch = Batch.query.get_or_404(batch_id)
+    batch = owned_or_404(Batch, batch_id)
     return jsonify(batch.to_dict()), 200
 
 
@@ -736,8 +813,8 @@ def get_batch(batch_id):
 def update_batch(batch_id):
     """Update a batch"""
     try:
-        batch = Batch.query.get_or_404(batch_id)
-        data = request.get_json()
+        batch = owned_or_404(Batch, batch_id)
+        data = request.get_json() or {}
         
         if "grade" in data: batch.grade = data["grade"]
         if "section" in data: batch.section = data["section"]
@@ -757,7 +834,7 @@ def update_batch(batch_id):
 def delete_batch(batch_id):
     """Delete a batch"""
     try:
-        batch = Batch.query.get_or_404(batch_id)
+        batch = owned_or_404(Batch, batch_id)
         db.session.delete(batch)
         db.session.commit()
         return jsonify({"message": "Batch deleted"}), 200
@@ -773,8 +850,8 @@ def delete_batch(batch_id):
 @api.route("/admin/subjects", methods=["GET"])
 @role_required("admin", "principal")
 def get_subjects():
-    """List all subjects"""
-    subjects = Subject.query.all()
+    """List all subjects in the caller's organization"""
+    subjects = Subject.query.filter_by(organization_id=current_org_id()).all()
     return jsonify([s.to_dict() for s in subjects]), 200
 
 
@@ -783,8 +860,9 @@ def get_subjects():
 def create_subject():
     """Create a new subject"""
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
         subject = Subject(
+            organization_id=current_org_id(),
             name=data.get("name"),
             periods_per_week=data.get("periods_per_week"),
             batch_ids=data.get("batch_ids", []),
@@ -801,7 +879,7 @@ def create_subject():
 @role_required("admin", "principal")
 def get_subject(subject_id):
     """Get a specific subject"""
-    subject = Subject.query.get_or_404(subject_id)
+    subject = owned_or_404(Subject, subject_id)
     return jsonify(subject.to_dict()), 200
 
 
@@ -810,8 +888,8 @@ def get_subject(subject_id):
 def update_subject(subject_id):
     """Update a subject"""
     try:
-        subject = Subject.query.get_or_404(subject_id)
-        data = request.get_json()
+        subject = owned_or_404(Subject, subject_id)
+        data = request.get_json() or {}
         
         if "name" in data: subject.name = data["name"]
         if "periods_per_week" in data: subject.periods_per_week = data["periods_per_week"]
@@ -830,7 +908,7 @@ def update_subject(subject_id):
 def delete_subject(subject_id):
     """Delete a subject"""
     try:
-        subject = Subject.query.get_or_404(subject_id)
+        subject = owned_or_404(Subject, subject_id)
         db.session.delete(subject)
         db.session.commit()
         return jsonify({"message": "Subject deleted"}), 200
@@ -852,8 +930,12 @@ def delete_subject(subject_id):
 @api.route("/timetable", methods=["GET"])
 @role_required("admin", "principal", "teacher", "student")
 def get_timetables():
-    """List all timetables"""
-    timetables = Timetable.query.order_by(Timetable.generated_at.desc()).all()
+    """List timetables in the caller's organization"""
+    timetables = (
+        Timetable.query.filter_by(organization_id=current_org_id())
+        .order_by(Timetable.generated_at.desc())
+        .all()
+    )
     return jsonify([t.to_dict() for t in timetables]), 200
 
 
@@ -861,7 +943,7 @@ def get_timetables():
 @role_required("admin", "principal", "teacher", "student")
 def get_timetable(timetable_id):
     """Get a specific timetable with all slots"""
-    timetable = Timetable.query.get_or_404(timetable_id)
+    timetable = owned_or_404(Timetable, timetable_id)
     return jsonify(timetable.to_dict(include_slots=True)), 200
 
 
@@ -870,7 +952,7 @@ def get_timetable(timetable_id):
 def publish_timetable(timetable_id):
     """Publish a timetable"""
     try:
-        timetable = Timetable.query.get_or_404(timetable_id)
+        timetable = owned_or_404(Timetable, timetable_id)
         timetable.status = "published"
         timetable.published_at = datetime.utcnow()
         db.session.commit()
@@ -895,8 +977,8 @@ def get_teacher_timetable():
     if not teacher_id or not timetable_id:
         return jsonify({"error": "teacher_id and timetable_id required"}), 400
     
-    teacher = Teacher.query.get_or_404(teacher_id)
-    timetable = Timetable.query.get_or_404(timetable_id)
+    teacher = owned_or_404(Teacher, teacher_id)
+    timetable = owned_or_404(Timetable, timetable_id)
     
     # Get slots for this teacher
     slots = TimetableSlot.query.filter_by(
@@ -927,8 +1009,8 @@ def get_student_timetable():
     if not batch_id or not timetable_id:
         return jsonify({"error": "batch_id and timetable_id required"}), 400
     
-    batch = Batch.query.get_or_404(batch_id)
-    timetable = Timetable.query.get_or_404(timetable_id)
+    batch = owned_or_404(Batch, batch_id)
+    timetable = owned_or_404(Timetable, timetable_id)
     
     # Get slots for this batch
     slots = TimetableSlot.query.filter_by(
@@ -954,8 +1036,9 @@ def get_principal_dashboard():
     timetable_id = request.args.get("timetable_id")
     
     try:
-        teachers = Teacher.query.all()
-        batches = Batch.query.all()
+        org_id = current_org_id()
+        teachers = Teacher.query.filter_by(organization_id=org_id).all()
+        batches = Batch.query.filter_by(organization_id=org_id).all()
         
         teacher_workload = {}
         for teacher in teachers:
@@ -978,11 +1061,15 @@ def get_principal_dashboard():
                     "has_duties": teacher.has_duties,
                 }
         
+        dash_tt = (
+            Timetable.query.filter_by(id=timetable_id, organization_id=org_id).first()
+            if timetable_id else None
+        )
         return jsonify({
             "teachers": [t.to_dict() for t in teachers],
             "batches": [b.to_dict() for b in batches],
             "teacher_workload": teacher_workload,
-            "timetable": Timetable.query.get(timetable_id).to_dict() if timetable_id else None,
+            "timetable": dash_tt.to_dict() if dash_tt else None,
         }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1034,7 +1121,7 @@ def export_batch_timetable(timetable_id):
     try:
         from pdf_utils import export_batch_timetable
         
-        timetable = Timetable.query.get(timetable_id)
+        timetable = Timetable.query.filter_by(id=timetable_id, organization_id=current_org_id()).first()
         if not timetable:
             return jsonify({"error": "Timetable not found"}), 404
         
@@ -1056,7 +1143,7 @@ def export_teacher_timetable(timetable_id):
     try:
         from pdf_utils import export_teacher_timetable
         
-        timetable = Timetable.query.get(timetable_id)
+        timetable = Timetable.query.filter_by(id=timetable_id, organization_id=current_org_id()).first()
         if not timetable:
             return jsonify({"error": "Timetable not found"}), 404
         
@@ -1119,7 +1206,7 @@ def get_leaves():
         user_id = request.user.get("user_id")
         user = User.query.get(user_id)
         
-        filters = {}
+        filters = {"organization_id": current_org_id()}
         
         # Students only see their own teacher's leaves
         if user.role == "teacher":

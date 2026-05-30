@@ -64,8 +64,9 @@ class SchedulingEngine:
     6. Generate report of conflicts/warnings
     """
     
-    def __init__(self, app=None):
+    def __init__(self, app=None, organization_id=None):
         self.app = app
+        self.organization_id = organization_id
         self.timetable = {}  # {Period -> (teacher_id, subject_id, batch_id)}
         self.teacher_load = {}  # {teacher_id -> periods_used}
         self.batch_schedule = {}  # {batch_id -> {subject_id -> periods_assigned}}
@@ -78,15 +79,25 @@ class SchedulingEngine:
         Returns: (success, warnings/errors)
         """
         try:
-            # Step 1: Load configuration
-            config = SchoolConfig.query.first()
+            org_id = self.organization_id
+
+            # Step 1: Load configuration (scoped to this organization)
+            config_q = SchoolConfig.query
+            if org_id is not None:
+                config_q = config_q.filter_by(organization_id=org_id)
+            config = config_q.first()
             if not config:
                 return False, ["School configuration not found"]
             
-            # Step 2: Get all entities
-            teachers = Teacher.query.all()
-            batches = Batch.query.all()
-            subjects = Subject.query.all()
+            # Step 2: Get all entities, scoped to this organization
+            teacher_q, batch_q, subject_q = Teacher.query, Batch.query, Subject.query
+            if org_id is not None:
+                teacher_q = teacher_q.filter_by(organization_id=org_id)
+                batch_q = batch_q.filter_by(organization_id=org_id)
+                subject_q = subject_q.filter_by(organization_id=org_id)
+            teachers = teacher_q.all()
+            batches = batch_q.all()
+            subjects = subject_q.all()
             
             if not teachers or not batches or not subjects:
                 return False, ["Missing teachers, batches, or subjects"]
@@ -163,8 +174,17 @@ class SchedulingEngine:
             time.fromisoformat(config.end_time)
             time.fromisoformat(config.lunch_start)
             time.fromisoformat(config.lunch_end)
-        except ValueError:
+        except (ValueError, TypeError):
             errors.append("Invalid school configuration times")
+
+        # Fatal: zero/negative structural values would divide-by-zero or
+        # produce an empty grid further down.
+        if not config.period_duration or config.period_duration <= 0:
+            errors.append("School configuration period_duration must be greater than 0")
+        if not config.periods_per_day or config.periods_per_day <= 0:
+            errors.append("School configuration periods_per_day must be greater than 0")
+        if not config.working_days or config.working_days <= 0:
+            errors.append("School configuration working_days must be greater than 0")
 
         return errors
     
@@ -380,6 +400,7 @@ class SchedulingEngine:
         if not timetable:
             timetable = Timetable(
                 id=timetable_id,
+                organization_id=self.organization_id,
                 name=f"Generated Timetable {timetable_id}",
                 status="draft",
                 warnings=self.conflicts + self.warnings
@@ -388,11 +409,15 @@ class SchedulingEngine:
         else:
             # Clear existing slots
             TimetableSlot.query.filter_by(timetable_id=timetable_id).delete()
+            # Keep the org tag in sync (e.g. timetable row pre-created elsewhere).
+            if self.organization_id is not None:
+                timetable.organization_id = self.organization_id
             timetable.warnings = self.conflicts + self.warnings
         
         # Save slots (timetable is keyed by (Period, batch_id)).
         for (slot, _batch_id), (teacher_id, subject_id, batch_id) in self.timetable.items():
             timetable_slot = TimetableSlot(
+                organization_id=self.organization_id,
                 timetable_id=timetable_id,
                 day=slot.day,
                 period_number=slot.period_num,

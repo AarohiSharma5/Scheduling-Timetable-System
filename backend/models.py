@@ -64,6 +64,7 @@ class User(db.Model):
 class Batch(db.Model):
     __tablename__ = "batches"
     id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
     grade = db.Column(db.String(20), nullable=False)  # e.g., "Grade 9", "10", "XII"
     section = db.Column(db.String(10), nullable=False)  # e.g., "A", "B", "C"
     student_count = db.Column(db.Integer, default=0)
@@ -88,6 +89,7 @@ class Batch(db.Model):
 class Subject(db.Model):
     __tablename__ = "subjects"
     id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
     name = db.Column(db.String(120), nullable=False)
     periods_per_week = db.Column(db.Integer, nullable=False)  # How many periods per week
     batch_ids = db.Column(db.JSON, default=list)  # Which batches need this subject
@@ -109,6 +111,7 @@ class Subject(db.Model):
 class Teacher(db.Model):
     __tablename__ = "teachers"
     id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, unique=True)
     name = db.Column(db.String(120), nullable=False)
     email = db.Column(db.String(120), nullable=False)
@@ -141,7 +144,8 @@ class Teacher(db.Model):
 # ============================================================================
 class SchoolConfig(db.Model):
     __tablename__ = "school_config"
-    id = db.Column(db.Integer, primary_key=True, default=1)  # Singleton
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
     start_time = db.Column(db.String(10), default="08:00")  # HH:MM format
     end_time = db.Column(db.String(10), default="15:00")
     lunch_start = db.Column(db.String(10), default="12:00")
@@ -171,6 +175,7 @@ class SchoolConfig(db.Model):
 class TimetableSlot(db.Model):
     __tablename__ = "timetable_slots"
     id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
     timetable_id = db.Column(db.Integer, db.ForeignKey("timetables.id"), nullable=False)
     day = db.Column(db.String(20), nullable=False)  # "Monday", "Tuesday", etc.
     period_number = db.Column(db.Integer, nullable=False)  # 1, 2, 3, ...
@@ -198,6 +203,7 @@ class TimetableSlot(db.Model):
 class Timetable(db.Model):
     __tablename__ = "timetables"
     id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
     name = db.Column(db.String(255), nullable=False)
     description = db.Column(db.Text)
     status = db.Column(db.String(20), default="draft")  # 'draft', 'published', 'archived'
@@ -234,6 +240,7 @@ class Timetable(db.Model):
 class LeaveRequest(db.Model):
     __tablename__ = "leave_requests"
     id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
     teacher_id = db.Column(db.Integer, db.ForeignKey("teachers.id"), nullable=False)
     leave_date = db.Column(db.Date, nullable=False)
     reason = db.Column(db.Text, nullable=False)
@@ -320,6 +327,7 @@ class House(db.Model):
 class Student(db.Model):
     __tablename__ = "students"
     id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
     student_id = db.Column(db.String(50), unique=True, nullable=False)  # STU0001
     admission_no = db.Column(db.String(50), unique=True, nullable=False)  # ADM240001
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"))  # Link to auth User

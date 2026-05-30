@@ -30,8 +30,13 @@ class LeaveService:
             if existing:
                 return {"success": False, "error": "Leave request already pending for this date"}
             
+            # Inherit the org from the requesting teacher so the leave stays scoped.
+            teacher = Teacher.query.get(teacher_id)
+            org_id = teacher.organization_id if teacher else None
+
             # Create leave request
             leave_request = LeaveRequest(
+                organization_id=org_id,
                 teacher_id=teacher_id,
                 leave_date=leave_date,
                 reason=reason,
@@ -59,9 +64,16 @@ class LeaveService:
             if not leave_request:
                 return {"success": False, "error": "Leave request not found"}
             
-            # Check if substitute is available for that date
+            # Check if substitute is available for the specific periods we need
             if substitute_teacher_id:
-                if not LeaveService._is_substitute_available(substitute_teacher_id, leave_request.leave_date):
+                day_name = leave_request.leave_date.strftime('%A')
+                busy_periods = {
+                    s.period_number
+                    for s in TimetableSlot.query.filter_by(
+                        teacher_id=leave_request.teacher_id, day=day_name
+                    ).all()
+                }
+                if not LeaveService._is_substitute_available(substitute_teacher_id, leave_request.leave_date, busy_periods):
                     return {"success": False, "error": "Selected substitute has conflicting classes on that day"}
             else:
                 # Find best available substitute
@@ -129,20 +141,39 @@ class LeaveService:
         
         available_substitutes = []
         
+        # The periods the absent teacher must be covered for that day. A valid
+        # substitute must be free during *these* periods (not merely have an
+        # empty day).
+        day_name = leave_request.leave_date.strftime('%A')
+        busy_periods = {
+            s.period_number
+            for s in TimetableSlot.query.filter_by(
+                teacher_id=teacher.id, day=day_name
+            ).all()
+        }
+
+        # Only consider substitutes inside the same organization.
+        org_id = teacher.organization_id
+
+        seen = set()
         # Get all teachers who teach at least one of the same subjects
         for subject_id in (teacher.subject_ids or []):
             potential_subs = Teacher.query.filter(
                 Teacher.id != teacher.id,
+                Teacher.organization_id == org_id,
                 Teacher.subject_ids.contains(str(subject_id))
             ).all()
             
             for sub in potential_subs:
-                if LeaveService._is_substitute_available(sub.id, leave_request.leave_date):
-                    # Count their teaching load on that day
+                if sub.id in seen:
+                    continue
+                seen.add(sub.id)
+                if LeaveService._is_substitute_available(sub.id, leave_request.leave_date, busy_periods):
+                    # Count their teaching load on that day (prefer the freest)
                     load = TimetableSlot.query.filter_by(
                         teacher_id=sub.id
                     ).filter(
-                        TimetableSlot.day == leave_request.leave_date.strftime('%A')
+                        TimetableSlot.day == day_name
                     ).count()
                     
                     available_substitutes.append((sub, load))
@@ -155,24 +186,36 @@ class LeaveService:
         return None
     
     @staticmethod
-    def _is_substitute_available(teacher_id, date):
-        """Check if a teacher is available on a given date"""
-        # Check if teacher has any classes scheduled on that day
+    def _is_substitute_available(teacher_id, date, busy_periods=None):
+        """Check whether a teacher can cover the given periods on a date.
+
+        A substitute is available only if they are not themselves on approved
+        leave that day AND they have no class of their own during the periods
+        that need covering. The old version computed the class conflict and then
+        threw it away, which silently double-booked substitutes.
+        """
         day_name = date.strftime('%A')
-        
-        has_classes = TimetableSlot.query.filter_by(
-            teacher_id=teacher_id,
-            day=day_name
-        ).first()
-        
-        # Also check if they already have approved leave on that date
+
+        # Already on approved leave that day → unavailable.
         has_leave = LeaveRequest.query.filter_by(
             teacher_id=teacher_id,
             leave_date=date,
             status="approved"
         ).first()
-        
-        return not has_leave
+        if has_leave:
+            return False
+
+        # Busy during one of the required periods → would be double-booked.
+        if busy_periods:
+            conflict = TimetableSlot.query.filter(
+                TimetableSlot.teacher_id == teacher_id,
+                TimetableSlot.day == day_name,
+                TimetableSlot.period_number.in_(list(busy_periods))
+            ).first()
+            if conflict:
+                return False
+
+        return True
     
     @staticmethod
     def _adjust_timetable_for_leave(leave_request):
@@ -231,8 +274,10 @@ class LeaveService:
     def mark_teacher_absent(teacher_id, date):
         """Mark a teacher as absent for a specific date (without prior leave request)"""
         try:
+            teacher = Teacher.query.get(teacher_id)
             # Create implicit leave request
             leave_request = LeaveRequest(
+                organization_id=teacher.organization_id if teacher else None,
                 teacher_id=teacher_id,
                 leave_date=date,
                 reason="Marked absent by administrator",
@@ -271,6 +316,8 @@ class LeaveService:
         query = LeaveRequest.query
         
         if filters:
+            if filters.get("organization_id"):
+                query = query.filter_by(organization_id=filters["organization_id"])
             if filters.get("teacher_id"):
                 query = query.filter_by(teacher_id=filters["teacher_id"])
             if filters.get("status"):

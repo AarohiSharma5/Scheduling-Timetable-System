@@ -15,6 +15,12 @@ from datetime import datetime
 
 timetable_bp = Blueprint("timetable", __name__, url_prefix="/api/timetable")
 
+
+def _org_id():
+    """Organization id from the authenticated user's JWT."""
+    user = getattr(request, "user", None)
+    return user.get("organization_id") if user else None
+
 # ============================================================================
 # TIMETABLE GENERATION
 # ============================================================================
@@ -44,10 +50,12 @@ def generate_timetable():
     """
     try:
         data = request.get_json(silent=True) or {}
+        org_id = _org_id()
         name = data.get("name", f"Timetable {datetime.utcnow().isoformat()}")
         description = data.get("description", "")
-        # Create new timetable record
+        # Create new timetable record (tagged with the caller's organization)
         timetable = Timetable(
+            organization_id=org_id,
             name=name,
             description=description,
             status="draft",
@@ -55,8 +63,8 @@ def generate_timetable():
         )
         db.session.add(timetable)
         db.session.flush()  # Get ID without committing
-        # Run scheduling engine
-        engine = SchedulingEngine()
+        # Run scheduling engine, scoped to this organization's data
+        engine = SchedulingEngine(organization_id=org_id)
         success, warnings = engine.generate_timetable(timetable.id)
         if not success:
             db.session.rollback()
@@ -207,7 +215,7 @@ def get_timetable(timetable_id):
         }
     }
     """
-    timetable = Timetable.query.get(timetable_id)
+    timetable = Timetable.query.filter_by(id=timetable_id, organization_id=_org_id()).first()
     if not timetable:
         return jsonify({"error": "Timetable not found"}), 404
     
@@ -224,8 +232,8 @@ def get_timetable(timetable_id):
         day_key = f"{slot.day}-P{slot.period_number}"
         organized_slots[batch_id][day_key] = slot.to_dict()
     
-    # Get batches info
-    batches = Batch.query.all()
+    # Get batches info (scoped to the org)
+    batches = Batch.query.filter_by(organization_id=_org_id()).all()
     batches_info = {b.id: b.to_dict() for b in batches}
     
     # Calculate coverage
@@ -266,7 +274,7 @@ def list_timetables():
         ]
     }
     """
-    timetables = Timetable.query.all()
+    timetables = Timetable.query.filter_by(organization_id=_org_id()).all()
     
     result = []
     for tt in timetables:
@@ -301,7 +309,7 @@ def publish_timetable(timetable_id):
         "message": "Timetable published"
     }
     """
-    timetable = Timetable.query.get(timetable_id)
+    timetable = Timetable.query.filter_by(id=timetable_id, organization_id=_org_id()).first()
     if not timetable:
         return jsonify({"error": "Timetable not found"}), 404
     
@@ -333,7 +341,7 @@ def publish_timetable(timetable_id):
 @role_required("admin")
 def delete_timetable(timetable_id):
     """Delete a timetable"""
-    timetable = Timetable.query.get(timetable_id)
+    timetable = Timetable.query.filter_by(id=timetable_id, organization_id=_org_id()).first()
     if not timetable:
         return jsonify({"error": "Timetable not found"}), 404
     
@@ -373,12 +381,17 @@ def get_batch_timetable(batch_id):
         }
     }
     """
-    batch = Batch.query.get(batch_id)
+    org_id = _org_id()
+    batch = Batch.query.filter_by(id=batch_id, organization_id=org_id).first()
     if not batch:
         return jsonify({"error": "Batch not found"}), 404
     
-    # Get latest published timetable
-    timetable = Timetable.query.filter_by(status="published").order_by(Timetable.published_at.desc()).first()
+    # Get latest published timetable for this org
+    timetable = (
+        Timetable.query.filter_by(organization_id=org_id, status="published")
+        .order_by(Timetable.published_at.desc())
+        .first()
+    )
     if not timetable:
         return jsonify({"error": "No published timetable available"}), 404
     
