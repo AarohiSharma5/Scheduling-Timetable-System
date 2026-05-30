@@ -23,6 +23,9 @@ def create_app(config_name=None):
     app.config.from_object(config.get(config_name, config["default"]))
     
     db.init_app(app)
+
+    from extensions import limiter
+    limiter.init_app(app)
     
     try:
         from flask_cors import CORS

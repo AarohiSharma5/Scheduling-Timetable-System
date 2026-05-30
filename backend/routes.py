@@ -25,6 +25,7 @@ from jwt_utils import (
     verify_org_token,
     get_org_token_from_request,
 )
+from extensions import limiter
 import os
 
 api = Blueprint("api", __name__, url_prefix="/api")
@@ -99,6 +100,7 @@ def _resolve_org_from_request():
 
 
 @api.route("/organizations/login", methods=["POST"])
+@limiter.limit("10 per minute")
 def organization_login():
     """
     Authenticate an organization (tenant) before user login.
@@ -151,6 +153,7 @@ def organizations_list():
 # ============================================================================
 
 @api.route("/auth/login", methods=["POST"])
+@limiter.limit("10 per minute")
 def login():
     """
     Login endpoint (requires X-Org-Token header from a prior /organizations/login).
