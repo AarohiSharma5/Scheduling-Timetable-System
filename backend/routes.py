@@ -921,29 +921,11 @@ def delete_subject(subject_id):
 # TIMETABLE ENDPOINTS
 # ============================================================================
 
-# NOTE: The real POST /api/timetable/generate handler lives in
-# timetable_routes.py (blueprint `timetable_bp`). It runs the actual
-# SchedulingEngine. A stub used to be defined here with the same URL, which
-# shadowed the real one — it has been removed so the engine route is used.
-
-
-@api.route("/timetable", methods=["GET"])
-@role_required("admin", "principal", "teacher", "student")
-def get_timetables():
-    """List timetables in the caller's organization"""
-    timetables = (
-        Timetable.query.filter_by(organization_id=current_org_id())
-        .order_by(Timetable.generated_at.desc())
-        .all()
-    )
-    return jsonify([t.to_dict() for t in timetables]), 200
-
-
-# NOTE: GET /api/timetable/<id> and POST /api/timetable/<id>/publish are NOT
-# defined here. They previously duplicated (and ambiguously shadowed) the
-# richer handlers in timetable_routes.py (blueprint `timetable_bp`), which
-# return slots organized by batch and are organization-scoped. The duplicates
-# were removed so `timetable_bp` is the single source of truth.
+# NOTE: All /api/timetable/* routes live in timetable_routes.py (blueprint
+# `timetable_bp`): generate, list, <id> (GET/DELETE), <id>/publish,
+# batch/<id>, validate, and conflicts/*. They run the real SchedulingEngine and
+# are organization-scoped. Nothing under that prefix is defined here, so there
+# is exactly one handler per timetable URL.
 
 
 # ============================================================================
