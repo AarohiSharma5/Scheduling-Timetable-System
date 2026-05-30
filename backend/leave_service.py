@@ -271,7 +271,7 @@ class LeaveService:
         return adjustments
     
     @staticmethod
-    def mark_teacher_absent(teacher_id, date):
+    def mark_teacher_absent(teacher_id, date, approved_by=None):
         """Mark a teacher as absent for a specific date (without prior leave request)"""
         try:
             teacher = Teacher.query.get(teacher_id)
@@ -283,7 +283,7 @@ class LeaveService:
                 reason="Marked absent by administrator",
                 leave_type="unplanned",
                 status="approved",
-                approved_by=1  # System admin
+                approved_by=approved_by  # the admin/principal who marked it
             )
             
             db.session.add(leave_request)

@@ -15,6 +15,14 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
     build: ./backend
     ports:
@@ -26,8 +34,12 @@ services:
       # In production the app refuses to boot if these are unset.
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set in .env}
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
+      # Shared store so rate limits are accurate across all gunicorn workers.
+      RATELIMIT_STORAGE_URI: redis://redis:6379
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     volumes:
       - ./backend:/app

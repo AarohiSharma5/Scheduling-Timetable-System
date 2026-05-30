@@ -7,6 +7,10 @@ decorate individual endpoints (e.g. login throttling).
 import os
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_migrate import Migrate
+
+# Database migrations (Alembic). init_app is called in app.py with (app, db).
+migrate = Migrate()
 
 # Rate limiter. No global default limits - only explicitly decorated routes are
 # throttled (currently the login endpoints, to slow brute-force attempts).

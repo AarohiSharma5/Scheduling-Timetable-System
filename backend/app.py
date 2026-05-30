@@ -24,8 +24,9 @@ def create_app(config_name=None):
     
     db.init_app(app)
 
-    from extensions import limiter
+    from extensions import limiter, migrate
     limiter.init_app(app)
+    migrate.init_app(app, db)
     
     try:
         from flask_cors import CORS
@@ -53,9 +54,21 @@ def create_app(config_name=None):
                     return f.read(), 200, {'Content-Type': 'text/html; charset=utf-8'}
             return {'error': 'index.html not found'}, 500
     
-    with app.app_context():
-        db.create_all()
-    
+    # Schema is managed by Flask-Migrate (Alembic). Run `flask db upgrade` to
+    # build/upgrade the database. (Seed scripts still call db.create_all()
+    # themselves for convenience when bootstrapping a throwaway dev DB.)
+
+    @app.after_request
+    def set_security_headers(response):
+        # Defense-in-depth hardening. These are deliberately conservative so
+        # they don't break the bundled React app (no restrictive script-src,
+        # which would block CRA's inline runtime). The real mitigation for
+        # token theft is moving auth to httpOnly cookies (see notes).
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        return response
+
     return app
 
 if __name__ == "__main__":

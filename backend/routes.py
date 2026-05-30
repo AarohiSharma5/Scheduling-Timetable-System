@@ -1260,8 +1260,13 @@ def mark_teacher_absent(teacher_id):
         
         data = request.get_json()
         absent_date = datetime.fromisoformat(data.get("date")).date() if isinstance(data.get("date"), str) else data.get("date")
-        
-        result = LeaveService.mark_teacher_absent(teacher_id, absent_date)
+
+        # Ensure the teacher belongs to the caller's organization.
+        owned_or_404(Teacher, teacher_id)
+
+        result = LeaveService.mark_teacher_absent(
+            teacher_id, absent_date, approved_by=request.user.get("user_id")
+        )
         
         if result["success"]:
             return jsonify(result), 200
