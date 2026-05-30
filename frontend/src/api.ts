@@ -3,37 +3,23 @@ import type { Plan, SchoolProfile, Teacher, Subject } from "./types";
 
 const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:5001/api";
 
-// Create axios instance with request interceptor
+// Auth now rides on httpOnly cookies (access_token / org_token) that the
+// browser attaches automatically. withCredentials makes axios include them; we
+// no longer read or send any token from JavaScript, which removes the
+// localStorage XSS token-theft vector.
 const axiosInstance = axios.create({
   baseURL: API_BASE,
+  withCredentials: true,
 });
 
-// Add JWT token AND organization token to all requests
-axiosInstance.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem("auth_token");
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-    const orgToken = localStorage.getItem("org_token");
-    if (orgToken) {
-      config.headers["X-Org-Token"] = orgToken;
-    }
-    return config;
-  },
-  (error) => {
-    return Promise.reject(error);
-  }
-);
-
-// Handle 401 responses by clearing user auth (but preserve org session so we
-// can drop the user back into the role-login step without re-entering the org).
+// Handle 401 responses by bouncing the user to the right login step. We can no
+// longer read the (httpOnly) tokens, so we infer org-session presence from the
+// non-sensitive org info we keep in localStorage for UI purposes.
 axiosInstance.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem("auth_token");
-      const hasOrg = !!localStorage.getItem("org_token");
+      const hasOrg = !!localStorage.getItem("org_info");
       const target = hasOrg ? "/login" : "/";
       if (window.location.pathname !== target) {
         window.location.href = target;

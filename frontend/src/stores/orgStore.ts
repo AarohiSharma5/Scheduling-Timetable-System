@@ -2,7 +2,9 @@ import { create } from "zustand";
 
 const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:5001/api";
 
-const ORG_TOKEN_KEY = "org_token";
+// We only persist NON-SENSITIVE org info (name/slug/logo) for gating and
+// display. The actual org token lives in an httpOnly cookie the browser
+// attaches automatically, so it never touches JavaScript/localStorage.
 const ORG_INFO_KEY = "org_info";
 
 export interface Organization {
@@ -15,13 +17,12 @@ export interface Organization {
 }
 
 interface OrgState {
-  orgToken: string | null;
   organization: Organization | null;
   loading: boolean;
   error: string | null;
 
   loginOrg: (identifier: string, password: string) => Promise<void>;
-  logoutOrg: () => void;
+  logoutOrg: () => Promise<void>;
   restoreOrgSession: () => void;
   refreshOrg: () => Promise<void>;
   setError: (msg: string | null) => void;
@@ -37,7 +38,6 @@ function readStoredOrg(): Organization | null {
 }
 
 export const useOrgStore = create<OrgState>((set, get) => ({
-  orgToken: localStorage.getItem(ORG_TOKEN_KEY),
   organization: readStoredOrg(),
   loading: false,
   error: null,
@@ -47,6 +47,7 @@ export const useOrgStore = create<OrgState>((set, get) => ({
     try {
       const response = await fetch(`${API_BASE}/organizations/login`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ identifier, password }),
       });
@@ -63,11 +64,10 @@ export const useOrgStore = create<OrgState>((set, get) => ({
       }
 
       const data = await response.json();
-      localStorage.setItem(ORG_TOKEN_KEY, data.org_token);
+      // Persist only the display info; the token is in the httpOnly cookie.
       localStorage.setItem(ORG_INFO_KEY, JSON.stringify(data.organization));
 
       set({
-        orgToken: data.org_token,
         organization: data.organization,
         loading: false,
       });
@@ -78,20 +78,25 @@ export const useOrgStore = create<OrgState>((set, get) => ({
     }
   },
 
-  logoutOrg: () => {
-    localStorage.removeItem(ORG_TOKEN_KEY);
+  logoutOrg: async () => {
+    try {
+      // Clears both the org and user httpOnly cookies server-side.
+      await fetch(`${API_BASE}/organizations/logout`, {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch {
+      /* best-effort; clear local state regardless */
+    }
     localStorage.removeItem(ORG_INFO_KEY);
-    // Also clear any user session so we don't leak across orgs.
-    localStorage.removeItem("auth_token");
-    set({ orgToken: null, organization: null, error: null });
+    set({ organization: null, error: null });
   },
 
   restoreOrgSession: () => {
-    const token = localStorage.getItem(ORG_TOKEN_KEY);
     const info = readStoredOrg();
-    if (token && info) {
-      set({ orgToken: token, organization: info });
-      // Best-effort revalidate; on failure, clear.
+    if (info) {
+      set({ organization: info });
+      // Best-effort revalidate against the cookie; on failure, clear.
       get().refreshOrg().catch(() => {
         get().logoutOrg();
       });
@@ -99,10 +104,8 @@ export const useOrgStore = create<OrgState>((set, get) => ({
   },
 
   refreshOrg: async () => {
-    const { orgToken } = get();
-    if (!orgToken) return;
     const response = await fetch(`${API_BASE}/organizations/me`, {
-      headers: { "X-Org-Token": orgToken },
+      credentials: "include",
     });
     if (!response.ok) {
       throw new Error("Organization session invalid");

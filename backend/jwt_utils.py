@@ -23,6 +23,11 @@ if not SECRET_KEY:
 ALGORITHM = "HS256"
 TOKEN_EXPIRY_HOURS = 24
 
+# Names of the httpOnly cookies that carry the auth tokens. Keeping them here
+# means the route layer and the verifiers agree on a single source of truth.
+ACCESS_COOKIE_NAME = "access_token"
+ORG_COOKIE_NAME = "org_token"
+
 
 def generate_token(user_id: int, email: str, role: str, organization_id: int | None = None) -> str:
     """Generate JWT token for a user, optionally scoped to an organization"""
@@ -54,8 +59,16 @@ def generate_org_token(organization_id: int, slug: str) -> str:
 
 
 def get_org_token_from_request() -> str | None:
-    """Extract org token from the X-Org-Token header."""
-    return request.headers.get("X-Org-Token")
+    """Extract the org token.
+
+    Prefers the X-Org-Token header (used by non-browser clients and during the
+    cookie migration) and falls back to the httpOnly ``org_token`` cookie that
+    the browser sends automatically.
+    """
+    header = request.headers.get("X-Org-Token")
+    if header:
+        return header
+    return request.cookies.get(ORG_COOKIE_NAME)
 
 
 def verify_org_token(token: str) -> dict:
@@ -82,17 +95,20 @@ def verify_token(token: str) -> dict:
         return {"error": "Invalid token"}
 
 
-def get_token_from_request() -> str:
-    """Extract JWT token from Authorization header"""
+def get_token_from_request() -> str | None:
+    """Extract the user JWT.
+
+    Prefers the ``Authorization: Bearer <token>`` header for backward
+    compatibility, then falls back to the httpOnly ``access_token`` cookie so
+    browsers no longer need to expose the token to JavaScript.
+    """
     auth_header = request.headers.get("Authorization")
-    if not auth_header:
-        return None
-    
-    parts = auth_header.split()
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        return None
-    
-    return parts[1]
+    if auth_header:
+        parts = auth_header.split()
+        if len(parts) == 2 and parts[0].lower() == "bearer":
+            return parts[1]
+
+    return request.cookies.get(ACCESS_COOKIE_NAME)
 
 
 def token_required(f):

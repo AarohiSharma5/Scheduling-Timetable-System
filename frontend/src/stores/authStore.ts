@@ -14,16 +14,14 @@ export interface User {
 }
 
 interface AuthState {
-  token: string | null;
   user: User | null;
   loading: boolean;
   error: string | null;
   isAuthenticated: boolean;
-  
+
   // Actions
   login: (email: string, password: string) => Promise<void>;
-  logout: () => void;
-  setToken: (token: string) => void;
+  logout: () => Promise<void>;
   setUser: (user: User | null) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
@@ -32,26 +30,26 @@ interface AuthState {
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
-  token: localStorage.getItem("auth_token") || null,
   user: null,
-  loading: false,
+  // Start in a loading state so guarded routes wait for the cookie-based
+  // /auth/me rehydrate instead of briefly bouncing to /login on every refresh.
+  loading: true,
   error: null,
-  isAuthenticated: !!localStorage.getItem("auth_token"),
+  isAuthenticated: false,
 
   login: async (email: string, password: string) => {
     set({ loading: true, error: null });
     try {
-      const orgToken = localStorage.getItem("org_token");
-      if (!orgToken) {
+      // The org session is an httpOnly cookie the browser sends automatically;
+      // we just confirm one exists locally to show a friendlier message.
+      if (!localStorage.getItem("org_info")) {
         throw new Error("Please log in to your organization first.");
       }
 
       const response = await fetch(`${API_BASE}/auth/login`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Org-Token": orgToken,
-        },
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
 
@@ -67,10 +65,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
 
       const data = await response.json();
-      localStorage.setItem("auth_token", data.token);
-
+      // No token is stored anywhere; the httpOnly cookie carries it.
       set({
-        token: data.token,
         user: data.user,
         isAuthenticated: true,
         loading: false,
@@ -82,19 +78,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  logout: () => {
-    localStorage.removeItem("auth_token");
+  logout: async () => {
+    try {
+      await fetch(`${API_BASE}/auth/logout`, {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch {
+      /* best-effort; clear local state regardless */
+    }
     set({
-      token: null,
       user: null,
       isAuthenticated: false,
       error: null,
+      loading: false,
     });
-  },
-
-  setToken: (token: string) => {
-    localStorage.setItem("auth_token", token);
-    set({ token, isAuthenticated: true });
   },
 
   setUser: (user: User | null) => {
@@ -110,39 +108,28 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   getCurrentUser: async () => {
-    const state = get();
-    if (!state.token) {
-      return;
-    }
-
     set({ loading: true });
     try {
-      const orgToken = localStorage.getItem("org_token");
       const response = await fetch(`${API_BASE}/auth/me`, {
-        headers: {
-          Authorization: `Bearer ${state.token}`,
-          ...(orgToken ? { "X-Org-Token": orgToken } : {}),
-        },
+        credentials: "include",
       });
 
       if (!response.ok) {
-        throw new Error("Failed to fetch user");
+        // No valid session cookie -> treat as logged out (no redirect here).
+        set({ user: null, isAuthenticated: false, loading: false });
+        return;
       }
 
       const user = await response.json();
-      set({ user, loading: false });
+      set({ user, isAuthenticated: true, loading: false });
     } catch (error) {
-      // Token is invalid, logout
-      set({ loading: false });
-      get().logout();
+      set({ user: null, isAuthenticated: false, loading: false });
     }
   },
 
   restoreSession: () => {
-    const token = localStorage.getItem("auth_token");
-    if (token) {
-      set({ token, isAuthenticated: true });
-      get().getCurrentUser();
-    }
+    // Cookie-based: just ask the server who we are. If the cookie is missing or
+    // expired, getCurrentUser resolves to a logged-out state.
+    get().getCurrentUser();
   },
 }));

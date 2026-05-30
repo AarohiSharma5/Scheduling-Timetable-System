@@ -10,7 +10,7 @@ Endpoints organized by module:
 - /api/principal/* - Principal dashboard
 """
 
-from flask import Blueprint, request, jsonify, abort
+from flask import Blueprint, request, jsonify, abort, make_response
 from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification, Organization
 from datetime import datetime, timedelta
 from functools import wraps
@@ -24,11 +24,41 @@ from jwt_utils import (
     generate_org_token,
     verify_org_token,
     get_org_token_from_request,
+    ACCESS_COOKIE_NAME,
+    ORG_COOKIE_NAME,
+    TOKEN_EXPIRY_HOURS,
+    ORG_TOKEN_EXPIRY_DAYS,
 )
 from extensions import limiter
 import os
 
 api = Blueprint("api", __name__, url_prefix="/api")
+
+
+def _set_auth_cookie(resp, name, token, max_age):
+    """Attach an httpOnly auth cookie to a response.
+
+    - httponly  -> JavaScript can't read it, which is the whole point (kills the
+      localStorage XSS token-theft vector).
+    - samesite=Lax -> the browser won't attach it to cross-site requests, so it
+      doubles as CSRF protection for our same-origin SPA + API.
+    - secure tied to request.is_secure -> sent only over HTTPS in production,
+      while still working over http://localhost in development.
+    """
+    resp.set_cookie(
+        name,
+        token,
+        max_age=max_age,
+        httponly=True,
+        samesite="Lax",
+        secure=request.is_secure,
+        path="/",
+    )
+
+
+def _clear_auth_cookie(resp, name):
+    """Expire an auth cookie (must match path/samesite used when setting)."""
+    resp.delete_cookie(name, path="/", samesite="Lax")
 
 
 def current_org_id():
@@ -124,12 +154,23 @@ def organization_login():
             return jsonify({"error": "Invalid organization or password"}), 401
 
         token = generate_org_token(org.id, org.slug)
-        return jsonify({
-            "org_token": token,
-            "organization": org.to_dict(),
-        }), 200
+        # The token now lives in an httpOnly cookie instead of the JSON body so
+        # it never touches JavaScript/localStorage. Only non-sensitive org info
+        # is returned for the UI to display.
+        resp = make_response(jsonify({"organization": org.to_dict()}), 200)
+        _set_auth_cookie(resp, ORG_COOKIE_NAME, token, ORG_TOKEN_EXPIRY_DAYS * 24 * 3600)
+        return resp
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@api.route("/organizations/logout", methods=["POST"])
+def organization_logout():
+    """Clear the organization session cookie (and the user cookie with it)."""
+    resp = make_response(jsonify({"message": "Organization logged out"}), 200)
+    _clear_auth_cookie(resp, ORG_COOKIE_NAME)
+    _clear_auth_cookie(resp, ACCESS_COOKIE_NAME)
+    return resp
 
 
 @api.route("/organizations/me", methods=["GET"])
@@ -182,8 +223,9 @@ def login():
 
         token = generate_token(user.id, user.email, user.role, organization_id=org.id)
 
-        return jsonify({
-            "token": token,
+        # Token goes into an httpOnly cookie, not the response body. The client
+        # learns "who am I" from the user object here and from /auth/me later.
+        resp = make_response(jsonify({
             "user": {
                 "id": user.id,
                 "name": user.name,
@@ -193,15 +235,19 @@ def login():
                 "organization_id": org.id,
             },
             "organization": org.to_dict(),
-        }), 200
+        }), 200)
+        _set_auth_cookie(resp, ACCESS_COOKIE_NAME, token, TOKEN_EXPIRY_HOURS * 3600)
+        return resp
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 @api.route("/auth/logout", methods=["POST"])
 def logout():
-    """Logout endpoint (token invalidation handled by frontend)"""
-    return jsonify({"message": "Logged out"}), 200
+    """Logout: clear the user auth cookie (org session is left intact)."""
+    resp = make_response(jsonify({"message": "Logged out"}), 200)
+    _clear_auth_cookie(resp, ACCESS_COOKIE_NAME)
+    return resp
 
 
 @api.route("/auth/me", methods=["GET"])

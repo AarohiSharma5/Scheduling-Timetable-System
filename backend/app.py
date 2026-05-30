@@ -30,7 +30,14 @@ def create_app(config_name=None):
     
     try:
         from flask_cors import CORS
-        CORS(app, origins=app.config.get("CORS_ORIGINS", ["http://localhost:3000", "localhost:3000"]))
+        # supports_credentials lets the browser send/receive the httpOnly auth
+        # cookies. Harmless for the same-origin Docker deployment; required if
+        # the SPA is ever served from a different origin in dev.
+        CORS(
+            app,
+            origins=app.config.get("CORS_ORIGINS", ["http://localhost:3000", "localhost:3000"]),
+            supports_credentials=True,
+        )
     except ImportError:
         pass
     
@@ -62,8 +69,8 @@ def create_app(config_name=None):
     def set_security_headers(response):
         # Defense-in-depth hardening. These are deliberately conservative so
         # they don't break the bundled React app (no restrictive script-src,
-        # which would block CRA's inline runtime). The real mitigation for
-        # token theft is moving auth to httpOnly cookies (see notes).
+        # which would block CRA's inline runtime). Auth tokens themselves live
+        # in httpOnly cookies, so they're already out of JavaScript's reach.
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
