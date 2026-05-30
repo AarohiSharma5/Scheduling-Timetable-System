@@ -8,8 +8,18 @@ from datetime import datetime, timedelta
 from functools import wraps
 from flask import request, jsonify, current_app
 
-# Secret key for signing JWT tokens
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "school-timetable-secret-dev-key-change-in-production")
+# Secret key for signing JWT tokens.
+# Must be provided via env in production; we refuse to boot on a public default
+# so tokens can't be forged by anyone who has read the source.
+_DEV_FALLBACK_SECRET = "dev-only-insecure-jwt-secret"
+SECRET_KEY = os.getenv("JWT_SECRET_KEY") or os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    if os.getenv("FLASK_ENV") == "production":
+        raise RuntimeError(
+            "JWT_SECRET_KEY (or SECRET_KEY) must be set in production. "
+            "Refusing to start with an insecure default."
+        )
+    SECRET_KEY = _DEV_FALLBACK_SECRET
 ALGORITHM = "HS256"
 TOKEN_EXPIRY_HOURS = 24
 

@@ -1,11 +1,24 @@
 import os
 from datetime import timedelta
 
+
+def _resolve_secret_key():
+    """Flask SECRET_KEY: required in production, dev-only fallback otherwise."""
+    key = os.getenv("SECRET_KEY") or os.getenv("JWT_SECRET_KEY")
+    if key:
+        return key
+    if os.getenv("FLASK_ENV") == "production":
+        raise RuntimeError(
+            "SECRET_KEY must be set in production. Refusing to start with an insecure default."
+        )
+    return "dev-only-insecure-secret-key"
+
+
 class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     JSON_SORT_KEYS = False
     CORS_ORIGINS = ["http://localhost:3000", "http://localhost:3001", "http://localhost:5000"]
-    SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key")
+    SECRET_KEY = _resolve_secret_key()
 
 class DevelopmentConfig(Config):
     DEBUG = True

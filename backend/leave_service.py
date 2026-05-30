@@ -340,8 +340,9 @@ class LeaveService:
     @staticmethod
     def _notify_leave_request(leave_request):
         """Notify admin/principal of new leave request"""
-        admin_users = User.query.filter_by(role="admin").all()
-        principal_users = User.query.filter_by(role="principal").all()
+        org_id = leave_request.organization_id
+        admin_users = User.query.filter_by(role="admin", organization_id=org_id).all()
+        principal_users = User.query.filter_by(role="principal", organization_id=org_id).all()
         approvers = admin_users + principal_users
         
         teacher = Teacher.query.get(leave_request.teacher_id)
@@ -392,7 +393,9 @@ class LeaveService:
         affected_batch_ids = set(s.batch_id for s in affected_slots if s.batch_id)
         
         for batch_id in affected_batch_ids:
-            students = User.query.filter_by(batch_id=batch_id, role="student").all()
+            students = User.query.filter_by(
+                batch_id=batch_id, role="student", organization_id=leave_request.organization_id
+            ).all()
             for student in students:
                 message = f"Class on {leave_request.leave_date.strftime('%d %B %Y')} will have a substitute teacher."
                 if leave_request.substitute_teacher_id:
@@ -435,8 +438,8 @@ class LeaveService:
         teacher = Teacher.query.get(leave_request.teacher_id)
         teacher_name = teacher.name if teacher else "Unknown Teacher"
         
-        # Notify all users about the change
-        all_users = User.query.all()
+        # Notify all users in the same organization about the change
+        all_users = User.query.filter_by(organization_id=leave_request.organization_id).all()
         for user in all_users:
             if user.role in ["admin", "principal", "teacher"]:
                 message = f"{teacher_name} has been marked absent on {leave_request.leave_date.strftime('%d %B %Y')}"

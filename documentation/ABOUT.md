@@ -69,7 +69,7 @@ cpp project/
 │   ├── models.py           # SQLAlchemy models (Users, Batches, Teachers, …)
 │   ├── routes.py           # Main REST endpoints
 │   ├── timetable_routes.py # Timetable generation + validation endpoints
-│   ├── planner_service.py  # Timetable generation logic
+│   ├── scheduler.py        # Timetable generation engine (SchedulingEngine)
 │   ├── conflict_detector.py# Conflict validation rules
 │   ├── leave_service.py    # Leave + substitute workflow
 │   ├── pdf_utils.py        # PDF export (ReportLab)

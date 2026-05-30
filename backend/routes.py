@@ -52,14 +52,20 @@ def owned_or_404(model, obj_id):
 # HEALTH CHECK
 # ============================================================================
 
-def get_db_stats():
-    """Helper to get database statistics"""
+def get_db_stats(org_id=None):
+    """Helper to get database statistics, optionally scoped to one org."""
+    def _count(model):
+        q = model.query
+        if org_id is not None:
+            q = q.filter_by(organization_id=org_id)
+        return q.count()
+
     return {
-        "users": User.query.count(),
-        "batches": Batch.query.count(),
-        "subjects": Subject.query.count(),
-        "teachers": Teacher.query.count(),
-        "timetables": Timetable.query.count(),
+        "users": _count(User),
+        "batches": _count(Batch),
+        "subjects": _count(Subject),
+        "teachers": _count(Teacher),
+        "timetables": _count(Timetable),
     }
 
 
@@ -1046,33 +1052,17 @@ def get_principal_dashboard():
 # ============================================================================
 
 @api.route("/stats", methods=["GET"])
+@role_required("admin", "principal")
 def get_stats():
-    """Get database statistics"""
-    return jsonify(get_db_stats()), 200
+    """Get database statistics for the caller's organization"""
+    return jsonify(get_db_stats(current_org_id())), 200
 
 
-@api.route("/seed", methods=["POST"])
-def seed_data():
-    """
-    Trigger database seeding (for development only)
-    NOTE: This will drop all data and recreate sample data
-    """
-    try:
-        import subprocess
-        result = subprocess.run(
-            ["python3", "seed.py"],
-            cwd="/Users/aarohi_sharma/cpp project/backend",
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-        return jsonify({
-            "message": "Database seeded successfully",
-            "output": result.stdout,
-            "stats": get_db_stats(),
-        }), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+# NOTE: A public POST /api/seed endpoint used to live here. It shelled out to
+# wipe and reseed the database with no authentication, so anyone could destroy
+# all data. It has been removed. Seeding is a deliberate operational task run
+# from the CLI instead, e.g.:
+#     docker compose exec backend python seed_realistic.py
 
 
 # ============================================================================
