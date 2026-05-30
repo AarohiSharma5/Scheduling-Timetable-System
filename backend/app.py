@@ -51,10 +51,19 @@ def create_app(config_name=None):
         @app.route('/', defaults={'path': ''})
         @app.route('/<path:path>', methods=['GET'])
         def serve_react(path):
-            # Don't catch static files or API requests
-            if path.startswith('api/') or path.startswith('static/'):
+            # Don't catch API requests (hashed assets under /static are handled
+            # by Flask's static handler already).
+            if path.startswith('api/'):
                 return {'error': 'Not found'}, 404
-            # Serve index.html for all React routes
+            # Serve real files copied from public/ to the build root
+            # (scheduler-logo.png, favicon.ico, manifest.json, ...). Without
+            # this, these requests fall through to index.html and the browser
+            # gets HTML where it expected an image/asset.
+            if path:
+                asset_path = os.path.join(react_build_path, path)
+                if os.path.isfile(asset_path):
+                    return send_from_directory(react_build_path, path)
+            # Otherwise serve index.html so React Router can handle the route.
             index_path = os.path.join(react_build_path, 'index.html')
             if os.path.exists(index_path):
                 with open(index_path, 'r') as f:
