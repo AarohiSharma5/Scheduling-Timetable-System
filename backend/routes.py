@@ -11,7 +11,7 @@ Endpoints organized by module:
 """
 
 from flask import Blueprint, request, jsonify, abort, make_response
-from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification, Organization
+from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification, Organization, PinnedSlot
 from datetime import datetime, timedelta
 from functools import wraps
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -709,6 +709,7 @@ def create_teacher():
             email=data.get("email"),
             subject_ids=data.get("subject_ids", []),
             assigned_batch_ids=data.get("assigned_batch_ids", []),
+            unavailable_slots=data.get("unavailable_slots", []),
             is_class_teacher=data.get("is_class_teacher", False),
             class_teacher_batch_id=data.get("class_teacher_batch_id"),
             has_duties=data.get("has_duties", False),
@@ -743,6 +744,7 @@ def update_teacher(teacher_id):
         if "name" in data: teacher.name = data["name"]
         if "subject_ids" in data: teacher.subject_ids = data["subject_ids"]
         if "assigned_batch_ids" in data: teacher.assigned_batch_ids = data["assigned_batch_ids"]
+        if "unavailable_slots" in data: teacher.unavailable_slots = data["unavailable_slots"]
         if "is_class_teacher" in data: teacher.is_class_teacher = data["is_class_teacher"]
         if "class_teacher_batch_id" in data: teacher.class_teacher_batch_id = data["class_teacher_batch_id"]
         if "has_duties" in data: teacher.has_duties = data["has_duties"]
@@ -920,6 +922,8 @@ def create_subject():
             organization_id=current_org_id(),
             name=data.get("name"),
             periods_per_week=data.get("periods_per_week"),
+            max_periods_per_day=data.get("max_periods_per_day", 1),
+            requires_double=data.get("requires_double", False),
             batch_ids=data.get("batch_ids", []),
         )
         db.session.add(subject)
@@ -948,6 +952,8 @@ def update_subject(subject_id):
         
         if "name" in data: subject.name = data["name"]
         if "periods_per_week" in data: subject.periods_per_week = data["periods_per_week"]
+        if "max_periods_per_day" in data: subject.max_periods_per_day = data["max_periods_per_day"]
+        if "requires_double" in data: subject.requires_double = data["requires_double"]
         if "batch_ids" in data: subject.batch_ids = data["batch_ids"]
         
         subject.updated_at = datetime.utcnow()
@@ -967,6 +973,69 @@ def delete_subject(subject_id):
         db.session.delete(subject)
         db.session.commit()
         return jsonify({"message": "Subject deleted"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# PINNED / FIXED SLOTS - periods locked by the admin before generation
+# ============================================================================
+
+@api.route("/admin/pinned-slots", methods=["GET"])
+@role_required("admin", "principal")
+def list_pinned_slots():
+    """List all pinned/fixed periods for the caller's organization."""
+    pins = PinnedSlot.query.filter_by(organization_id=current_org_id()).all()
+    return jsonify([p.to_dict() for p in pins]), 200
+
+
+@api.route("/admin/pinned-slots", methods=["POST"])
+@role_required("admin")
+def create_pinned_slot():
+    """Lock a period: { batch_id, subject_id, day, period_number, teacher_id? }."""
+    try:
+        data = request.get_json() or {}
+        org_id = current_org_id()
+
+        required = ("batch_id", "subject_id", "day", "period_number")
+        if any(data.get(f) in (None, "") for f in required):
+            return jsonify({"error": "batch_id, subject_id, day and period_number are required"}), 400
+
+        # Everything referenced must belong to this organization.
+        if not Batch.query.filter_by(id=data["batch_id"], organization_id=org_id).first():
+            return jsonify({"error": "Class not found"}), 404
+        if not Subject.query.filter_by(id=data["subject_id"], organization_id=org_id).first():
+            return jsonify({"error": "Subject not found"}), 404
+        teacher_id = data.get("teacher_id") or None
+        if teacher_id and not Teacher.query.filter_by(id=teacher_id, organization_id=org_id).first():
+            return jsonify({"error": "Teacher not found"}), 404
+
+        pin = PinnedSlot(
+            organization_id=org_id,
+            batch_id=data["batch_id"],
+            subject_id=data["subject_id"],
+            teacher_id=teacher_id,
+            day=data["day"],
+            period_number=data["period_number"],
+        )
+        db.session.add(pin)
+        db.session.commit()
+        return jsonify(pin.to_dict()), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/pinned-slots/<int:pin_id>", methods=["DELETE"])
+@role_required("admin")
+def delete_pinned_slot(pin_id):
+    """Remove a pinned/fixed period."""
+    try:
+        pin = owned_or_404(PinnedSlot, pin_id)
+        db.session.delete(pin)
+        db.session.commit()
+        return jsonify({"message": "Pinned slot removed"}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500

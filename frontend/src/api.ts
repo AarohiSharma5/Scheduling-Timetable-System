@@ -175,6 +175,21 @@ export const api = {
         await axiosInstance.delete(`/admin/subjects/${id}`);
       },
     },
+
+    // Pinned / fixed periods the scheduler must honor
+    pinnedSlots: {
+      list: async () => {
+        const { data } = await axiosInstance.get("/admin/pinned-slots");
+        return data;
+      },
+      create: async (pin: any) => {
+        const { data } = await axiosInstance.post("/admin/pinned-slots", pin);
+        return data;
+      },
+      delete: async (id: number) => {
+        await axiosInstance.delete(`/admin/pinned-slots/${id}`);
+      },
+    },
   },
 
   timetable: {

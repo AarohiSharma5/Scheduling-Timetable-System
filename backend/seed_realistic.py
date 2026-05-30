@@ -11,7 +11,7 @@ from app import create_app
 from models import (
     db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot,
     LeaveRequest, Notification, Student, Classroom, House, Principal, Coordinator,
-    SubjectMaster, Organization
+    SubjectMaster, Organization, PinnedSlot
 )
 from datetime import datetime, date, timedelta
 from werkzeug.security import generate_password_hash
@@ -252,6 +252,11 @@ def seed_database():
         for b in batches:
             grade_to_batches.setdefault(b.grade, []).append(b)
 
+        # Lab subjects run as consecutive double periods (one block/day); every
+        # subject is also capped at one period/day per class (spacing) unless
+        # it's a lab, which needs two consecutive periods.
+        LAB_SUBJECTS = {"Computer Science", "Physics", "Chemistry", "Biology"}
+
         subjects = []
         subject_by_name = {}
         for _sid, name, _code, subject_type, applicable_classes in SUBJECTS_DATA:
@@ -259,10 +264,13 @@ def seed_database():
             applicable_batches = []
             for grade in applicable_classes:
                 applicable_batches.extend(grade_to_batches.get(grade, []))
+            is_lab = name in LAB_SUBJECTS
             subject = Subject(
                 organization_id=org_id,
                 name=name,
                 periods_per_week=periods,
+                max_periods_per_day=2 if is_lab else 1,
+                requires_double=is_lab,
                 batch_ids=[b.id for b in applicable_batches],
             )
             db.session.add(subject)
@@ -528,6 +536,41 @@ def seed_database():
                 t.assigned_batch_ids = list(t.assigned_batch_ids or []) + [b.id]
         db.session.commit()
         print("   ✅ Teacher / subject / batch coverage ensured")
+
+        # =====================================================================
+        # 8c. CONSTRAINT DEMO: teacher availability + a pinned/fixed period
+        # Showcases the scheduler honoring real-world constraints.
+        # =====================================================================
+        print("\n🚦 Seeding sample availability + a pinned period...")
+        if teachers:
+            # First teacher can't take the first two periods on Monday.
+            teachers[0].unavailable_slots = [
+                {"day": "Monday", "period": 1},
+                {"day": "Monday", "period": 2},
+            ]
+            # Another teacher is off on Friday afternoon.
+            if len(teachers) > 10:
+                teachers[10].unavailable_slots = [
+                    {"day": "Friday", "period": 5},
+                    {"day": "Friday", "period": 6},
+                ]
+        db.session.commit()
+
+        # Pin one class's first subject to Monday period 1 (e.g. a fixed slot).
+        # Use the first batch that actually has subjects (early grades may not).
+        pin_batch = next((b for b in batches if b.subject_ids), None)
+        if pin_batch:
+            db.session.add(PinnedSlot(
+                organization_id=org_id,
+                batch_id=pin_batch.id,
+                subject_id=pin_batch.subject_ids[0],
+                day="Monday",
+                period_number=1,
+            ))
+            db.session.commit()
+            print(f"   ✅ Availability + pinned period seeded (pinned batch {pin_batch.id})")
+        else:
+            print("   ✅ Availability seeded (no batch with subjects to pin)")
 
         # =====================================================================
         # 9. STUDENTS (~2,800 TOTAL)

@@ -92,6 +92,11 @@ class Subject(db.Model):
     organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
     name = db.Column(db.String(120), nullable=False)
     periods_per_week = db.Column(db.Integer, nullable=False)  # How many periods per week
+    # Spacing rule: max periods of this subject a batch may have on a single day
+    # (default 1 prevents the same subject appearing twice/back-to-back in a day).
+    max_periods_per_day = db.Column(db.Integer, nullable=False, default=1)
+    # Lab/double subjects are scheduled as consecutive double periods.
+    requires_double = db.Column(db.Boolean, nullable=False, default=False)
     batch_ids = db.Column(db.JSON, default=list)  # Which batches need this subject
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -101,7 +106,39 @@ class Subject(db.Model):
             "id": self.id,
             "name": self.name,
             "periods_per_week": self.periods_per_week,
+            "max_periods_per_day": self.max_periods_per_day,
+            "requires_double": self.requires_double,
             "batch_ids": self.batch_ids or [],
+        }
+
+
+# ============================================================================
+# PINNED SLOT MODEL - Fixed/locked periods the scheduler must honor
+# ============================================================================
+class PinnedSlot(db.Model):
+    """A period the admin locks in advance (e.g. assembly, fixed lab, library).
+
+    The scheduler places these first and works the rest of the timetable around
+    them. teacher_id is optional — if omitted, an eligible teacher is chosen.
+    """
+    __tablename__ = "pinned_slots"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
+    batch_id = db.Column(db.Integer, db.ForeignKey("batches.id"), nullable=False)
+    subject_id = db.Column(db.Integer, db.ForeignKey("subjects.id"), nullable=False)
+    teacher_id = db.Column(db.Integer, db.ForeignKey("teachers.id"))  # optional
+    day = db.Column(db.String(20), nullable=False)  # "Monday", ...
+    period_number = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "batch_id": self.batch_id,
+            "subject_id": self.subject_id,
+            "teacher_id": self.teacher_id,
+            "day": self.day,
+            "period_number": self.period_number,
         }
 
 
@@ -118,6 +155,9 @@ class Teacher(db.Model):
     email = db.Column(db.String(120), nullable=False)
     subject_ids = db.Column(db.JSON, default=list)  # Subjects they teach
     assigned_batch_ids = db.Column(db.JSON, default=list)  # Batches assigned to them
+    # Hard availability constraint: slots the teacher cannot teach, as a list of
+    # {"day": "Monday", "period": 1}. The scheduler never places them here.
+    unavailable_slots = db.Column(db.JSON, default=list)
     is_class_teacher = db.Column(db.Boolean, default=False)  # Class teacher of a section?
     class_teacher_batch_id = db.Column(db.Integer, db.ForeignKey("batches.id"))  # Which batch they're class teacher of
     has_duties = db.Column(db.Boolean, default=False)  # Has extra duties (sports, admin, etc.)?
@@ -134,6 +174,7 @@ class Teacher(db.Model):
             "email": self.email,
             "subject_ids": self.subject_ids or [],
             "assigned_batch_ids": self.assigned_batch_ids or [],
+            "unavailable_slots": self.unavailable_slots or [],
             "is_class_teacher": self.is_class_teacher,
             "class_teacher_batch_id": self.class_teacher_batch_id,
             "has_duties": self.has_duties,

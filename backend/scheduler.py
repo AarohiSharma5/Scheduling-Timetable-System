@@ -13,7 +13,7 @@ Constraints:
 
 from datetime import time
 from typing import Dict, List, Tuple, Optional, Set
-from models import db, Teacher, Batch, Subject, SchoolConfig, Timetable, TimetableSlot
+from models import db, Teacher, Batch, Subject, SchoolConfig, Timetable, TimetableSlot, PinnedSlot
 
 # ============================================================================
 # DATA STRUCTURES FOR SCHEDULING
@@ -45,6 +45,24 @@ class Assignment:
     
     def __repr__(self):
         return f"T{self.teacher_id}->S{self.subject_id}->B{self.batch_id}"
+
+
+class Requirement:
+    """One (batch, subject) teaching need: a chosen teacher and weekly periods.
+
+    is_double marks lab/double subjects that must be placed as consecutive pairs.
+    """
+    def __init__(self, teacher_id: int, subject_id: int, batch_id: int,
+                 periods: int, is_double: bool):
+        self.teacher_id = teacher_id
+        self.subject_id = subject_id
+        self.batch_id = batch_id
+        self.periods = periods
+        self.is_double = is_double
+
+    def __repr__(self):
+        kind = "DBL" if self.is_double else "SGL"
+        return f"{kind} T{self.teacher_id}->S{self.subject_id}->B{self.batch_id}x{self.periods}"
 
 
 # ============================================================================
@@ -111,23 +129,30 @@ class SchedulingEngine:
             slots = self._calculate_available_slots(config)
             if not slots:
                 return False, ["No available time slots calculated"]
-            
-            # Step 5: Generate required assignments
-            assignments = self._calculate_required_assignments(batches, subjects, teachers)
-            if not assignments:
+
+            # Index slots for fast lookups + consecutive-period (double) search.
+            self._index_slots(slots)
+
+            # Step 5: Build per-teacher/subject constraint caches.
+            self._setup_caches(teachers, subjects)
+
+            # Step 6: Generate the (batch, subject) requirements.
+            requirements = self._calculate_requirements(batches, subjects, teachers)
+            if not requirements:
                 return False, ["No valid assignments generated"]
-            
-            # Step 6: Attempt scheduling with backtracking
-            success = self._schedule_assignments(
-                assignments, teachers, batches, subjects, slots, config
-            )
-            
-            if not success:
+
+            # Step 7: Place admin-locked (pinned) periods first, then schedule
+            # everything else around them honoring availability, spacing and
+            # double-period rules.
+            self._place_pinned(teachers)
+            self._schedule_requirements(requirements)
+
+            if self.conflicts:
                 self.warnings.append("Scheduling completed with conflicts")
-            
-            # Step 7: Save to database
+
+            # Step 8: Save to database
             self._save_timetable(timetable_id, config)
-            
+
             return True, self.warnings
         
         except Exception as e:
@@ -240,154 +265,232 @@ class SchedulingEngine:
     # ASSIGNMENT CALCULATION
     # ========================================================================
     
-    def _calculate_required_assignments(
-        self, batches, subjects, teachers
-    ) -> List[Assignment]:
-        """
-        Calculate all required subject-batch-teacher assignments
-        
-        For each batch:
-            For each subject in that batch:
-                Find a teacher who teaches that subject AND teaches that batch
-                Create an assignment for required_periods
-        """
-        assignments = []
-        
+    def _index_slots(self, slots: List[Period]):
+        """Index available slots for O(1) lookups and consecutive-period search."""
+        self.slots = slots
+        self.available = {(p.day, p.period_num) for p in slots}
+        self.slots_by_day = {}
+        self.days_in_order = []
+        for p in slots:
+            if p.day not in self.slots_by_day:
+                self.slots_by_day[p.day] = []
+                self.days_in_order.append(p.day)
+            self.slots_by_day[p.day].append(p.period_num)
+        for day in self.slots_by_day:
+            self.slots_by_day[day].sort()
+
+    def _setup_caches(self, teachers, subjects):
+        """Build constraint lookup caches (teacher limits, availability, spacing)."""
+        self.teacher_max = {t.id: (t.max_periods_per_week or 24) for t in teachers}
+        self.subject_periods = {s.id: s.periods_per_week for s in subjects}
+        self.subject_max_per_day = {
+            s.id: (getattr(s, "max_periods_per_day", None) or 1) for s in subjects
+        }
+        self.subject_double = {
+            s.id: bool(getattr(s, "requires_double", False)) for s in subjects
+        }
+
+        # Teacher availability: set of (day, period) the teacher cannot teach.
+        self.teacher_unavail = {}
+        for t in teachers:
+            blocked = set()
+            for entry in (t.unavailable_slots or []):
+                try:
+                    blocked.add((entry.get("day"), int(entry.get("period"))))
+                except (AttributeError, TypeError, ValueError):
+                    continue
+            self.teacher_unavail[t.id] = blocked
+
+        self.teacher_load = {t.id: 0 for t in teachers}
+        self.occupied = set()             # (day, period, batch_id)
+        self.teacher_busy = set()         # (teacher_id, day, period)
+        self.batch_day_subject = {}       # (batch_id, day, subject_id) -> count
+
+    # ========================================================================
+    # ASSIGNMENT CALCULATION
+    # ========================================================================
+
+    def _calculate_requirements(self, batches, subjects, teachers) -> List[Requirement]:
+        """Build one Requirement per (batch, subject) the batch needs."""
+        subject_by_id = {s.id: s for s in subjects}
+        requirements = []
+
         for batch in batches:
             self.batch_schedule[batch.id] = {}
-            
-            for subject_id in batch.subject_ids:
-                subject = Subject.query.get(subject_id)
+
+            for subject_id in (batch.subject_ids or []):
+                subject = subject_by_id.get(subject_id) or Subject.query.get(subject_id)
                 if not subject:
                     continue
-                
+
                 self.batch_schedule[batch.id][subject_id] = 0
-                
-                # Find teacher(s) who:
-                # 1. Teach this subject
-                # 2. Teach this batch
+
                 eligible_teachers = [
                     t for t in teachers
-                    if subject_id in t.subject_ids and batch.id in t.assigned_batch_ids
+                    if subject_id in (t.subject_ids or []) and batch.id in (t.assigned_batch_ids or [])
                 ]
-                
                 if not eligible_teachers:
                     self.warnings.append(
                         f"No teacher found for {subject.name} in Grade {batch.grade}-{batch.section}"
                     )
                     continue
-                
-                # Create assignment for the first eligible teacher
-                # (In production, could round-robin or balance load)
-                teacher = eligible_teachers[0]
-                assignment = Assignment(teacher.id, subject_id, batch.id)
-                
-                # Mark periods needed
-                for _ in range(subject.periods_per_week):
-                    assignments.append(assignment)
-        
-        # Sort by priority: critical subjects first
-        # (subjects with fewer period options get placed first)
-        assignments.sort(
-            key=lambda a: (a.subject_id, -a.periods_assigned),
-            reverse=False
-        )
-        
-        return assignments
-    
+
+                requirements.append(Requirement(
+                    teacher_id=eligible_teachers[0].id,
+                    subject_id=subject_id,
+                    batch_id=batch.id,
+                    periods=subject.periods_per_week,
+                    is_double=self.subject_double.get(subject_id, False),
+                ))
+
+        # Hardest-to-place first: doubles, then by subject for determinism.
+        requirements.sort(key=lambda r: (not r.is_double, r.subject_id))
+        return requirements
+
     # ========================================================================
-    # SCHEDULING WITH BACKTRACKING
+    # SCHEDULING
     # ========================================================================
-    
-    def _schedule_assignments(
-        self,
-        assignments: List[Assignment],
-        teachers,
-        batches,
-        subjects,
-        slots: List[Period],
-        config: SchoolConfig
-    ) -> bool:
-        """
-        Attempt to schedule all assignments using backtracking
-        
-        Algorithm:
-        1. For each assignment (teacher-subject-batch)
-        2. Try to find available slot
-        3. Check all constraints
-        4. If valid, commit; else backtrack
-        """
-        
-        # Build O(1) lookup caches so constraint checks don't hit the DB or
-        # iterate the whole timetable on every attempt (critical for a
-        # multi-hundred-batch school).
-        self.teacher_max = {t.id: (t.max_periods_per_week or 24) for t in teachers}
-        self.subject_periods = {s.id: s.periods_per_week for s in subjects}
-        for teacher in teachers:
-            self.teacher_load[teacher.id] = 0
 
-        # Fast conflict-tracking sets.
-        self.occupied = set()      # (day, period_num, batch_id) -> batch already busy
-        self.teacher_busy = set()  # (teacher_id, day, period_num) -> teacher already busy
-
-        # Try to assign each required period.
-        for assignment in assignments:
-            placed = False
-            for slot in slots:
-                if self._is_slot_valid(assignment, slot):
-                    # Key by (slot, batch_id) so every batch has its own grid;
-                    # the school can run many classes in the same period.
-                    self.timetable[(slot, assignment.batch_id)] = (
-                        assignment.teacher_id,
-                        assignment.subject_id,
-                        assignment.batch_id,
-                    )
-                    self.occupied.add((slot.day, slot.period_num, assignment.batch_id))
-                    self.teacher_busy.add((assignment.teacher_id, slot.day, slot.period_num))
-                    self.teacher_load[assignment.teacher_id] += 1
-                    self.batch_schedule[assignment.batch_id][assignment.subject_id] += 1
-                    placed = True
-                    break
-
-            if not placed:
-                self.conflicts.append(
-                    f"Could not place {assignment} - either teacher full or batch conflict"
-                )
-
-        # True only when everything fit; partial schedules still get saved.
-        return len(self.timetable) == len(assignments)
-
-    def _is_slot_valid(self, assignment: Assignment, slot: Period) -> bool:
-        """
-        Check all constraints for placing assignment at slot
-        
-        Constraints:
-        1. Batch not already busy at this (day, period)
-        2. Teacher not busy at this (day, period)
-        3. Teacher hasn't exceeded max periods
-        4. Subject doesn't exceed required periods for the batch
-        """
-        teacher_id = assignment.teacher_id
-        batch_id = assignment.batch_id
-        subject_id = assignment.subject_id
-
-        # Constraint 1: this batch already has a class in this slot.
-        if (slot.day, slot.period_num, batch_id) in self.occupied:
+    def _can_place(self, teacher_id, batch_id, subject_id, day, period, check_spacing=True) -> bool:
+        """Whether (teacher, subject) can occupy (day, period) for a batch."""
+        # Slot must exist (not lunch / within hours).
+        if (day, period) not in self.available:
             return False
-
-        # Constraint 2: this teacher is already teaching in this slot.
-        if (teacher_id, slot.day, slot.period_num) in self.teacher_busy:
+        # Batch already busy this slot.
+        if (day, period, batch_id) in self.occupied:
             return False
-
-        # Constraint 3: teacher max periods not exceeded.
+        # Teacher already teaching this slot.
+        if (teacher_id, day, period) in self.teacher_busy:
+            return False
+        # Teacher availability (hard constraint).
+        if (day, period) in self.teacher_unavail.get(teacher_id, ()):
+            return False
+        # Teacher weekly max.
         if self.teacher_load.get(teacher_id, 0) >= self.teacher_max.get(teacher_id, 24):
             return False
-
-        # Constraint 4: subject weekly quota for this batch not exceeded.
-        if self.batch_schedule[batch_id][subject_id] >= self.subject_periods.get(subject_id, 1):
+        # Subject weekly quota for this batch.
+        if self.batch_schedule[batch_id].get(subject_id, 0) >= self.subject_periods.get(subject_id, 1):
             return False
-
+        # Subject spacing: not too many of this subject in one day for the batch.
+        if check_spacing:
+            seen = self.batch_day_subject.get((batch_id, day, subject_id), 0)
+            if seen >= self.subject_max_per_day.get(subject_id, 1):
+                return False
         return True
+
+    def _commit(self, teacher_id, subject_id, batch_id, day, period):
+        """Record a placement in the timetable and all tracking caches."""
+        slot = Period(day, period)
+        self.timetable[(slot, batch_id)] = (teacher_id, subject_id, batch_id)
+        self.occupied.add((day, period, batch_id))
+        self.teacher_busy.add((teacher_id, day, period))
+        self.teacher_load[teacher_id] = self.teacher_load.get(teacher_id, 0) + 1
+        self.batch_schedule[batch_id][subject_id] = self.batch_schedule[batch_id].get(subject_id, 0) + 1
+        key = (batch_id, day, subject_id)
+        self.batch_day_subject[key] = self.batch_day_subject.get(key, 0) + 1
+
+    def _place_pinned(self, teachers):
+        """Place admin-locked periods before anything else."""
+        q = PinnedSlot.query
+        if self.organization_id is not None:
+            q = q.filter_by(organization_id=self.organization_id)
+        for ps in q.all():
+            day, period = ps.day, ps.period_number
+            if (day, period) not in self.available:
+                self.warnings.append(f"Pinned slot {day} P{period} is outside school hours (skipped)")
+                continue
+            if ps.batch_id not in self.batch_schedule:
+                self.warnings.append(f"Pinned slot references unknown batch {ps.batch_id} (skipped)")
+                continue
+
+            subject_id = ps.subject_id
+            teacher_id = ps.teacher_id
+            if not teacher_id:
+                eligible = [
+                    t for t in teachers
+                    if subject_id in (t.subject_ids or []) and ps.batch_id in (t.assigned_batch_ids or [])
+                ]
+                teacher_id = eligible[0].id if eligible else (teachers[0].id if teachers else None)
+            if teacher_id is None:
+                self.warnings.append(f"Pinned slot {day} P{period}: no teacher available (skipped)")
+                continue
+
+            # Track this subject for the batch even if it wasn't in batch.subject_ids.
+            self.batch_schedule[ps.batch_id].setdefault(subject_id, 0)
+            self.subject_periods.setdefault(subject_id, 1)
+            self.subject_max_per_day.setdefault(subject_id, 1)
+
+            if (day, period, ps.batch_id) in self.occupied or (teacher_id, day, period) in self.teacher_busy:
+                self.warnings.append(f"Pinned slot {day} P{period} conflicts with another pin (skipped)")
+                continue
+
+            self._commit(teacher_id, subject_id, ps.batch_id, day, period)
+
+    def _schedule_requirements(self, requirements: List[Requirement]):
+        """Place each requirement's remaining periods (singles or doubles)."""
+        for req in requirements:
+            already = self.batch_schedule[req.batch_id].get(req.subject_id, 0)
+            remaining = self.subject_periods.get(req.subject_id, req.periods) - already
+            if remaining <= 0:
+                continue
+            if req.is_double and remaining >= 2:
+                self._place_doubles(req, remaining)
+            else:
+                self._place_singles(req, remaining)
+
+    def _place_singles(self, req: Requirement, remaining: int):
+        """Place `remaining` single periods for a requirement, one per slot."""
+        placed = 0
+        for slot in self.slots:
+            if placed >= remaining:
+                break
+            if self._can_place(req.teacher_id, req.batch_id, req.subject_id, slot.day, slot.period_num):
+                self._commit(req.teacher_id, req.subject_id, req.batch_id, slot.day, slot.period_num)
+                placed += 1
+        if placed < remaining:
+            self.conflicts.append(
+                f"Could only place {placed}/{remaining} periods of subject {req.subject_id} "
+                f"for batch {req.batch_id}"
+            )
+
+    def _place_doubles(self, req: Requirement, remaining: int):
+        """Place lab/double subjects as consecutive pairs (one block per day)."""
+        pairs_needed = remaining // 2
+        leftover_single = remaining % 2
+        pairs_placed = 0
+
+        for day in self.days_in_order:
+            if pairs_placed >= pairs_needed:
+                break
+            # One double block of a subject per day for a batch.
+            if self.batch_day_subject.get((req.batch_id, day, req.subject_id), 0) > 0:
+                continue
+            # Weekly quota must allow two more.
+            if self.batch_schedule[req.batch_id].get(req.subject_id, 0) + 2 > self.subject_periods.get(req.subject_id, 1):
+                break
+
+            periods = self.slots_by_day.get(day, [])
+            for i in range(len(periods) - 1):
+                p1, p2 = periods[i], periods[i + 1]
+                if p2 != p1 + 1:
+                    continue  # must be back-to-back (no lunch gap between)
+                # Spacing is enforced by the one-block-per-day guard above, so we
+                # skip the per-day spacing check for the pair itself.
+                if (self._can_place(req.teacher_id, req.batch_id, req.subject_id, day, p1, check_spacing=False)
+                        and self._can_place(req.teacher_id, req.batch_id, req.subject_id, day, p2, check_spacing=False)):
+                    self._commit(req.teacher_id, req.subject_id, req.batch_id, day, p1)
+                    self._commit(req.teacher_id, req.subject_id, req.batch_id, day, p2)
+                    pairs_placed += 1
+                    break
+
+        if leftover_single:
+            self._place_singles(req, 1)
+
+        if pairs_placed < pairs_needed:
+            self.conflicts.append(
+                f"Could only place {pairs_placed}/{pairs_needed} double-period blocks of "
+                f"subject {req.subject_id} for batch {req.batch_id}"
+            )
     
     # ========================================================================
     # DATABASE SAVING

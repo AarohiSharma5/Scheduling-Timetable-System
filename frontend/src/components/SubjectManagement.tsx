@@ -5,6 +5,8 @@ interface Subject {
   id: number;
   name: string;
   periods_per_week: number;
+  max_periods_per_day: number;
+  requires_double: boolean;
 }
 
 export default function SubjectManagement() {
@@ -17,6 +19,8 @@ export default function SubjectManagement() {
   const [formData, setFormData] = useState({
     name: "",
     periods_per_week: 3,
+    max_periods_per_day: 1,
+    requires_double: false,
   });
 
   useEffect(() => {
@@ -67,6 +71,8 @@ export default function SubjectManagement() {
     setFormData({
       name: subject.name,
       periods_per_week: subject.periods_per_week,
+      max_periods_per_day: subject.max_periods_per_day ?? 1,
+      requires_double: subject.requires_double ?? false,
     });
     setEditingId(subject.id);
     setShowForm(true);
@@ -76,6 +82,8 @@ export default function SubjectManagement() {
     setFormData({
       name: "",
       periods_per_week: 3,
+      max_periods_per_day: 1,
+      requires_double: false,
     });
     setEditingId(null);
     setShowForm(false);
@@ -117,6 +125,27 @@ export default function SubjectManagement() {
               max="10"
               required
             />
+            <div>
+              <label className="block text-sm font-medium mb-1">Max periods per day (spacing)</label>
+              <input
+                type="number"
+                value={formData.max_periods_per_day}
+                onChange={(e) => setFormData({ ...formData, max_periods_per_day: Number(e.target.value) })}
+                className="border rounded px-3 py-2 w-full"
+                min="1"
+                max="4"
+              />
+              <p className="text-xs text-slate-500 mt-1">1 = never twice in a day / no back-to-back.</p>
+            </div>
+            <label className="flex items-center mt-6">
+              <input
+                type="checkbox"
+                checked={formData.requires_double}
+                onChange={(e) => setFormData({ ...formData, requires_double: e.target.checked, max_periods_per_day: e.target.checked ? Math.max(2, formData.max_periods_per_day) : formData.max_periods_per_day })}
+                className="mr-2"
+              />
+              Lab / double period (schedule as consecutive pairs)
+            </label>
           </div>
 
           <div className="flex gap-2">
@@ -136,6 +165,8 @@ export default function SubjectManagement() {
             <tr>
               <th className="px-4 py-2 text-left">Subject</th>
               <th className="px-4 py-2 text-left">Periods/Week</th>
+              <th className="px-4 py-2 text-left">Max/Day</th>
+              <th className="px-4 py-2 text-left">Type</th>
               <th className="px-4 py-2 text-left">Actions</th>
             </tr>
           </thead>
@@ -144,6 +175,14 @@ export default function SubjectManagement() {
               <tr key={subject.id} className="border-b hover:bg-slate-50">
                 <td className="px-4 py-2">{subject.name}</td>
                 <td className="px-4 py-2">{subject.periods_per_week}</td>
+                <td className="px-4 py-2">{subject.max_periods_per_day ?? 1}</td>
+                <td className="px-4 py-2">
+                  {subject.requires_double ? (
+                    <span className="inline-block bg-purple-100 text-purple-700 text-xs px-2 py-0.5 rounded">Lab / double</span>
+                  ) : (
+                    <span className="text-slate-400 text-xs">Regular</span>
+                  )}
+                </td>
                 <td className="px-4 py-2 space-x-2">
                   <button onClick={() => handleEdit(subject)} className="text-blue-600 hover:underline text-sm">
                     Edit

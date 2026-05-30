@@ -8,8 +8,9 @@ import ConfigurationForm from "../components/ConfigurationForm";
 import TimetableGenerator from "../components/TimetableGenerator";
 import LeaveManagement from "../components/LeaveManagement";
 import NotificationsCenter from "../components/NotificationsCenter";
+import PinnedSlotsManager from "../components/PinnedSlotsManager";
 
-type Tab = "timetable" | "students" | "teachers" | "batches" | "subjects" | "leaves" | "notifications" | "config";
+type Tab = "timetable" | "students" | "teachers" | "batches" | "subjects" | "pinned" | "leaves" | "notifications" | "config";
 
 const tabs: Record<Tab, { icon: string; label: string }> = {
   timetable: { icon: "📊", label: "Timetable" },
@@ -17,6 +18,7 @@ const tabs: Record<Tab, { icon: string; label: string }> = {
   teachers: { icon: "👨‍🏫", label: "Teachers" },
   batches: { icon: "📚", label: "Batches" },
   subjects: { icon: "📖", label: "Subjects" },
+  pinned: { icon: "📌", label: "Fixed Periods" },
   leaves: { icon: "📋", label: "Leave Requests" },
   notifications: { icon: "🔔", label: "Notifications" },
   config: { icon: "⚙️", label: "Configuration" },
@@ -72,6 +74,7 @@ export default function AdminPage() {
           {activeTab === "teachers" && <TeacherManagement />}
           {activeTab === "batches" && <BatchManagement />}
           {activeTab === "subjects" && <SubjectManagement />}
+          {activeTab === "pinned" && <PinnedSlotsManager />}
           {activeTab === "leaves" && <LeaveManagement />}
           {activeTab === "notifications" && <NotificationsCenter />}
           {activeTab === "config" && <ConfigurationForm />}
