@@ -336,7 +336,7 @@ def publish_timetable(timetable_id):
     }), 200
 
 
-@timetable_bp.route("/<int:timetable_id>/delete", methods=["DELETE"])
+@timetable_bp.route("/<int:timetable_id>", methods=["DELETE"])
 @token_required
 @role_required("admin")
 def delete_timetable(timetable_id):

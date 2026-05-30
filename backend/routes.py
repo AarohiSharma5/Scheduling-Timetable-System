@@ -939,27 +939,11 @@ def get_timetables():
     return jsonify([t.to_dict() for t in timetables]), 200
 
 
-@api.route("/timetable/<int:timetable_id>", methods=["GET"])
-@role_required("admin", "principal", "teacher", "student")
-def get_timetable(timetable_id):
-    """Get a specific timetable with all slots"""
-    timetable = owned_or_404(Timetable, timetable_id)
-    return jsonify(timetable.to_dict(include_slots=True)), 200
-
-
-@api.route("/timetable/<int:timetable_id>/publish", methods=["POST"])
-@role_required("admin")
-def publish_timetable(timetable_id):
-    """Publish a timetable"""
-    try:
-        timetable = owned_or_404(Timetable, timetable_id)
-        timetable.status = "published"
-        timetable.published_at = datetime.utcnow()
-        db.session.commit()
-        return jsonify(timetable.to_dict()), 200
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({"error": str(e)}), 500
+# NOTE: GET /api/timetable/<id> and POST /api/timetable/<id>/publish are NOT
+# defined here. They previously duplicated (and ambiguously shadowed) the
+# richer handlers in timetable_routes.py (blueprint `timetable_bp`), which
+# return slots organized by batch and are organization-scoped. The duplicates
+# were removed so `timetable_bp` is the single source of truth.
 
 
 # ============================================================================
