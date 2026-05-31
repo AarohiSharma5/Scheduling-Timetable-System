@@ -53,13 +53,17 @@ def generate_timetable():
         org_id = _org_id()
         name = data.get("name", f"Timetable {datetime.utcnow().isoformat()}")
         description = data.get("description", "")
-        # Create new timetable record (tagged with the caller's organization)
+
+        # Each generation is a new draft version, so the admin keeps a short
+        # history to compare/roll back to. Older drafts are pruned after commit
+        # (see DRAFT_HISTORY_LIMIT below) so storage stays bounded no matter how
+        # many times they regenerate. Published timetables are never pruned.
         timetable = Timetable(
             organization_id=org_id,
             name=name,
             description=description,
             status="draft",
-            generated_at=datetime.utcnow()
+            generated_at=datetime.utcnow(),
         )
         db.session.add(timetable)
         db.session.flush()  # Get ID without committing
@@ -73,7 +77,22 @@ def generate_timetable():
                 "details": warnings
             }), 400
         db.session.commit()
-        
+
+        # Retain only the most recent N draft versions as history; prune older
+        # drafts (their slots cascade-delete) to keep the database bounded.
+        DRAFT_HISTORY_LIMIT = 5
+        stale_drafts = (
+            Timetable.query
+            .filter_by(organization_id=org_id, status="draft")
+            .order_by(Timetable.generated_at.desc())
+            .offset(DRAFT_HISTORY_LIMIT)
+            .all()
+        )
+        if stale_drafts:
+            for old in stale_drafts:
+                db.session.delete(old)
+            db.session.commit()
+
         # Count generated slots
         slots_count = TimetableSlot.query.filter_by(timetable_id=timetable.id).count()
         return jsonify({
