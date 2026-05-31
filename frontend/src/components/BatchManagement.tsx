@@ -23,9 +23,46 @@ export default function BatchManagement() {
     periods_per_day: "" as number | "",
   });
 
+  // "Set day length by grade" controls.
+  const [bulkGrade, setBulkGrade] = useState("");
+  const [bulkPeriods, setBulkPeriods] = useState<number | "">("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkMsg, setBulkMsg] = useState("");
+
   useEffect(() => {
     loadData();
   }, []);
+
+  // Distinct grades, in the order they first appear.
+  const grades = batches.reduce<string[]>((acc, b) => {
+    if (!acc.includes(b.grade)) acc.push(b.grade);
+    return acc;
+  }, []);
+
+  const applyBulkDayLength = async () => {
+    if (!bulkGrade) return;
+    setBulkBusy(true);
+    setBulkMsg("");
+    setError("");
+    try {
+      const targets = batches.filter((b) => b.grade === bulkGrade);
+      const value = bulkPeriods === "" ? null : Number(bulkPeriods);
+      await Promise.all(
+        targets.map((b) => api.admin.batches.update(b.id, { periods_per_day: value }))
+      );
+      await loadData();
+      setBulkMsg(
+        `Updated ${targets.length} section(s) of grade ${bulkGrade} to ${
+          value === null ? "full day (school default)" : `${value} periods/day`
+        }.`
+      );
+    } catch (err) {
+      setError("Failed to bulk-update day length");
+      console.error(err);
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -157,6 +194,51 @@ export default function BatchManagement() {
           </div>
         </form>
       )}
+
+      {/* Set day length for a whole grade at once (younger grades end earlier) */}
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+        <h3 className="font-semibold text-slate-900 mb-1">Set day length by grade</h3>
+        <p className="text-sm text-slate-600 mb-3">
+          Choose how many periods a grade runs each day. Leave the number blank to use the
+          school-wide day. This is what lets younger grades finish earlier.
+        </p>
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Grade</label>
+            <select
+              value={bulkGrade}
+              onChange={(e) => setBulkGrade(e.target.value)}
+              className="border rounded px-3 py-2"
+            >
+              <option value="">Select grade…</option>
+              {grades.map((g) => (
+                <option key={g} value={g}>{g}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Periods/day</label>
+            <input
+              type="number"
+              min="1"
+              max="12"
+              placeholder="blank = full day"
+              value={bulkPeriods}
+              onChange={(e) => setBulkPeriods(e.target.value ? Number(e.target.value) : "")}
+              className="border rounded px-3 py-2 w-40"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={applyBulkDayLength}
+            disabled={!bulkGrade || bulkBusy}
+            className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded"
+          >
+            {bulkBusy ? "Applying…" : "Apply to grade"}
+          </button>
+        </div>
+        {bulkMsg && <p className="text-sm text-green-700 mt-2">{bulkMsg}</p>}
+      </div>
 
       <div className="bg-white rounded-lg shadow-md overflow-hidden">
         <table className="w-full">
