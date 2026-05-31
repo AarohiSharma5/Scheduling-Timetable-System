@@ -76,6 +76,12 @@ LAST_NAMES = [
 ]
 
 SUBJECTS_DATA = [
+    # Pre-primary (Nursery / LKG / UKG) — activity-led, short day.
+    ("SUB21", "Rhymes & Poems", "RHY", "PrePrimary", ["Nursery", "LKG", "UKG"]),
+    ("SUB22", "Story Time", "STO", "PrePrimary", ["Nursery", "LKG", "UKG"]),
+    ("SUB23", "Numbers & Counting", "NUM", "PrePrimary", ["Nursery", "LKG", "UKG"]),
+    ("SUB24", "Alphabets & Phonics", "ALP", "PrePrimary", ["Nursery", "LKG", "UKG"]),
+    ("SUB25", "Drawing & Play", "DRW", "PrePrimary", ["Nursery", "LKG", "UKG"]),
     ("SUB01", "English", "ENG", "Core", ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11 Science", "11 Commerce", "11 Humanities", "12 Science", "12 Commerce", "12 Humanities"]),
     ("SUB02", "Hindi", "HIN", "Core", ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]),
     ("SUB03", "Mathematics", "MTH", "Core", ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11 Science", "11 Commerce", "12 Science", "12 Commerce"]),
@@ -177,15 +183,19 @@ def seed_database():
         # 1. SCHOOL CONFIGURATION
         # =====================================================================
         print("⚙️  Setting up school configuration...")
+        # 08:00–14:00 with 45-min periods = 8 period slots; period 5 (11:00–11:45)
+        # is lunch. periods_per_day is derived from the hours and kept here only
+        # as a cached value (the engine/PDF recompute it from the window).
         school_config = SchoolConfig(
             id=1,
             organization_id=org_id,
             start_time="08:00",
-            end_time="15:00",
-            lunch_start="12:00",
-            lunch_end="13:00",
+            end_time="14:00",
+            lunch_start="11:00",
+            lunch_end="11:45",
             period_duration=45,
-            periods_per_day=6,
+            periods_per_day=8,
+            has_lunch_break=True,
             working_days=5,
         )
         db.session.add(school_config)
@@ -228,6 +238,15 @@ def seed_database():
         # 4. BATCHES (CLASSES/SECTIONS)
         # =====================================================================
         print("\n📋 Creating batches (classes & sections)...")
+
+        def grade_day_length(grade):
+            """Younger grades have shorter days (fewer periods)."""
+            if grade in ("Nursery", "LKG", "UKG"):
+                return 4   # ends ~11:00, before lunch
+            if grade in ("1", "2", "3", "4", "5"):
+                return 6   # ends ~12:30
+            return 8       # full day to 14:00 for middle/secondary/senior
+
         batches = []
         for grade, grade_data in CLASS_DISTRIBUTION.items():
             for section in grade_data["sections"]:
@@ -235,7 +254,8 @@ def seed_database():
                     organization_id=org_id,
                     grade=grade,
                     section=section,
-                    student_count=grade_data["count"] // len(grade_data["sections"])
+                    student_count=grade_data["count"] // len(grade_data["sections"]),
+                    periods_per_day=grade_day_length(grade),
                 )
                 db.session.add(batch)
                 batches.append(batch)
@@ -257,10 +277,14 @@ def seed_database():
         # it's a lab, which needs two consecutive periods.
         LAB_SUBJECTS = {"Computer Science", "Physics", "Chemistry", "Biology"}
 
+        # Weekly periods per subject type. Pre-primary subjects get 4 each so the
+        # 5 pre-primary subjects fill a short 4-period × 5-day junior week.
+        PERIODS_BY_TYPE = {"Core": 5, "Language": 4, "Practical": 4, "PrePrimary": 4, "Activity": 2}
+
         subjects = []
         subject_by_name = {}
         for _sid, name, _code, subject_type, applicable_classes in SUBJECTS_DATA:
-            periods = 5 if subject_type == "Core" else 2
+            periods = PERIODS_BY_TYPE.get(subject_type, 3)
             applicable_batches = []
             for grade in applicable_classes:
                 applicable_batches.extend(grade_to_batches.get(grade, []))
@@ -512,14 +536,33 @@ def seed_database():
                 if sid in teachers_for_subject:
                     teachers_for_subject[sid].append(t)
 
-        # Any subject with no teacher at all gets teachers assigned round-robin.
+        # Size each subject's teacher pool to its real weekly demand so no single
+        # teacher is asked to cover more sections than their weekly max allows.
+        # demand = periods/week × number of sections taking the subject; with a
+        # ~20-period working budget per teacher we need ceil(demand / 20) of them.
+        import math
+        batches_per_subject = {s.id: 0 for s in subjects}
+        for b in batches:
+            for sid in (b.subject_ids or []):
+                if sid in batches_per_subject:
+                    batches_per_subject[sid] += 1
+
+        TEACHER_BUDGET = 20  # periods/week we plan per teacher (max is 24, leave slack)
         rr = 0
         for s in subjects:
-            if not teachers_for_subject[s.id]:
+            demand = (s.periods_per_week or 1) * batches_per_subject.get(s.id, 0)
+            needed = max(1, math.ceil(demand / TEACHER_BUDGET))
+            # Add teachers (round-robin across the whole staff) until the pool is
+            # big enough; skip anyone already in this subject's pool.
+            guard = 0
+            while len(teachers_for_subject[s.id]) < needed and guard < len(teachers) * 2:
                 t = teachers[rr % len(teachers)]
                 rr += 1
-                t.subject_ids = list(t.subject_ids or []) + [s.id]
-                teachers_for_subject[s.id].append(t)
+                guard += 1
+                if t not in teachers_for_subject[s.id]:
+                    if s.id not in (t.subject_ids or []):
+                        t.subject_ids = list(t.subject_ids or []) + [s.id]
+                    teachers_for_subject[s.id].append(t)
 
         # For each batch+subject pair, make sure a teacher of that subject is
         # assigned to the batch (spread the load round-robin within each pool).

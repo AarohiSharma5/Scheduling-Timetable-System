@@ -69,6 +69,9 @@ class Batch(db.Model):
     section = db.Column(db.String(10), nullable=False)  # e.g., "A", "B", "C"
     student_count = db.Column(db.Integer, default=0)
     subject_ids = db.Column(db.JSON, default=list)  # List of subject IDs
+    # Optional per-class day length. null = use the school-wide number of periods.
+    # Lets younger grades finish earlier than seniors (e.g. pre-primary = 4 periods).
+    periods_per_day = db.Column(db.Integer)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -79,6 +82,7 @@ class Batch(db.Model):
             "section": self.section,
             "student_count": self.student_count,
             "subject_ids": self.subject_ids or [],
+            "periods_per_day": self.periods_per_day,
             "display_name": f"Grade {self.grade} - Section {self.section}",
         }
 
@@ -194,7 +198,10 @@ class SchoolConfig(db.Model):
     lunch_start = db.Column(db.String(10), default="12:00")
     lunch_end = db.Column(db.String(10), default="13:00")
     period_duration = db.Column(db.Integer, default=45)  # minutes
-    periods_per_day = db.Column(db.Integer, default=6)
+    periods_per_day = db.Column(db.Integer, default=6)  # derived from hours/duration on save
+    # When True, one period is reserved for lunch; when False the day is compact
+    # (back-to-back classes), which is common for younger grades / many schools.
+    has_lunch_break = db.Column(db.Boolean, nullable=False, default=True)
     working_days = db.Column(db.Integer, default=5)  # Mon-Fri = 5
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -208,6 +215,7 @@ class SchoolConfig(db.Model):
             "lunch_end": self.lunch_end,
             "period_duration": self.period_duration,
             "periods_per_day": self.periods_per_day,
+            "has_lunch_break": self.has_lunch_break,
             "working_days": self.working_days,
         }
 

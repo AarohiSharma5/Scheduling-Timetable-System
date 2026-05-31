@@ -59,8 +59,25 @@ class TimetablePDFExporter:
         working = max(1, min(working or 5, len(WEEK_DAYS)))
         return WEEK_DAYS[:working]
 
-    def _periods_per_day(self):
-        return self.school_config.periods_per_day if self.school_config else 6
+    def _full_layout(self):
+        """Full school-day period rows (number/start/end/is_lunch)."""
+        from period_utils import build_layout
+        if not self.school_config:
+            return [{"number": i, "start": "", "end": "", "is_lunch": False} for i in range(1, 7)]
+        return build_layout(self.school_config)
+
+    def _batch_layout(self, batch):
+        """Period rows for one class, capped to that class's day length."""
+        from period_utils import build_layout, batch_period_count
+        if not self.school_config:
+            return self._full_layout()
+        return build_layout(self.school_config, count=batch_period_count(batch, self.school_config))
+
+    def _row_label(self, row):
+        """'Period N\\n(HH:MM)' label for a layout row."""
+        if row.get("start"):
+            return f"Period {row['number']}\n({row['start']})"
+        return f"Period {row['number']}"
 
     def _batch_label(self, batch):
         if not batch:
@@ -93,23 +110,6 @@ class TimetablePDFExporter:
         ))
         story.append(Spacer(1, 0.15 * inch))
         return story
-
-    def _get_time_periods(self):
-        """List of 'Period N (HH:MM)' labels sized to periods_per_day."""
-        periods = []
-        ppd = self._periods_per_day()
-        if self.school_config and self.school_config.start_time:
-            try:
-                start_hour, start_min = map(int, self.school_config.start_time.split(':'))
-            except (ValueError, AttributeError):
-                start_hour, start_min = 8, 0
-            duration = self.school_config.period_duration or 45
-            for i in range(1, ppd + 1):
-                total = (start_hour * 60 + start_min) + (i - 1) * duration
-                periods.append(f"Period {i}\n({total // 60:02d}:{total % 60:02d})")
-        else:
-            periods = [f"Period {i}" for i in range(1, ppd + 1)]
-        return periods
 
     # ------------------------------------------------------------------
     # Batch-wise
@@ -153,7 +153,7 @@ class TimetablePDFExporter:
             story.append(Paragraph(meta, self._meta_style()))
 
             slots = TimetableSlot.query.filter_by(batch_id=batch.id, timetable_id=self.timetable.id).all()
-            table_data = self._build_batch_table(slots)
+            table_data = self._build_batch_table(slots, batch)
             story.append(self._make_table(table_data))
             story.append(Spacer(1, 0.25 * inch))
 
@@ -161,17 +161,18 @@ class TimetablePDFExporter:
         buffer.seek(0)
         return buffer
 
-    def _build_batch_table(self, slots):
+    def _build_batch_table(self, slots, batch):
         days = self._days()
-        periods = self._get_time_periods()
+        layout = self._batch_layout(batch)
         slot_map = {(s.day, s.period_number): s for s in slots}
 
         table_data = [["Period"] + days]
-        for period_num in range(1, self._periods_per_day() + 1):
-            row = [periods[period_num - 1]]
+        for row_def in layout:
+            period_num = row_def["number"]
+            row = [self._row_label(row_def)]
             for day in days:
                 slot = slot_map.get((day, period_num))
-                if slot and slot.is_lunch:
+                if row_def["is_lunch"] or (slot and slot.is_lunch):
                     row.append("LUNCH")
                 elif slot and slot.teacher_id:
                     subject = self._subject_by_id.get(slot.subject_id)
@@ -233,17 +234,18 @@ class TimetablePDFExporter:
 
     def _build_teacher_table(self, slots):
         days = self._days()
-        periods = self._get_time_periods()
+        layout = self._full_layout()
         slot_map = {(s.day, s.period_number): s for s in slots}
 
         table_data = [["Period"] + days]
-        for period_num in range(1, self._periods_per_day() + 1):
-            row = [periods[period_num - 1]]
+        for row_def in layout:
+            period_num = row_def["number"]
+            row = [self._row_label(row_def)]
             for day in days:
                 slot = slot_map.get((day, period_num))
-                if slot and slot.is_lunch:
+                if row_def["is_lunch"] or (slot and slot.is_lunch):
                     row.append("LUNCH")
-                elif slot and slot.batch_id:
+                elif slot and slot.batch_id and not slot.is_lunch:
                     subject = self._subject_by_id.get(slot.subject_id)
                     batch = self._batch_by_id.get(slot.batch_id)
                     subject_name = subject.name if subject else "---"

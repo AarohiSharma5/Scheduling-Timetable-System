@@ -6,6 +6,7 @@ interface Batch {
   grade: string;
   section: string;
   student_count: number;
+  periods_per_day: number | null;
 }
 
 export default function BatchManagement() {
@@ -19,6 +20,7 @@ export default function BatchManagement() {
     grade: "",
     section: "",
     student_count: 30,
+    periods_per_day: "" as number | "",
   });
 
   useEffect(() => {
@@ -70,6 +72,7 @@ export default function BatchManagement() {
       grade: batch.grade,
       section: batch.section,
       student_count: batch.student_count,
+      periods_per_day: batch.periods_per_day ?? "",
     });
     setEditingId(batch.id);
     setShowForm(true);
@@ -80,6 +83,7 @@ export default function BatchManagement() {
       grade: "",
       section: "",
       student_count: 30,
+      periods_per_day: "",
     });
     setEditingId(null);
     setShowForm(false);
@@ -102,7 +106,7 @@ export default function BatchManagement() {
 
       {showForm && (
         <form onSubmit={handleSubmit} className="bg-white p-6 rounded-lg shadow-md space-y-4">
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <input
               type="text"
               placeholder="Grade (e.g., 9, 10, 11, 12)"
@@ -129,6 +133,18 @@ export default function BatchManagement() {
               max="100"
               required
             />
+            <div>
+              <input
+                type="number"
+                placeholder="Periods/day (blank = full day)"
+                value={formData.periods_per_day}
+                onChange={(e) => setFormData({ ...formData, periods_per_day: e.target.value ? Number(e.target.value) : "" })}
+                className="border rounded px-3 py-2 w-full"
+                min="1"
+                max="12"
+              />
+              <p className="text-xs text-slate-500 mt-1">Shorter day for juniors. Blank = school default.</p>
+            </div>
           </div>
 
           <div className="flex gap-2">
@@ -149,6 +165,7 @@ export default function BatchManagement() {
               <th className="px-4 py-2 text-left">Grade</th>
               <th className="px-4 py-2 text-left">Section</th>
               <th className="px-4 py-2 text-left">Students</th>
+              <th className="px-4 py-2 text-left">Periods/Day</th>
               <th className="px-4 py-2 text-left">Actions</th>
             </tr>
           </thead>
@@ -158,6 +175,7 @@ export default function BatchManagement() {
                 <td className="px-4 py-2">{batch.grade}</td>
                 <td className="px-4 py-2">{batch.section}</td>
                 <td className="px-4 py-2">{batch.student_count}</td>
+                <td className="px-4 py-2">{batch.periods_per_day ?? <span className="text-slate-400">full day</span>}</td>
                 <td className="px-4 py-2 space-x-2">
                   <button onClick={() => handleEdit(batch)} className="text-blue-600 hover:underline text-sm">
                     Edit

@@ -133,6 +133,14 @@ class SchedulingEngine:
             # Index slots for fast lookups + consecutive-period (double) search.
             self._index_slots(slots)
 
+            # Per-class day length (younger grades finish earlier) + lunch info,
+            # used by constraint checks and when saving the grid.
+            from period_utils import batch_period_count, lunch_period_index, has_lunch
+            self.config = config
+            self.batch_periods = {b.id: batch_period_count(b, config) for b in batches}
+            self.lunch_idx = lunch_period_index(config)
+            self.lunch_enabled = has_lunch(config)
+
             # Step 5: Build per-teacher/subject constraint caches.
             self._setup_caches(teachers, subjects)
 
@@ -218,48 +226,23 @@ class SchedulingEngine:
     # ========================================================================
     
     def _calculate_available_slots(self, config: SchoolConfig) -> List[Period]:
+        """All schedulable (day, period) slots for the full school day.
+
+        Period count is derived from the school hours and period duration (so an
+        08:00–14:00 day with 45-min periods always yields 8 slots), and the lunch
+        period — if enabled — is excluded. Per-class day-length limits are applied
+        later in `_can_place`.
         """
-        Calculate all available time slots considering:
-        - Working days (e.g., Mon-Fri = 5 days)
-        - Periods per day (e.g., 6 periods)
-        - Lunch break exclusion
-        
-        Returns: List of Period objects representing available slots
-        """
-        days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        available_days = days[:config.working_days]
-        
+        from period_utils import build_layout, working_days
+
+        days = working_days(config)
         slots = []
-        lunch_period_start = self._get_lunch_period_start(config)
-        lunch_period_end = self._get_lunch_period_end(config)
-        
-        for day in available_days:
-            for period in range(1, config.periods_per_day + 1):
-                # Skip lunch period
-                if lunch_period_start <= period <= lunch_period_end:
+        for day in days:
+            for row in build_layout(config):
+                if row["is_lunch"]:
                     continue
-                
-                slots.append(Period(day, period))
-        
+                slots.append(Period(day, row["number"]))
         return slots
-    
-    def _get_lunch_period_start(self, config: SchoolConfig) -> int:
-        """Calculate which period lunch starts"""
-        start = time.fromisoformat(config.start_time)
-        lunch_start = time.fromisoformat(config.lunch_start)
-        
-        minutes_elapsed = (lunch_start.hour - start.hour) * 60 + (lunch_start.minute - start.minute)
-        period = (minutes_elapsed // config.period_duration) + 1
-        return period
-    
-    def _get_lunch_period_end(self, config: SchoolConfig) -> int:
-        """Calculate which period lunch ends"""
-        start = time.fromisoformat(config.start_time)
-        lunch_end = time.fromisoformat(config.lunch_end)
-        
-        minutes_elapsed = (lunch_end.hour - start.hour) * 60 + (lunch_end.minute - start.minute)
-        period = (minutes_elapsed // config.period_duration)
-        return period
     
     # ========================================================================
     # ASSIGNMENT CALCULATION
@@ -355,6 +338,10 @@ class SchedulingEngine:
         """Whether (teacher, subject) can occupy (day, period) for a batch."""
         # Slot must exist (not lunch / within hours).
         if (day, period) not in self.available:
+            return False
+        # Per-class day length: junior grades stop after fewer periods.
+        limit = self.batch_periods.get(batch_id)
+        if limit is not None and period > limit:
             return False
         # Batch already busy this slot.
         if (day, period, batch_id) in self.occupied:
@@ -529,7 +516,23 @@ class SchedulingEngine:
                 subject_id=subject_id
             )
             db.session.add(timetable_slot)
-        
+
+        # Persist explicit LUNCH slots so the break is visible in grids/PDFs
+        # (only for classes whose day is long enough to reach the lunch period).
+        if getattr(self, "lunch_enabled", False) and getattr(self, "lunch_idx", None):
+            from period_utils import working_days
+            for day in working_days(config):
+                for batch_id, limit in self.batch_periods.items():
+                    if limit is not None and self.lunch_idx <= limit:
+                        db.session.add(TimetableSlot(
+                            organization_id=self.organization_id,
+                            timetable_id=timetable_id,
+                            day=day,
+                            period_number=self.lunch_idx,
+                            batch_id=batch_id,
+                            is_lunch=True,
+                        ))
+
         db.session.commit()
 
 

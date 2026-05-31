@@ -625,7 +625,9 @@ def update_school_config():
         for field in ("start_time", "end_time", "lunch_start", "lunch_end"):
             if field in data and not _valid_time(data[field]):
                 errors.append(f"{field} must be a valid HH:MM time")
-        for field in ("period_duration", "periods_per_day", "working_days"):
+        # periods_per_day is no longer accepted from the client — it is derived
+        # from the school hours so the timetable always matches the stated day.
+        for field in ("period_duration", "working_days"):
             if field in data:
                 val = data[field]
                 if not isinstance(val, int) or val <= 0:
@@ -645,9 +647,16 @@ def update_school_config():
         if "lunch_start" in data: config.lunch_start = data["lunch_start"]
         if "lunch_end" in data: config.lunch_end = data["lunch_end"]
         if "period_duration" in data: config.period_duration = data["period_duration"]
-        if "periods_per_day" in data: config.periods_per_day = data["periods_per_day"]
         if "working_days" in data: config.working_days = data["working_days"]
-        
+        if "has_lunch_break" in data: config.has_lunch_break = bool(data["has_lunch_break"])
+
+        # Validate the window actually yields at least one period.
+        from period_utils import school_periods_per_day
+        if school_periods_per_day(config) < 1:
+            return jsonify({"error": "End time must be after start time by at least one period"}), 400
+        # Keep the stored period count in sync with the school hours.
+        config.periods_per_day = school_periods_per_day(config)
+
         config.updated_at = datetime.utcnow()
         db.session.add(config)
         db.session.commit()
@@ -847,6 +856,7 @@ def create_batch():
             grade=data.get("grade"),
             section=data.get("section"),
             student_count=data.get("student_count", 0),
+            periods_per_day=data.get("periods_per_day") or None,
             subject_ids=data.get("subject_ids", []),
         )
         db.session.add(batch)
@@ -876,6 +886,7 @@ def update_batch(batch_id):
         if "grade" in data: batch.grade = data["grade"]
         if "section" in data: batch.section = data["section"]
         if "student_count" in data: batch.student_count = data["student_count"]
+        if "periods_per_day" in data: batch.periods_per_day = data["periods_per_day"] or None
         if "subject_ids" in data: batch.subject_ids = data["subject_ids"]
         
         batch.updated_at = datetime.utcnow()
@@ -1221,10 +1232,11 @@ def export_batch_timetable(timetable_id):
                 return jsonify({"error": "Class not found"}), 404
             label = _safe_filename_part(f"Grade-{batch.grade}-{batch.section}")
 
+        org = Organization.query.get(org_id)
         pdf_buffer = export_batch_timetable(
             timetable_id,
             organization_id=org_id,
-            school_name=timetable.school_name or "School",
+            school_name=(org.name if org else None) or timetable.school_name or "School",
             batch_id=batch_id,
         )
 
@@ -1261,10 +1273,11 @@ def export_teacher_timetable(timetable_id):
                 return jsonify({"error": "Teacher not found"}), 404
             label = _safe_filename_part(teacher.teacher_code or teacher.name)
 
+        org = Organization.query.get(org_id)
         pdf_buffer = export_teacher_timetable(
             timetable_id,
             organization_id=org_id,
-            school_name=timetable.school_name or "School",
+            school_name=(org.name if org else None) or timetable.school_name or "School",
             teacher_id=teacher_id,
         )
 

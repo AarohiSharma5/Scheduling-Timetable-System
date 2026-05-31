@@ -9,8 +9,14 @@ interface SchoolConfig {
   lunch_end: string;
   period_duration: number;
   periods_per_day: number;
+  has_lunch_break: boolean;
   working_days: number;
 }
+
+const toMinutes = (t: string): number => {
+  const [h, m] = (t || "0:0").split(":").map(Number);
+  return (h || 0) * 60 + (m || 0);
+};
 
 export default function ConfigurationForm() {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -21,13 +27,21 @@ export default function ConfigurationForm() {
 
   const [formData, setFormData] = useState({
     start_time: "08:00",
-    end_time: "15:00",
-    lunch_start: "12:00",
-    lunch_end: "13:00",
+    end_time: "14:00",
+    lunch_start: "11:00",
+    lunch_end: "11:45",
     period_duration: 45,
-    periods_per_day: 6,
+    periods_per_day: 8,
+    has_lunch_break: true,
     working_days: 5,
   });
+
+  // Number of periods is derived from the school hours, not typed in — this is
+  // what guarantees the timetable actually runs the full day.
+  const computedPeriods = Math.max(
+    0,
+    Math.floor((toMinutes(formData.end_time) - toMinutes(formData.start_time)) / (formData.period_duration || 45))
+  );
 
   useEffect(() => {
     loadConfig();
@@ -103,28 +117,40 @@ export default function ConfigurationForm() {
         {/* Lunch Break */}
         <div>
           <h3 className="text-lg font-semibold text-slate-900 mb-4">Lunch Break</h3>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Lunch Start</label>
-              <input
-                type="time"
-                value={formData.lunch_start}
-                onChange={(e) => setFormData({ ...formData, lunch_start: e.target.value })}
-                className="border rounded px-3 py-2 w-full"
-                required
-              />
+          <label className="flex items-center gap-2 mb-4">
+            <input
+              type="checkbox"
+              checked={formData.has_lunch_break}
+              onChange={(e) => setFormData({ ...formData, has_lunch_break: e.target.checked })}
+            />
+            <span className="text-sm text-slate-700">
+              Reserve a lunch period (uncheck for a compact, back-to-back day)
+            </span>
+          </label>
+          {formData.has_lunch_break && (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Lunch Start</label>
+                <input
+                  type="time"
+                  value={formData.lunch_start}
+                  onChange={(e) => setFormData({ ...formData, lunch_start: e.target.value })}
+                  className="border rounded px-3 py-2 w-full"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Lunch End</label>
+                <input
+                  type="time"
+                  value={formData.lunch_end}
+                  onChange={(e) => setFormData({ ...formData, lunch_end: e.target.value })}
+                  className="border rounded px-3 py-2 w-full"
+                  required
+                />
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Lunch End</label>
-              <input
-                type="time"
-                value={formData.lunch_end}
-                onChange={(e) => setFormData({ ...formData, lunch_end: e.target.value })}
-                className="border rounded px-3 py-2 w-full"
-                required
-              />
-            </div>
-          </div>
+          )}
         </div>
 
         {/* Period Configuration */}
@@ -144,16 +170,11 @@ export default function ConfigurationForm() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Periods Per Day</label>
-              <input
-                type="number"
-                value={formData.periods_per_day}
-                onChange={(e) => setFormData({ ...formData, periods_per_day: Number(e.target.value) })}
-                className="border rounded px-3 py-2 w-full"
-                min="4"
-                max="12"
-                required
-              />
+              <label className="block text-sm font-medium text-slate-700 mb-1">Periods Per Day (auto)</label>
+              <div className="border rounded px-3 py-2 w-full bg-slate-100 text-slate-700">
+                {computedPeriods} {computedPeriods === 1 ? "period" : "periods"}
+              </div>
+              <p className="text-xs text-slate-500 mt-1">Computed from school hours ÷ period length.</p>
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Working Days</label>
@@ -168,6 +189,9 @@ export default function ConfigurationForm() {
               />
             </div>
           </div>
+          <p className="text-xs text-slate-500 mt-2">
+            Junior grades can finish earlier — set a shorter day per class under <strong>Batches</strong>.
+          </p>
         </div>
 
         {/* Summary */}
@@ -175,10 +199,11 @@ export default function ConfigurationForm() {
           <h4 className="font-semibold text-slate-900 mb-2">Summary</h4>
           <ul className="text-sm text-slate-700 space-y-1">
             <li>
-              📅 <strong>Daily Schedule:</strong> {formData.start_time} - {formData.end_time} ({formData.periods_per_day} periods × {formData.period_duration} min)
+              📅 <strong>Daily Schedule:</strong> {formData.start_time} - {formData.end_time} ({computedPeriods} periods × {formData.period_duration} min)
             </li>
             <li>
-              🍽️ <strong>Lunch Break:</strong> {formData.lunch_start} - {formData.lunch_end}
+              🍽️ <strong>Lunch Break:</strong>{" "}
+              {formData.has_lunch_break ? `${formData.lunch_start} - ${formData.lunch_end}` : "None (compact day)"}
             </li>
             <li>
               📆 <strong>Working Days:</strong> {formData.working_days} days/week
