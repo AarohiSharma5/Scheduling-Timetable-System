@@ -35,6 +35,7 @@ from student_service import (
     next_admission_no,
     choose_section,
     resequence_rolls,
+    fill_missing_rolls,
     section_strengths,
     sections_for_grade,
     student_code_allocator,
@@ -1472,26 +1473,47 @@ def create_student():
         if not _can_manage_scope(class_grade, section):
             return jsonify({"error": "Not allowed to manage this class/section"}), 403
 
+        # Respect an explicitly provided admission number (org's own pattern);
+        # otherwise auto-generate continuing the org's existing format.
+        provided_adm = (data.get("admission_number") or data.get("admission_no") or "").strip()
+        if provided_adm and Student.query.filter_by(admission_no=provided_adm).first():
+            return jsonify({"error": f"Admission number '{provided_adm}' already exists"}), 409
+
+        # Respect an explicitly provided roll number; otherwise auto-resequence.
+        provided_roll = data.get("roll_no")
+        explicit_roll = str(provided_roll).strip() not in ("", "None") if provided_roll is not None else False
+
         student = Student(
             organization_id=org_id,
             student_id=next_student_code(),
-            admission_no=next_admission_no(),
+            admission_no=provided_adm or next_admission_no(org_id),
             first_name=first,
             last_name=last,
-            email=(data.get("email") or None),
+            email=(data.get("email") or data.get("parent_email") or None),
             father_name=(data.get("father_name") or None),
             mother_name=(data.get("mother_name") or None),
             contact_number=(data.get("phone") or data.get("contact_number") or None),
             gender=(data.get("gender") or None),
             date_of_birth=_parse_date(data.get("date_of_birth")),
+            address=(data.get("address") or None),
+            blood_group=(data.get("blood_group") or None),
             class_grade=class_grade,
             section=section,
-            admission_date=_parse_date(data.get("joining_date")) or date.today(),
+            admission_date=_parse_date(data.get("joining_date") or data.get("admission_date")) or date.today(),
             status=(data.get("status") or "Active"),
         )
+        if explicit_roll:
+            try:
+                student.roll_no = int(provided_roll)
+            except (TypeError, ValueError):
+                explicit_roll = False
         db.session.add(student)
-        db.session.flush()  # assign id before resequencing
-        resequence_rolls(org_id, class_grade, section)
+        db.session.flush()  # assign id before any roll work
+        # Keep org-supplied numbers intact; only auto-number when none was given.
+        if explicit_roll:
+            fill_missing_rolls(org_id, class_grade, section)
+        else:
+            resequence_rolls(org_id, class_grade, section)
         db.session.commit()
 
         result = student.to_dict()
@@ -1531,15 +1553,30 @@ def update_student(student_id):
             if first:
                 student.first_name = first
                 student.last_name = last
-        if "email" in data: student.email = data["email"] or None
+        if "email" in data or "parent_email" in data:
+            student.email = (data.get("email") or data.get("parent_email")) or None
         if "father_name" in data: student.father_name = data["father_name"] or None
         if "mother_name" in data: student.mother_name = data["mother_name"] or None
         if "phone" in data: student.contact_number = data["phone"] or None
         if "contact_number" in data: student.contact_number = data["contact_number"] or None
         if "gender" in data: student.gender = data["gender"] or None
         if "date_of_birth" in data: student.date_of_birth = _parse_date(data["date_of_birth"])
-        if "joining_date" in data:
-            student.admission_date = _parse_date(data["joining_date"]) or student.admission_date
+        if "address" in data: student.address = data["address"] or None
+        if "blood_group" in data: student.blood_group = data["blood_group"] or None
+        if "roll_no" in data and str(data["roll_no"]).strip() not in ("", "None"):
+            try:
+                student.roll_no = int(data["roll_no"])
+            except (TypeError, ValueError):
+                pass
+        if "admission_number" in data or "admission_no" in data:
+            new_adm = (data.get("admission_number") or data.get("admission_no") or "").strip()
+            if new_adm and new_adm != student.admission_no:
+                clash = Student.query.filter(Student.admission_no == new_adm, Student.id != student.id).first()
+                if clash:
+                    return jsonify({"error": f"Admission number '{new_adm}' already exists"}), 409
+                student.admission_no = new_adm
+        if "joining_date" in data or "admission_date" in data:
+            student.admission_date = _parse_date(data.get("joining_date") or data.get("admission_date")) or student.admission_date
         if "status" in data: student.status = data["status"] or "Active"
 
         # Section / class moves (admin & principal only).
@@ -1653,7 +1690,10 @@ def resequence_section_rolls():
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 # Optional fields whose emptiness is surfaced as a (non-blocking) warning.
-_STUDENT_OPTIONAL = ["parent_name", "email", "phone", "section", "admission_number"]
+_STUDENT_OPTIONAL = [
+    "parent_name", "mother_name", "email", "phone", "section", "admission_number",
+    "roll_no", "date_of_birth", "gender", "address", "blood_group", "admission_date",
+]
 _TEACHER_OPTIONAL = ["phone", "qualification", "designation"]
 
 
@@ -1841,7 +1881,10 @@ def import_commit(entity):
     try:
         if entity == "students":
             alloc_code = student_code_allocator()
-            alloc_adm = admission_no_allocator()
+            alloc_adm = admission_no_allocator(org_id)
+            # Track, per section, whether any explicit roll numbers were supplied
+            # so we don't clobber an org's own numbering with a resequence.
+            manual_sections = set()
             for r in annotated:
                 if r["status"] != "ok":
                     if skip_invalid:
@@ -1861,18 +1904,36 @@ def import_commit(entity):
                     student_id=alloc_code(),
                     admission_no=(d.get("admission_number") or "").strip() or alloc_adm(),
                     first_name=first, last_name=last,
-                    email=(d.get("email") or None),
+                    email=(d.get("email") or d.get("parent_email") or None),
                     father_name=(d.get("parent_name") or None),
+                    mother_name=(d.get("mother_name") or None),
                     contact_number=(d.get("phone") or None),
+                    gender=(d.get("gender") or None),
+                    date_of_birth=_parse_date(d.get("date_of_birth")),
+                    address=(d.get("address") or None),
+                    blood_group=(d.get("blood_group") or None),
                     class_grade=klass, section=section,
-                    admission_date=date.today(), status="Active",
+                    admission_date=_parse_date(d.get("admission_date")) or date.today(),
+                    status="Active",
                 )
+                roll_in = (d.get("roll_no") or "").strip()
+                if roll_in:
+                    try:
+                        student.roll_no = int(roll_in)
+                        manual_sections.add((klass, section))
+                    except (TypeError, ValueError):
+                        pass
                 db.session.add(student)
                 touched_sections.add((klass, section))
                 success += 1
             db.session.flush()
             for grade, section in touched_sections:
-                resequence_rolls(org_id, grade, section)
+                # Sections with any org-supplied roll keep their numbers (only
+                # gaps are filled); fully-auto sections are resequenced A→Z.
+                if (grade, section) in manual_sections:
+                    fill_missing_rolls(org_id, grade, section)
+                else:
+                    resequence_rolls(org_id, grade, section)
             db.session.commit()
         else:
             target = _org_target_contact(org_id)

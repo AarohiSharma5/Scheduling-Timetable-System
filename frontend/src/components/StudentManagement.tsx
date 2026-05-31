@@ -13,12 +13,19 @@ interface Student {
   class_grade: string;
   section: string;
   roll_no: number | null;
+  gender?: string | null;
+  date_of_birth?: string | null;
   father_name?: string | null;
   mother_name?: string | null;
   contact_number?: string | null;
+  address?: string | null;
+  blood_group?: string | null;
   admission_date?: string | null;
   status: string;
 }
+
+const BLOOD_GROUPS = ["", "A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"];
+const GENDERS = ["", "Male", "Female", "Other"];
 
 interface Batch {
   id: number;
@@ -37,12 +44,18 @@ const STATUSES = ["Active", "Inactive", "Left"];
 
 const emptyForm = {
   full_name: "",
+  admission_number: "", // blank => auto-generate continuing the org's pattern
+  roll_no: "", // blank => auto roll number
+  class_grade: "",
+  section: "", // "" => auto-balance into the lowest-strength section
+  date_of_birth: "",
+  gender: "",
   father_name: "",
   mother_name: "",
   email: "",
   phone: "",
-  class_grade: "",
-  section: "", // "" => auto-balance into the lowest-strength section
+  address: "",
+  blood_group: "",
   joining_date: "",
   status: "Active",
 };
@@ -182,12 +195,18 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
   const openEdit = (s: Student) => {
     setFormData({
       full_name: s.full_name || `${s.first_name} ${s.last_name}`.trim(),
+      admission_number: s.admission_no || "",
+      roll_no: s.roll_no != null ? String(s.roll_no) : "",
+      class_grade: s.class_grade,
+      section: s.section,
+      date_of_birth: s.date_of_birth ? s.date_of_birth.slice(0, 10) : "",
+      gender: s.gender || "",
       father_name: s.father_name || "",
       mother_name: s.mother_name || "",
       email: s.email || "",
       phone: s.contact_number || "",
-      class_grade: s.class_grade,
-      section: s.section,
+      address: s.address || "",
+      blood_group: s.blood_group || "",
       joining_date: s.admission_date ? s.admission_date.slice(0, 10) : "",
       status: s.status || "Active",
     });
@@ -208,16 +227,23 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
     try {
       const payload: any = {
         full_name: formData.full_name.trim(),
+        date_of_birth: formData.date_of_birth || null,
+        gender: formData.gender || null,
         father_name: formData.father_name || null,
         mother_name: formData.mother_name || null,
         email: formData.email || null,
         phone: formData.phone || null,
+        address: formData.address || null,
+        blood_group: formData.blood_group || null,
         class_grade: formData.class_grade,
         joining_date: formData.joining_date || null,
         status: formData.status,
       };
       // Only send section when the user picked one; blank means "auto-balance".
       if (formData.section) payload.section = formData.section;
+      // Optional org-supplied numbers; blank => auto (continues org's pattern).
+      if (formData.admission_number.trim()) payload.admission_number = formData.admission_number.trim();
+      if (formData.roll_no.trim()) payload.roll_no = formData.roll_no.trim();
 
       if (editingId) {
         await api.admin.students.update(editingId, payload);
@@ -440,8 +466,15 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
                 <th className="px-3 py-2 text-left font-semibold">Admission</th>
                 <th className="px-3 py-2 text-left font-semibold">Name</th>
                 {!scoped && <th className="px-3 py-2 text-left font-semibold">Class</th>}
+                <th className="px-3 py-2 text-left font-semibold">Gender</th>
+                <th className="px-3 py-2 text-left font-semibold">DOB</th>
                 <th className="px-3 py-2 text-left font-semibold">Father</th>
+                <th className="px-3 py-2 text-left font-semibold">Mother</th>
+                <th className="px-3 py-2 text-left font-semibold">Parent Email</th>
                 <th className="px-3 py-2 text-left font-semibold">Contact</th>
+                <th className="px-3 py-2 text-left font-semibold">Blood</th>
+                <th className="px-3 py-2 text-left font-semibold">Address</th>
+                <th className="px-3 py-2 text-left font-semibold">Adm. Date</th>
                 <th className="px-3 py-2 text-left font-semibold">Status</th>
                 <th className="px-3 py-2 text-left font-semibold">Actions</th>
               </tr>
@@ -449,7 +482,7 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
             <tbody>
               {students.length === 0 && !loading ? (
                 <tr>
-                  <td colSpan={8} className="px-3 py-8 text-center text-slate-400">
+                  <td colSpan={15} className="px-3 py-8 text-center text-slate-400">
                     No students found.
                   </td>
                 </tr>
@@ -457,15 +490,22 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
                 students.map((s) => (
                   <tr key={s.id} className="border-b hover:bg-slate-50">
                     <td className="px-3 py-2 font-semibold">{s.roll_no ?? "—"}</td>
-                    <td className="px-3 py-2 text-xs text-slate-500">{s.admission_no}</td>
-                    <td className="px-3 py-2 font-medium">{s.full_name}</td>
+                    <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">{s.admission_no}</td>
+                    <td className="px-3 py-2 font-medium whitespace-nowrap">{s.full_name}</td>
                     {!scoped && (
-                      <td className="px-3 py-2">
+                      <td className="px-3 py-2 whitespace-nowrap">
                         {s.class_grade}-{s.section}
                       </td>
                     )}
-                    <td className="px-3 py-2 text-slate-600">{s.father_name || "—"}</td>
-                    <td className="px-3 py-2 text-xs">{s.contact_number || "—"}</td>
+                    <td className="px-3 py-2 text-slate-600">{s.gender || "—"}</td>
+                    <td className="px-3 py-2 text-xs whitespace-nowrap">{s.date_of_birth ? s.date_of_birth.slice(0, 10) : "—"}</td>
+                    <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{s.father_name || "—"}</td>
+                    <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{s.mother_name || "—"}</td>
+                    <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">{s.email || "—"}</td>
+                    <td className="px-3 py-2 text-xs whitespace-nowrap">{s.contact_number || "—"}</td>
+                    <td className="px-3 py-2 text-xs">{s.blood_group || "—"}</td>
+                    <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">{s.address || "—"}</td>
+                    <td className="px-3 py-2 text-xs whitespace-nowrap">{s.admission_date ? s.admission_date.slice(0, 10) : "—"}</td>
                     <td className="px-3 py-2">
                       <span
                         className={`px-2 py-1 rounded text-xs font-medium ${
@@ -522,7 +562,7 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
         >
           <form
             onSubmit={handleSubmit}
-            className="bg-white p-6 rounded-lg shadow-2xl space-y-4 w-full max-w-lg my-8"
+            className="bg-white p-6 rounded-lg shadow-2xl space-y-4 w-full max-w-2xl my-8 max-h-[90vh] overflow-y-auto"
           >
             <div className="flex justify-between items-center">
               <h3 className="text-lg font-semibold text-slate-900">
@@ -629,9 +669,54 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
               </div>
             </div>
 
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Date of birth</label>
+                <input
+                  type="date"
+                  value={formData.date_of_birth}
+                  onChange={(e) => setFormData({ ...formData, date_of_birth: e.target.value })}
+                  className="w-full border rounded px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Gender</label>
+                <select
+                  value={formData.gender}
+                  onChange={(e) => setFormData({ ...formData, gender: e.target.value })}
+                  className="w-full border rounded px-3 py-2"
+                >
+                  {GENDERS.map((g) => (
+                    <option key={g} value={g}>{g || "—"}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Blood group</label>
+                <select
+                  value={formData.blood_group}
+                  onChange={(e) => setFormData({ ...formData, blood_group: e.target.value })}
+                  className="w-full border rounded px-3 py-2"
+                >
+                  {BLOOD_GROUPS.map((b) => (
+                    <option key={b} value={b}>{b || "—"}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Address</label>
+              <input
+                value={formData.address}
+                onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                className="w-full border rounded px-3 py-2"
+              />
+            </div>
+
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Joining date</label>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Admission date</label>
                 <input
                   type="date"
                   value={formData.joining_date}
@@ -655,10 +740,38 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
               </div>
             </div>
 
+            {/* Optional org-supplied numbers — leave blank to auto-generate */}
+            <div className="grid grid-cols-2 gap-3 border-t pt-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                  Admission no <span className="font-normal text-slate-400">(blank = auto)</span>
+                </label>
+                <input
+                  value={formData.admission_number}
+                  onChange={(e) => setFormData({ ...formData, admission_number: e.target.value })}
+                  placeholder={editingId ? "" : "auto-generated"}
+                  className="w-full border rounded px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                  Roll no <span className="font-normal text-slate-400">(blank = auto)</span>
+                </label>
+                <input
+                  type="number"
+                  value={formData.roll_no}
+                  onChange={(e) => setFormData({ ...formData, roll_no: e.target.value })}
+                  placeholder={editingId ? "" : "auto"}
+                  className="w-full border rounded px-3 py-2"
+                />
+              </div>
+            </div>
+
             {!editingId && (
               <p className="text-xs text-slate-500">
-                Roll number and admission number are generated automatically. Leaving section on
-                "Auto" places the student in the least-full section.
+                Leave admission no &amp; roll no blank to auto-generate — admission numbers continue
+                your organization's existing pattern. Leaving section on "Auto" places the student in
+                the least-full section.
               </p>
             )}
 

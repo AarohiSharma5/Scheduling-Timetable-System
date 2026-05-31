@@ -12,6 +12,8 @@ are derived from the global max suffix because ``student_id`` / ``admission_no``
 are globally unique columns.
 """
 
+import re
+from collections import defaultdict
 from datetime import date
 
 from models import db, Student, Batch
@@ -52,20 +54,70 @@ def next_student_code():
     return f"STU{nxt:04d}"
 
 
-def next_admission_no(today=None):
-    """Next free ``ADMyy00001``-style admission number for the current year.
+# ---------------------------------------------------------------------------
+# Admission-number patterns
+# ---------------------------------------------------------------------------
+# Auto-generation must *continue an organization's existing format* rather than
+# impose our own. We learn the format from the admission numbers already on
+# record (seeded, manually entered, or imported), so an org using "ADM240001",
+# "2024/001" or "SCH-1001" keeps getting numbers in that same shape.
 
-    Format: ``ADM`` + 2-digit year + 5-digit running sequence. The sequence is
-    derived from the global max so it never collides with seeded data.
+def _parse_admission(code):
+    """Split an admission number into (prefix, number, width, suffix).
+
+    The numeric part is the *last* run of digits; everything before it is the
+    prefix, everything after is the suffix. Returns None if there are no digits.
     """
+    if not code:
+        return None
+    m = re.match(r"^(.*?)(\d+)(\D*)$", str(code).strip())
+    if not m:
+        return None
+    prefix, digits, suffix = m.group(1), m.group(2), m.group(3)
+    return prefix, int(digits), len(digits), suffix
+
+
+def detect_admission_pattern(org_id):
+    """Infer the dominant admission-number pattern used by an organization.
+
+    Groups existing numbers by (prefix, suffix, digit-width); the group with the
+    most members wins (ties broken by highest value). Returns a dict with the
+    prefix/suffix/width and the current max number, or None when the org has no
+    parseable admission numbers yet.
+    """
+    codes = [
+        s.admission_no
+        for s in Student.query.filter_by(organization_id=org_id).all()
+        if s.admission_no
+    ]
+    groups = defaultdict(list)
+    for c in codes:
+        parsed = _parse_admission(c)
+        if parsed:
+            prefix, num, width, suffix = parsed
+            groups[(prefix, suffix, width)].append(num)
+    if not groups:
+        return None
+    sig = max(groups.keys(), key=lambda k: (len(groups[k]), max(groups[k])))
+    prefix, suffix, width = sig
+    return {"prefix": prefix, "suffix": suffix, "width": width, "max": max(groups[sig])}
+
+
+def _format_admission(pat, number):
+    return f"{pat['prefix']}{str(number).zfill(pat['width'])}{pat['suffix']}"
+
+
+def _default_admission_pattern(today=None):
+    """Fallback when an org has no admission numbers yet: ADM + yy + 5 digits."""
     today = today or date.today()
     yy = today.year % 100
-    base = _max_suffix("ADM")
-    # If the existing max already encodes this year (>= yy*100000) just +1;
-    # otherwise start this year's block.
-    year_floor = yy * 100000
-    nxt = max(base, year_floor) + 1
-    return f"ADM{nxt}"
+    return {"prefix": "ADM", "suffix": "", "width": 7, "max": yy * 100000}
+
+
+def next_admission_no(org_id, today=None):
+    """Next admission number, continuing the org's existing pattern."""
+    pat = detect_admission_pattern(org_id) or _default_admission_pattern(today)
+    return _format_admission(pat, pat["max"] + 1)
 
 
 def student_code_allocator():
@@ -84,15 +136,18 @@ def student_code_allocator():
     return _next
 
 
-def admission_no_allocator(today=None):
-    """Return a function that yields sequential ``ADMyy#####`` admission numbers."""
-    today = today or date.today()
-    year_floor = (today.year % 100) * 100000
-    counter = {"v": max(_max_suffix("ADM"), year_floor)}
+def admission_no_allocator(org_id, today=None):
+    """Allocator that yields sequential admission numbers in the org's pattern.
+
+    Seeds from the org's detected pattern (or the default) once, then increments
+    in memory — safe for bulk inserts within a single transaction.
+    """
+    pat = detect_admission_pattern(org_id) or _default_admission_pattern(today)
+    counter = {"v": pat["max"]}
 
     def _next():
         counter["v"] += 1
-        return f"ADM{counter['v']}"
+        return _format_admission(pat, counter["v"])
 
     return _next
 
@@ -160,6 +215,30 @@ def choose_section(org_id, class_grade, capacity=DEFAULT_SECTION_CAPACITY,
     # Lowest strength wins; ties broken alphabetically for stable, predictable output.
     section = min(sorted(pool.keys()), key=lambda sec: pool[sec])
     return section, over_capacity
+
+
+def fill_missing_rolls(org_id, class_grade, section):
+    """Assign roll numbers ONLY to active students who don't have one yet.
+
+    Used for sections that mix manually-supplied roll numbers with auto ones:
+    we never overwrite an organization's provided numbers, we just append the
+    next free roll (max + 1) to the unnumbered active students, alphabetically.
+    Does not commit.
+    """
+    students = Student.query.filter_by(
+        organization_id=org_id, class_grade=str(class_grade), section=section
+    ).all()
+    used = [s.roll_no for s in students if s.roll_no is not None]
+    nxt = (max(used) + 1) if used else 1
+    missing = [
+        s for s in students
+        if s.roll_no is None and (s.status or "").strip().lower() in ACTIVE_STATUSES
+    ]
+    missing.sort(key=_student_name_key)
+    for s in missing:
+        s.roll_no = nxt
+        nxt += 1
+    return len(missing)
 
 
 def resequence_rolls(org_id, class_grade, section):

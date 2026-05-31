@@ -23,19 +23,29 @@ STUDENT_FIELDS = {
     "name": ["name", "full name", "student name", "student", "child name"],
     "parent_name": [
         "parent name", "father name", "fathers name", "father", "guardian",
-        "guardian name", "mother name", "parent", "parent guardian",
+        "guardian name", "parent", "parent guardian",
     ],
-    "email": ["email", "e mail", "email id", "mail", "email address"],
+    "mother_name": ["mother name", "mothers name", "mother", "mom name"],
+    "email": [
+        "email", "e mail", "email id", "mail", "email address",
+        "parent email", "parents email", "guardian email",
+    ],
     "phone": [
         "phone", "mobile", "mob", "mob no", "mobile no", "mobile number",
         "contact", "contact no", "contact number", "phone number", "ph", "cell",
     ],
     "class": ["class", "grade", "standard", "std", "class grade"],
     "section": ["section", "sec", "div", "division"],
+    "roll_no": ["roll no", "roll number", "roll", "rollno", "sr no", "serial no"],
     "admission_number": [
         "admission number", "adm no", "adm", "admission no", "admno",
         "admission", "admission id", "enrollment no", "enrolment no",
     ],
+    "date_of_birth": ["date of birth", "dob", "birth date", "d o b", "birthday"],
+    "gender": ["gender", "sex", "m f"],
+    "address": ["address", "residence", "home address", "city", "addr"],
+    "blood_group": ["blood group", "blood", "bg", "blood grp"],
+    "admission_date": ["admission date", "joining date", "date of admission", "doj", "enrolled on"],
 }
 
 TEACHER_FIELDS = {

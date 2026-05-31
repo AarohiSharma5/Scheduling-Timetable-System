@@ -37,12 +37,19 @@ interface Props {
 
 const FIELD_LABELS: Record<string, string> = {
   name: "Name",
-  parent_name: "Parent",
-  email: "Email",
+  parent_name: "Father",
+  mother_name: "Mother",
+  email: "Parent Email",
   phone: "Phone",
   class: "Class",
   section: "Section",
+  roll_no: "Roll #",
   admission_number: "Admission #",
+  date_of_birth: "DOB",
+  gender: "Gender",
+  address: "Address",
+  blood_group: "Blood",
+  admission_date: "Adm. Date",
   qualification: "Qualification",
   designation: "Designation",
 };
@@ -245,7 +252,7 @@ export default function ImportWizard({ entity, onClose, onImported }: Props) {
                 <p className="font-semibold mb-1">Recognised columns (headers are auto-detected & fuzzy-matched):</p>
                 <p>
                   {entity === "students"
-                    ? "name, parent/father name, email, phone/mob, class, section, admission no"
+                    ? "name, father/parent name, mother name, parent email, phone/mob, class, section, roll no, admission no, date of birth, gender, address, blood group, admission date"
                     : "name, email, phone/mob, qualification, designation"}
                 </p>
               </div>
