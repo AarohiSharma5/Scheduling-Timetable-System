@@ -16,7 +16,7 @@ from scheduler import SchedulingEngine
 from jwt_utils import token_required, role_required
 from datetime import datetime
 import period_utils
-from timetable_edit import collect_conflicts, build_teacher_unavailable
+from timetable_edit import collect_conflicts, build_teacher_unavailable, hard_conflicts
 
 timetable_bp = Blueprint("timetable", __name__, url_prefix="/api/timetable")
 
@@ -610,7 +610,9 @@ def patch_slot(timetable_id):
     ctx = _edit_context(org_id)
     before = _validate([s.to_dict() for s in existing], ctx)
     after = _validate(_slots_after_change(existing, change), ctx)
-    introduced = _new_conflicts(before, after)
+    # Only NEW hard conflicts block the edit; soft (availability) warnings are
+    # allowed so an admin can deliberately override in an emergency.
+    introduced = hard_conflicts(_new_conflicts(before, after))
     if introduced:
         return jsonify({"error": "Validation failed", "conflicts": introduced}), 409
 
@@ -690,7 +692,7 @@ def patch_swap(timetable_id):
 
     ctx = _edit_context(org_id)
     before = _validate([s.to_dict() for s in existing], ctx)
-    introduced = _new_conflicts(before, _validate(projected, ctx))
+    introduced = hard_conflicts(_new_conflicts(before, _validate(projected, ctx)))
     if introduced:
         return jsonify({"error": "Validation failed", "conflicts": introduced}), 409
 
@@ -780,7 +782,10 @@ def validate_grid(timetable_id):
     slots = data.get("slots", [])
     ctx = _edit_context(org_id)
     conflicts = _validate(slots, ctx)
-    return jsonify({"valid": len(conflicts) == 0, "conflicts": conflicts}), 200
+    hard = hard_conflicts(conflicts)
+    # "valid" (i.e. savable) means no HARD conflicts; soft ones are warnings.
+    return jsonify({"valid": len(hard) == 0, "conflicts": conflicts,
+                    "hard_count": len(hard), "soft_count": len(conflicts) - len(hard)}), 200
 
 
 @timetable_bp.route("/<int:timetable_id>/save-version", methods=["POST"])
@@ -805,8 +810,11 @@ def save_version(timetable_id):
 
     ctx = _edit_context(org_id)
     conflicts = _validate(provided, ctx)
-    if conflicts:
-        return jsonify({"error": "Validation failed", "conflicts": conflicts}), 409
+    hard = hard_conflicts(conflicts)
+    if hard:
+        return jsonify({"error": "Validation failed", "conflicts": hard}), 409
+    # Soft (availability) warnings are recorded on the saved version, not blocked.
+    soft_warnings = [c["message"] for c in conflicts if c.get("severity") == "soft"]
 
     new_tt = Timetable(
         organization_id=org_id,
@@ -814,6 +822,7 @@ def save_version(timetable_id):
         description=f"Manual edit of timetable #{source.id}",
         status="draft",
         generated_at=datetime.utcnow(),
+        warnings=soft_warnings,
         school_name=source.school_name,
         school_logo_path=source.school_logo_path,
         edited_by=_current_user_id(),

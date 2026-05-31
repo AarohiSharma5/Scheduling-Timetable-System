@@ -9,7 +9,7 @@ interface TeacherInfo { id: number; name: string; teacher_code?: string | null; 
 interface Cell { subject_id: number | null; teacher_id: number | null; room: string | null; is_lunch: boolean; is_pinned: boolean; }
 type Grid = Record<string, Cell>;
 
-interface Conflict { type: string; message: string; day?: string; period?: number; batch_id?: number; batch_ids?: number[]; teacher_id?: number; }
+interface Conflict { type: string; severity: "hard" | "soft"; message: string; day?: string; period?: number; batch_id?: number; batch_ids?: number[]; teacher_id?: number; }
 
 const cellKey = (batchId: number, day: string, period: number) => `${batchId}|${day}|${period}`;
 
@@ -94,8 +94,9 @@ export default function TimetableEditor({
     const teacherSlot: Record<string, Set<number>> = {};
     const roomSlot: Record<string, Set<number>> = {};
     const out: Conflict[] = [];
-    const cells = new Set<string>();
-    const sigs = new Set<string>();
+    const hardCells = new Set<string>();
+    const softCells = new Set<string>();
+    const hardSigs = new Set<string>(); // only hard conflicts gate saving / drops
 
     for (const [key, c] of Object.entries(g)) {
       if (c.is_lunch || (c.subject_id == null && c.teacher_id == null)) continue;
@@ -106,9 +107,8 @@ export default function TimetableEditor({
         const tk = `${c.teacher_id}|${day}|${period}`;
         (teacherSlot[tk] ||= new Set()).add(batch);
         if (teacherUnavail[c.teacher_id]?.has(`${day}|${period}`)) {
-          out.push({ type: "teacher_unavailable", message: `${teacherName(c.teacher_id)} is unavailable on ${day} P${period} (${batchLabel(batch)}).`, batch_id: batch, day, period });
-          cells.add(cellKey(batch, day, period));
-          sigs.add(`unavail|${c.teacher_id}|${day}|${period}|${batch}`);
+          out.push({ type: "teacher_unavailable", severity: "soft", message: `${teacherName(c.teacher_id)} marked ${day} P${period} unavailable — ${batchLabel(batch)} (may not be free).`, batch_id: batch, day, period });
+          softCells.add(cellKey(batch, day, period));
         }
       }
       if (c.room) (roomSlot[`${c.room.trim().toLowerCase()}|${day}|${period}`] ||= new Set()).add(batch);
@@ -117,25 +117,25 @@ export default function TimetableEditor({
     for (const [tk, set] of Object.entries(teacherSlot)) {
       if (set.size > 1) {
         const [tid, day, period] = tk.split("|");
-        out.push({ type: "teacher_double_book", message: `${teacherName(Number(tid))} is double-booked on ${day} P${period}.`, day, period: Number(period) });
-        set.forEach((b) => cells.add(cellKey(b, day, Number(period))));
-        sigs.add(`tdb|${tid}|${day}|${period}`);
+        out.push({ type: "teacher_double_book", severity: "hard", message: `${teacherName(Number(tid))} is double-booked on ${day} P${period}.`, day, period: Number(period) });
+        set.forEach((b) => hardCells.add(cellKey(b, day, Number(period))));
+        hardSigs.add(`tdb|${tid}|${day}|${period}`);
       }
     }
     for (const [rk, set] of Object.entries(roomSlot)) {
       if (set.size > 1) {
         const [room, day, period] = rk.split("|");
-        out.push({ type: "room_conflict", message: `A room is double-booked on ${day} P${period}.`, day, period: Number(period) });
-        set.forEach((b) => cells.add(cellKey(b, day, Number(period))));
-        sigs.add(`room|${room}|${day}|${period}`);
+        out.push({ type: "room_conflict", severity: "hard", message: `A room is double-booked on ${day} P${period}.`, day, period: Number(period) });
+        set.forEach((b) => hardCells.add(cellKey(b, day, Number(period))));
+        hardSigs.add(`room|${room}|${day}|${period}`);
       }
     }
-    return { conflicts: out, cells, sigs };
+    return { conflicts: out, hardCells, softCells, hardSigs };
   }, [teacherUnavail, teacherName, batchLabel]);
 
-  const { conflicts, conflictCells } = useMemo(() => {
+  const { conflicts, hardCells, softCells, hardCount } = useMemo(() => {
     const r = validateGrid(grid);
-    return { conflicts: r.conflicts, conflictCells: r.cells };
+    return { conflicts: r.conflicts, hardCells: r.hardCells, softCells: r.softCells, hardCount: r.hardSigs.size };
   }, [grid, validateGrid]);
 
   const pushHistory = (next: Grid) => {
@@ -169,7 +169,7 @@ export default function TimetableEditor({
   const validTargets = useMemo(() => {
     const set = new Set<string>();
     if (!dragFrom || selectedBatch == null) return set;
-    const base = validateGrid(grid).sigs;
+    const base = validateGrid(grid).hardSigs;
     const srcKey = cellKey(selectedBatch, dragFrom.day, dragFrom.period);
     const src = grid[srcKey];
     for (const p of batchPeriodRows) {
@@ -182,7 +182,7 @@ export default function TimetableEditor({
         const tgt = grid[tgtKey];
         if (tgt) next[srcKey] = tgt; else delete next[srcKey];
         if (src) next[tgtKey] = src; else delete next[tgtKey];
-        const after = validateGrid(next).sigs;
+        const after = validateGrid(next).hardSigs;
         let ok = true;
         after.forEach((s) => { if (!base.has(s)) ok = false; });
         if (ok) set.add(tgtKey);
@@ -267,8 +267,8 @@ export default function TimetableEditor({
   };
 
   const saveVersion = async () => {
-    if (conflicts.length) {
-      setMessage({ kind: "err", text: "Resolve all conflicts before saving." });
+    if (hardCount > 0) {
+      setMessage({ kind: "err", text: "Resolve all hard conflicts (red) before saving. Availability warnings (amber) are allowed." });
       return;
     }
     try {
@@ -285,12 +285,27 @@ export default function TimetableEditor({
     }
   };
 
-  // Teachers eligible for a subject+batch (capable first, but all are selectable).
-  const teacherOptions = (subjectId: number | null) => {
-    if (subjectId == null) return teachers;
-    const capable = teachers.filter((t) => (t.subject_ids || []).includes(subjectId));
-    return capable.length ? capable : teachers;
-  };
+  // Teacher ids already teaching some OTHER class at (day, period) => their class label.
+  const slotBusyTeachers = useCallback((day: string, period: number) => {
+    const m: Record<number, string> = {};
+    for (const [key, c] of Object.entries(grid)) {
+      if (c.is_lunch || c.teacher_id == null) continue;
+      const [b, d, pStr] = key.split("|");
+      if (d === day && Number(pStr) === period && Number(b) !== selectedBatch) {
+        m[c.teacher_id] = batchLabel(Number(b));
+      }
+    }
+    return m;
+  }, [grid, selectedBatch, batchLabel]);
+
+  // Teacher ids who flagged (day, period) as unavailable.
+  const slotUnavailableTeachers = useCallback((day: string, period: number) => {
+    const s = new Set<number>();
+    for (const t of teachers) {
+      if (teacherUnavail[t.id]?.has(`${day}|${period}`)) s.add(t.id);
+    }
+    return s;
+  }, [teachers, teacherUnavail]);
 
   if (loading) {
     return (
@@ -329,14 +344,16 @@ export default function TimetableEditor({
             <button onClick={redo} disabled={!future.length} className="px-3 py-1.5 text-sm rounded border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-40">↷ Redo</button>
           </div>
           <div className="ml-auto flex items-center gap-3">
-            {conflicts.length > 0 ? (
-              <span className="text-sm font-medium text-red-700">{conflicts.length} conflict(s)</span>
+            {hardCount > 0 ? (
+              <span className="text-sm font-medium text-red-700">{hardCount} blocking conflict(s)</span>
+            ) : conflicts.length > 0 ? (
+              <span className="text-sm font-medium text-amber-700">{conflicts.length} warning(s)</span>
             ) : (
               <span className="text-sm font-medium text-emerald-700">No conflicts</span>
             )}
             <button
               onClick={saveVersion}
-              disabled={saving || conflicts.length > 0}
+              disabled={saving || hardCount > 0}
               className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:text-slate-500 text-white text-sm font-medium px-4 py-1.5 rounded"
             >
               {saving ? "Saving…" : "Save as new version"}
@@ -350,11 +367,19 @@ export default function TimetableEditor({
           </div>
         )}
 
-        {conflicts.length > 0 && (
+        {conflicts.some((c) => c.severity === "hard") && (
           <div className="mx-5 mt-3 px-3 py-2 rounded bg-red-50 border border-red-200 text-sm text-red-800 max-h-28 overflow-y-auto">
+            <div className="font-semibold mb-0.5">Must fix before saving</div>
             <ul className="list-disc list-inside space-y-0.5">
-              {conflicts.slice(0, 8).map((c, i) => <li key={i}>{c.message}</li>)}
-              {conflicts.length > 8 && <li>…and {conflicts.length - 8} more</li>}
+              {conflicts.filter((c) => c.severity === "hard").slice(0, 8).map((c, i) => <li key={i}>{c.message}</li>)}
+            </ul>
+          </div>
+        )}
+        {conflicts.some((c) => c.severity === "soft") && (
+          <div className="mx-5 mt-3 px-3 py-2 rounded bg-amber-50 border border-amber-200 text-sm text-amber-800 max-h-28 overflow-y-auto">
+            <div className="font-semibold mb-0.5">Warnings (allowed — e.g. emergency cover)</div>
+            <ul className="list-disc list-inside space-y-0.5">
+              {conflicts.filter((c) => c.severity === "soft").slice(0, 6).map((c, i) => <li key={i}>{c.message}</li>)}
             </ul>
           </div>
         )}
@@ -385,7 +410,9 @@ export default function TimetableEditor({
                   {days.map((day) => {
                     const c = getCell(day, p.number);
                     const isLunch = p.is_lunch || c?.is_lunch;
-                    const conflicted = selectedBatch != null && conflictCells.has(cellKey(selectedBatch, day, p.number));
+                    const ckey = selectedBatch != null ? cellKey(selectedBatch, day, p.number) : "";
+                    const hardConflicted = !!ckey && hardCells.has(ckey);
+                    const softConflicted = !!ckey && softCells.has(ckey);
                     if (isLunch) {
                       return <td key={day} className="border px-2 py-3 text-center text-amber-700 bg-amber-50 font-medium">Lunch</td>;
                     }
@@ -401,8 +428,10 @@ export default function TimetableEditor({
                       stateClass = "bg-emerald-50 ring-2 ring-emerald-400 hover:bg-emerald-100";
                     } else if (dragging) {
                       stateClass = "opacity-40"; // not a valid drop while dragging
-                    } else if (conflicted) {
+                    } else if (hardConflicted) {
                       stateClass = "bg-red-50 ring-1 ring-red-300";
+                    } else if (softConflicted) {
+                      stateClass = "bg-amber-50 ring-1 ring-amber-300";
                     } else if (filled) {
                       stateClass = "bg-white hover:bg-blue-50";
                     } else {
@@ -452,7 +481,9 @@ export default function TimetableEditor({
           period={editing.period}
           cell={getCell(editing.day, editing.period)}
           subjects={subjects}
-          teacherOptions={teacherOptions}
+          teachers={teachers}
+          slotBusy={slotBusyTeachers(editing.day, editing.period)}
+          unavailableAt={slotUnavailableTeachers(editing.day, editing.period)}
           onApply={(value) => { applyCell(editing.day, editing.period, value); setEditing(null); }}
           onClear={() => { clearCell(editing.day, editing.period); setEditing(null); }}
           onTogglePin={() => { togglePin(editing.day, editing.period); }}
@@ -464,11 +495,13 @@ export default function TimetableEditor({
 }
 
 function CellEditor({
-  day, period, cell, subjects, teacherOptions, onApply, onClear, onTogglePin, onCancel,
+  day, period, cell, subjects, teachers, slotBusy, unavailableAt, onApply, onClear, onTogglePin, onCancel,
 }: {
   day: string; period: number; cell: Cell | null;
   subjects: SubjectInfo[];
-  teacherOptions: (subjectId: number | null) => TeacherInfo[];
+  teachers: TeacherInfo[];
+  slotBusy: Record<number, string>;     // teacher id -> class they already teach this slot
+  unavailableAt: Set<number>;           // teacher ids who flagged this slot unavailable
   onApply: (value: Partial<Cell>) => void;
   onClear: () => void;
   onTogglePin: () => void;
@@ -478,7 +511,15 @@ function CellEditor({
   const [teacherId, setTeacherId] = useState<number | null>(cell?.teacher_id ?? null);
   const [room, setRoom] = useState<string>(cell?.room ?? "");
 
-  const opts = teacherOptions(subjectId);
+  const label = (t: TeacherInfo) => (t.teacher_code ? `${t.teacher_code} — ${t.name}` : t.name);
+
+  // Base pool: teachers who can teach the chosen subject (if any are capable),
+  // otherwise everyone. Then split by availability at THIS day/period.
+  const capable = subjectId == null ? teachers : teachers.filter((t) => (t.subject_ids || []).includes(subjectId));
+  const base = capable.length ? capable : teachers;
+  const free = base.filter((t) => !slotBusy[t.id] && !unavailableAt.has(t.id));
+  const emergency = base.filter((t) => !slotBusy[t.id] && unavailableAt.has(t.id));
+  const busy = base.filter((t) => !!slotBusy[t.id]);
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40" onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
@@ -497,11 +538,28 @@ function CellEditor({
         </div>
 
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Teacher</label>
+          <label className="block text-xs font-medium text-slate-600 mb-1">Teacher (availability for {day} P{period})</label>
           <select value={teacherId ?? ""} onChange={(e) => setTeacherId(e.target.value ? Number(e.target.value) : null)} className="w-full border rounded px-3 py-2 text-sm">
             <option value="">— none —</option>
-            {opts.map((t) => <option key={t.id} value={t.id}>{t.teacher_code ? `${t.teacher_code} — ${t.name}` : t.name}</option>)}
+            {free.length > 0 && (
+              <optgroup label={`Available (${free.length})`}>
+                {free.map((t) => <option key={t.id} value={t.id}>{label(t)}</option>)}
+              </optgroup>
+            )}
+            {emergency.length > 0 && (
+              <optgroup label={`Free but marked unavailable (${emergency.length})`}>
+                {emergency.map((t) => <option key={t.id} value={t.id}>⚠ {label(t)} — may be unavailable</option>)}
+              </optgroup>
+            )}
+            {busy.length > 0 && (
+              <optgroup label={`Busy this period (${busy.length})`}>
+                {busy.map((t) => <option key={t.id} value={t.id} disabled>{label(t)} — teaching {slotBusy[t.id]}</option>)}
+              </optgroup>
+            )}
           </select>
+          <p className="text-[11px] text-slate-400 mt-1">
+            <span className="text-emerald-600">Available</span> = free &amp; not flagged · <span className="text-amber-600">⚠</span> free but marked unavailable (emergency only) · busy teachers are disabled.
+          </p>
         </div>
 
         <div>

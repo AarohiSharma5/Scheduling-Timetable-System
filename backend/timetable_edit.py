@@ -5,14 +5,31 @@ teacher_id, subject_id, room, is_lunch. We validate a *whole proposed grid*
 (cheap even for thousands of slots) so the same code covers single-cell edits,
 swaps, and full-version saves.
 
-Hard conflicts that block a save:
+Hard conflicts (block a save):
   * teacher_double_book  - one teacher in two batches at the same day/period
   * section_conflict     - one batch with two subjects at the same day/period
   * room_conflict        - one room used by two batches at the same day/period (labs)
+
+Soft conflicts (warn, but allow — e.g. emergency override):
   * teacher_unavailable  - teacher placed in a slot they declared unavailable/blocked
 """
 
 from collections import defaultdict
+
+# Conflict severities. Hard conflicts make a timetable invalid; soft ones are
+# warnings the admin can knowingly accept (the teacher *might* be unavailable).
+HARD = "hard"
+SOFT = "soft"
+SEVERITY = {
+    "teacher_double_book": HARD,
+    "section_conflict": HARD,
+    "room_conflict": HARD,
+    "teacher_unavailable": SOFT,
+}
+
+
+def hard_conflicts(conflicts):
+    return [c for c in conflicts if c.get("severity", HARD) == HARD]
 
 
 def _slot_get(slot, key, default=None):
@@ -85,9 +102,10 @@ def collect_conflicts(slots, teacher_unavailable=None, teacher_names=None,
             if (str(day), int(period)) in teacher_unavailable.get(teacher, set()):
                 conflicts.append({
                     "type": "teacher_unavailable",
+                    "severity": SOFT,
                     "day": day, "period": period,
                     "batch_id": batch, "teacher_id": teacher,
-                    "message": f"{label_teacher(teacher)} is unavailable on {day} P{period}.",
+                    "message": f"{label_teacher(teacher)} marked {day} P{period} unavailable (may not be free).",
                 })
         if batch is not None:
             by_section_slot[(batch, day, period)].append(subject)
@@ -98,6 +116,7 @@ def collect_conflicts(slots, teacher_unavailable=None, teacher_names=None,
         if len(batches) > 1:
             conflicts.append({
                 "type": "teacher_double_book",
+                "severity": HARD,
                 "day": day, "period": period, "teacher_id": teacher,
                 "batch_ids": sorted(b for b in batches if b is not None),
                 "message": (f"{label_teacher(teacher)} is double-booked on {day} P{period} "
@@ -108,6 +127,7 @@ def collect_conflicts(slots, teacher_unavailable=None, teacher_names=None,
         if len(subjects) > 1:
             conflicts.append({
                 "type": "section_conflict",
+                "severity": HARD,
                 "day": day, "period": period, "batch_id": batch,
                 "message": f"{label_batch(batch)} has two subjects on {day} P{period}.",
             })
@@ -118,6 +138,7 @@ def collect_conflicts(slots, teacher_unavailable=None, teacher_names=None,
             room = next(iter(entries))[1]
             conflicts.append({
                 "type": "room_conflict",
+                "severity": HARD,
                 "day": day, "period": period, "room": room,
                 "batch_ids": sorted(b for b in batches if b is not None),
                 "message": f"Room '{room}' is double-booked on {day} P{period}.",
