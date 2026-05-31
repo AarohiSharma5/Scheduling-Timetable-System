@@ -12,6 +12,7 @@ interface SchoolConfig {
   has_lunch_break: boolean;
   working_days: number;
   target_contact_periods_per_week: number;
+  class_teacher_hours_per_week: number;
 }
 
 const toMinutes = (t: string): number => {
@@ -36,6 +37,7 @@ export default function ConfigurationForm() {
     has_lunch_break: true,
     working_days: 5,
     target_contact_periods_per_week: 40,
+    class_teacher_hours_per_week: 5,
   });
 
   // Number of periods is derived from the school hours, not typed in — this is
@@ -214,6 +216,23 @@ export default function ConfigurationForm() {
               <p className="text-xs text-slate-500 mt-1">
                 Every teacher is balanced to this total. Teaching capacity = target − charge hours, so teachers
                 with extra duties teach proportionally fewer classes. Changing this rebalances all teachers.
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Class-teacher hours / week</label>
+              <input
+                type="number"
+                min={0}
+                max={20}
+                value={formData.class_teacher_hours_per_week}
+                onChange={(e) => setFormData({ ...formData, class_teacher_hours_per_week: Number(e.target.value) })}
+                className="border rounded px-3 py-2 w-full"
+                required
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                Extra weekly contact hours reserved for class teachers (default 5 for this organization —
+                edit to increase/decrease). These reduce a class teacher's teaching capacity by this amount.
+                Each organization keeps its own value.
               </p>
             </div>
           </div>

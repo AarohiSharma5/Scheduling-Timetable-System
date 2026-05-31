@@ -650,15 +650,24 @@ def update_school_config():
         if "working_days" in data: config.working_days = data["working_days"]
         if "has_lunch_break" in data: config.has_lunch_break = bool(data["has_lunch_break"])
 
-        target_changed = False
+        workload_changed = False
         if "target_contact_periods_per_week" in data:
             try:
                 tgt = int(data["target_contact_periods_per_week"])
                 if tgt > 0:
                     config.target_contact_periods_per_week = tgt
-                    target_changed = True
+                    workload_changed = True
             except (TypeError, ValueError):
                 return jsonify({"error": "target_contact_periods_per_week must be a positive integer"}), 400
+        if "class_teacher_hours_per_week" in data:
+            try:
+                cth = int(data["class_teacher_hours_per_week"])
+                if cth < 0:
+                    raise ValueError
+                config.class_teacher_hours_per_week = cth
+                workload_changed = True
+            except (TypeError, ValueError):
+                return jsonify({"error": "class_teacher_hours_per_week must be a non-negative integer"}), 400
 
         # Validate the window actually yields at least one period.
         from period_utils import school_periods_per_day
@@ -670,12 +679,14 @@ def update_school_config():
         config.updated_at = datetime.utcnow()
         db.session.add(config)
 
-        # If the common contact target changed, rebalance every teacher's
-        # teaching capacity (target - their charge hours) so totals stay equal.
-        if target_changed:
+        # If any workload setting changed, rebalance every teacher's teaching
+        # capacity (target - charge hours - class-teacher hours) so totals stay equal.
+        if workload_changed:
             tgt = config.target_contact_periods_per_week
+            cth = (config.class_teacher_hours_per_week
+                   if config.class_teacher_hours_per_week is not None else DEFAULT_CLASS_TEACHER_HOURS)
             for t in Teacher.query.filter_by(organization_id=org_id).all():
-                t.max_periods_per_week = max(0, tgt - (t.charge_hours or 0))
+                _recompute_teacher_capacity(t, tgt, cth)
 
         db.session.commit()
         return jsonify(config.to_dict()), 200
@@ -697,6 +708,25 @@ def _org_target_contact(org_id):
     if cfg and cfg.target_contact_periods_per_week:
         return cfg.target_contact_periods_per_week
     return DEFAULT_TARGET_CONTACT
+
+
+DEFAULT_CLASS_TEACHER_HOURS = 5
+
+
+def _class_teacher_hours(org_id):
+    """Extra hours for class teachers for this org (defaults to 5, editable)."""
+    cfg = SchoolConfig.query.filter_by(organization_id=org_id).first()
+    if not cfg or cfg.class_teacher_hours_per_week is None:
+        return DEFAULT_CLASS_TEACHER_HOURS
+    return cfg.class_teacher_hours_per_week
+
+
+def _recompute_teacher_capacity(teacher, target, ct_hours):
+    """Teaching cap = target - manual charge hours - class-teacher hours (if any)."""
+    reserved = (teacher.charge_hours or 0)
+    if teacher.is_class_teacher:
+        reserved += ct_hours
+    teacher.max_periods_per_week = max(0, target - reserved)
 
 
 def _apply_teaching_and_charges(teacher, data, org_id):
@@ -741,8 +771,8 @@ def _apply_teaching_and_charges(teacher, data, org_id):
         teacher.charges = charges
 
     # Dynamic weekly teaching capacity so total contact load stays balanced.
-    target = _org_target_contact(org_id)
-    teacher.max_periods_per_week = max(0, target - (teacher.charge_hours or 0))
+    # Class-teacher hours come from the coordinator-entered config, never assumed.
+    _recompute_teacher_capacity(teacher, _org_target_contact(org_id), _class_teacher_hours(org_id))
 
 
 @api.route("/admin/teachers", methods=["GET"])

@@ -297,6 +297,10 @@ class SchoolConfig(db.Model):
     #   teaching periods + charge hours == target. Used to derive each teacher's
     #   max teaching periods dynamically.
     target_contact_periods_per_week = db.Column(db.Integer, nullable=False, default=40)
+    # Extra weekly contact hours reserved for class teachers. Defaults to 5/week
+    # per organization; each org can edit it independently (it lives on the
+    # org-scoped config, so other orgs keep their own value).
+    class_teacher_hours_per_week = db.Column(db.Integer, nullable=False, default=5)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -311,7 +315,9 @@ class SchoolConfig(db.Model):
             "periods_per_day": self.periods_per_day,
             "has_lunch_break": self.has_lunch_break,
             "working_days": self.working_days,
-            "target_contact_periods_per_week": self.target_contact_periods_per_week,
+            "target_contact_periods_per_week": self.target_contact_periods_per_week or 40,
+            "class_teacher_hours_per_week": (self.class_teacher_hours_per_week
+                                             if self.class_teacher_hours_per_week is not None else 5),
         }
 
 

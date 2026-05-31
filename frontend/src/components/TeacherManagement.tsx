@@ -66,6 +66,7 @@ export default function TeacherManagement() {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [chargeTypes, setChargeTypes] = useState<ChargeType[]>([]);
   const [target, setTarget] = useState<number>(40);
+  const [ctHours, setCtHours] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showForm, setShowForm] = useState(false);
@@ -79,6 +80,8 @@ export default function TeacherManagement() {
   const [unavailPeriod, setUnavailPeriod] = useState(1);
   const [addSubjectId, setAddSubjectId] = useState<number | "">("");
   const [addChargeId, setAddChargeId] = useState<number | "">("");
+  const [customTask, setCustomTask] = useState("");
+  const [customHours, setCustomHours] = useState(2);
 
   useEffect(() => {
     loadData();
@@ -99,6 +102,7 @@ export default function TeacherManagement() {
       setBatches(Array.isArray(batchesRes) ? batchesRes : batchesRes.data || []);
       setChargeTypes(Array.isArray(chargesRes) ? chargesRes : chargesRes.data || []);
       if (configRes?.target_contact_periods_per_week) setTarget(configRes.target_contact_periods_per_week);
+      setCtHours(configRes?.class_teacher_hours_per_week || 0);
     } catch (err) {
       setError("Failed to load data");
       console.error(err);
@@ -153,19 +157,32 @@ export default function TeacherManagement() {
     setAddChargeId("");
   };
 
-  const setChargeHours = (chargeId: number | null, hours: number) => {
+  const addCustomCharge = () => {
+    const name = customTask.trim();
+    if (!name) return;
+    if (formData.charges.some((c) => c.name.toLowerCase() === name.toLowerCase())) return;
     setFormData({
       ...formData,
-      charges: formData.charges.map((c) => (c.charge_id === chargeId ? { ...c, hours_per_week: hours } : c)),
+      charges: [...formData.charges, { charge_id: null, name, hours_per_week: Math.max(0, customHours) }],
+    });
+    setCustomTask("");
+    setCustomHours(2);
+  };
+
+  const setChargeHours = (idx: number, hours: number) => {
+    setFormData({
+      ...formData,
+      charges: formData.charges.map((c, i) => (i === idx ? { ...c, hours_per_week: hours } : c)),
     });
   };
 
-  const removeCharge = (chargeId: number | null) => {
-    setFormData({ ...formData, charges: formData.charges.filter((c) => c.charge_id !== chargeId) });
+  const removeCharge = (idx: number) => {
+    setFormData({ ...formData, charges: formData.charges.filter((_, i) => i !== idx) });
   };
 
   const chargeHours = formData.charges.reduce((sum, c) => sum + (Number(c.hours_per_week) || 0), 0);
-  const teachingCapacity = Math.max(0, target - chargeHours);
+  const classTeacherHours = formData.is_class_teacher ? ctHours : 0;
+  const teachingCapacity = Math.max(0, target - chargeHours - classTeacherHours);
 
   // --- unavailable helpers ---
   const addUnavailable = () => {
@@ -306,23 +323,39 @@ export default function TeacherManagement() {
                   <option key={c.id} value={c.id}>{c.name} ({c.default_hours_per_week}h)</option>
                 ))}
               </select>
-              <button type="button" onClick={addCharge} className="bg-slate-700 hover:bg-slate-800 text-white px-3 py-2 rounded">+ Add charge</button>
-              {chargeTypes.length === 0 && <span className="text-xs text-slate-400">Define charge types in the <strong>Charges</strong> tab.</span>}
+              <button type="button" onClick={addCharge} className="bg-slate-700 hover:bg-slate-800 text-white px-3 py-2 rounded">+ Add from catalog</button>
+            </div>
+            {/* Ad-hoc: type any task + its weekly hours, no catalog entry needed */}
+            <div className="flex flex-wrap items-end gap-2 mb-3">
+              <input
+                type="text"
+                value={customTask}
+                onChange={(e) => setCustomTask(e.target.value)}
+                placeholder="Or type a task (e.g. Library duty)"
+                className="border rounded px-3 py-2 w-64"
+              />
+              <input type="number" min={0} max={40} value={customHours} onChange={(e) => setCustomHours(Number(e.target.value))} className="border rounded px-3 py-2 w-24" />
+              <span className="text-xs text-slate-500 mb-2">hrs/week</span>
+              <button type="button" onClick={addCustomCharge} className="bg-slate-700 hover:bg-slate-800 text-white px-3 py-2 rounded">+ Add task</button>
             </div>
             <div className="space-y-2">
-              {formData.charges.map((c) => (
-                <div key={c.charge_id ?? c.name} className="flex items-center gap-3">
-                  <span className="text-sm text-slate-800 w-48">{c.name}</span>
-                  <input type="number" min={0} max={40} value={c.hours_per_week} onChange={(e) => setChargeHours(c.charge_id, Number(e.target.value))} className="border rounded px-2 py-1 w-24" />
+              {formData.charges.map((c, idx) => (
+                <div key={idx} className="flex items-center gap-3">
+                  <span className="text-sm text-slate-800 w-48">{c.name}{c.charge_id == null && <span className="text-xs text-slate-400"> (custom)</span>}</span>
+                  <input type="number" min={0} max={40} value={c.hours_per_week} onChange={(e) => setChargeHours(idx, Number(e.target.value))} className="border rounded px-2 py-1 w-24" />
                   <span className="text-xs text-slate-500">hrs/week</span>
-                  <button type="button" onClick={() => removeCharge(c.charge_id)} className="text-red-600 hover:underline text-sm">Remove</button>
+                  <button type="button" onClick={() => removeCharge(idx)} className="text-red-600 hover:underline text-sm">Remove</button>
                 </div>
               ))}
             </div>
             <div className="mt-3 bg-blue-50 border border-blue-200 rounded p-3 text-sm text-slate-700">
               Contact target: <strong>{target}</strong> periods/week &nbsp;•&nbsp; Charges: <strong>{chargeHours}</strong> hrs
+              {formData.is_class_teacher && <> &nbsp;•&nbsp; Class teacher: <strong>{ctHours}</strong> hrs</>}
               &nbsp;•&nbsp; Teaching capacity: <strong>{teachingCapacity}</strong> periods/week
-              <div className="text-xs text-slate-500 mt-1">Teaching capacity is computed automatically so every teacher carries the same total load.</div>
+              <div className="text-xs text-slate-500 mt-1">
+                Teaching capacity is computed automatically so every teacher carries the same total load.
+                {ctHours === 0 && " (Set class-teacher hours under Configuration → Teacher Workload.)"}
+              </div>
             </div>
             <label className="flex items-center mt-3">
               <input type="checkbox" checked={formData.is_class_teacher} onChange={(e) => setFormData({ ...formData, is_class_teacher: e.target.checked })} className="mr-2" />
