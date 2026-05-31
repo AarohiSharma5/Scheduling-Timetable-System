@@ -190,9 +190,20 @@ class Teacher(db.Model):
     # HR / profile fields (all optional). designation can carry roles like
     # "Coordinator", "Senior Teacher", "PGT", etc.
     phone = db.Column(db.String(20))
+    gender = db.Column(db.String(20))
     qualification = db.Column(db.String(200))
     designation = db.Column(db.String(120))
     joining_date = db.Column(db.Date)
+    # Profile summary fields (free-text / light enums). primary_subject /
+    # secondary_subject are profile labels; the authoritative teaching capability
+    # still lives in teaching_assignments / subject_grades.
+    primary_subject = db.Column(db.String(120))
+    secondary_subject = db.Column(db.String(120))
+    experience_years = db.Column(db.Integer)
+    # Employment availability type: "Full-time" | "Part-time" | "Visiting" | "On Leave".
+    availability = db.Column(db.String(40))
+    # Employment status: "active" | "inactive".
+    status = db.Column(db.String(20), nullable=False, default="active")
     # Max teaching periods/week. Computed dynamically as
     #   target_contact_periods_per_week - sum(charge hours)
     # so a teacher with charges teaches fewer classes but carries the same total load.
@@ -230,9 +241,15 @@ class Teacher(db.Model):
             "class_teacher_batch_id": self.class_teacher_batch_id,
             "has_duties": self.has_duties,
             "phone": self.phone,
+            "gender": self.gender,
             "qualification": self.qualification,
             "designation": self.designation,
             "joining_date": self.joining_date.isoformat() if self.joining_date else None,
+            "primary_subject": self.primary_subject,
+            "secondary_subject": self.secondary_subject,
+            "experience_years": self.experience_years,
+            "availability": self.availability,
+            "status": self.status or "active",
             "max_periods_per_week": self.max_periods_per_week,
         }
 

@@ -52,6 +52,12 @@ const FIELD_LABELS: Record<string, string> = {
   admission_date: "Adm. Date",
   qualification: "Qualification",
   designation: "Designation",
+  primary_subject: "Primary Subject",
+  secondary_subject: "Secondary Subject",
+  joining_date: "Joining Date",
+  experience_years: "Experience",
+  availability: "Availability",
+  status: "Status",
 };
 
 const STATUS_STYLE: Record<Row["status"], string> = {
@@ -253,7 +259,7 @@ export default function ImportWizard({ entity, onClose, onImported }: Props) {
                 <p>
                   {entity === "students"
                     ? "name, father/parent name, mother name, parent email, phone/mob, class, section, roll no, admission no, date of birth, gender, address, blood group, admission date"
-                    : "name, email, phone/mob, qualification, designation"}
+                    : "name, gender, email, phone/mob, qualification, designation, primary subject, secondary subject, joining date, experience, availability, status"}
                 </p>
               </div>
             </>

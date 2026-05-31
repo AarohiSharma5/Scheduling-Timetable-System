@@ -50,6 +50,7 @@ STUDENT_FIELDS = {
 
 TEACHER_FIELDS = {
     "name": ["name", "full name", "teacher name", "teacher", "employee name"],
+    "gender": ["gender", "sex", "m f"],
     "email": ["email", "e mail", "email id", "mail", "email address"],
     "phone": [
         "phone", "mobile", "mob", "mob no", "mobile no", "mobile number",
@@ -57,6 +58,20 @@ TEACHER_FIELDS = {
     ],
     "qualification": ["qualification", "qual", "degree", "education", "qualifications"],
     "designation": ["designation", "role", "post", "title", "position"],
+    "primary_subject": [
+        "primary subject", "main subject", "subject", "teaching subject",
+        "primary", "subject 1", "subject1",
+    ],
+    "secondary_subject": [
+        "secondary subject", "other subject", "subject 2", "subject2", "secondary",
+    ],
+    "joining_date": ["joining date", "date of joining", "doj", "joined on", "joining"],
+    "experience_years": [
+        "experience", "experience years", "years of experience", "exp",
+        "exp years", "total experience", "yrs exp",
+    ],
+    "availability": ["availability", "employment type", "type", "full part time"],
+    "status": ["status", "active", "employment status", "state"],
 }
 
 FIELD_SETS = {"students": STUDENT_FIELDS, "teachers": TEACHER_FIELDS}

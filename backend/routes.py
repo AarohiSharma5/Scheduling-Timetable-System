@@ -879,9 +879,15 @@ def create_teacher():
             class_teacher_batch_id=data.get("class_teacher_batch_id"),
             has_duties=data.get("has_duties", False),
             phone=(data.get("phone") or None),
+            gender=(data.get("gender") or None),
             qualification=(data.get("qualification") or None),
             designation=(data.get("designation") or None),
             joining_date=_parse_date(data.get("joining_date")),
+            primary_subject=(data.get("primary_subject") or None),
+            secondary_subject=(data.get("secondary_subject") or None),
+            experience_years=_parse_int(data.get("experience_years")),
+            availability=(data.get("availability") or None),
+            status=(data.get("status") or "active"),
         )
         # Subjects→classes, charges, and dynamic teaching capacity.
         _apply_teaching_and_charges(teacher, data, org_id)
@@ -929,9 +935,15 @@ def update_teacher(teacher_id):
         if "class_teacher_batch_id" in data: teacher.class_teacher_batch_id = data["class_teacher_batch_id"]
         if "has_duties" in data: teacher.has_duties = data["has_duties"]
         if "phone" in data: teacher.phone = data["phone"] or None
+        if "gender" in data: teacher.gender = data["gender"] or None
         if "qualification" in data: teacher.qualification = data["qualification"] or None
         if "designation" in data: teacher.designation = data["designation"] or None
         if "joining_date" in data: teacher.joining_date = _parse_date(data["joining_date"])
+        if "primary_subject" in data: teacher.primary_subject = data["primary_subject"] or None
+        if "secondary_subject" in data: teacher.secondary_subject = data["secondary_subject"] or None
+        if "experience_years" in data: teacher.experience_years = _parse_int(data["experience_years"])
+        if "availability" in data: teacher.availability = data["availability"] or None
+        if "status" in data: teacher.status = data["status"] or "active"
 
         # Subjects→classes, charges, and dynamic teaching capacity. This also
         # keeps subject_ids/assigned_batch_ids in sync and recomputes the cap.
@@ -1386,6 +1398,16 @@ def _parse_date(value):
         return None
     try:
         return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_int(value):
+    """Parse an int, tolerating None/blank/garbage (returns None instead of raising)."""
+    if value is None or value == "":
+        return None
+    try:
+        return int(float(value))
     except (ValueError, TypeError):
         return None
 
@@ -1967,8 +1989,15 @@ def import_commit(entity):
                     organization_id=org_id, user_id=user.id,
                     name=d.get("name"), email=d.get("email"),
                     phone=(d.get("phone") or None),
+                    gender=(d.get("gender") or None),
                     qualification=(d.get("qualification") or None),
                     designation=(d.get("designation") or None),
+                    joining_date=_parse_date(d.get("joining_date")),
+                    primary_subject=(d.get("primary_subject") or None),
+                    secondary_subject=(d.get("secondary_subject") or None),
+                    experience_years=_parse_int(d.get("experience_years")),
+                    availability=(d.get("availability") or None),
+                    status=(d.get("status") or "active"),
                 )
                 _apply_teaching_and_charges(teacher, {}, org_id)
                 db.session.add(teacher)

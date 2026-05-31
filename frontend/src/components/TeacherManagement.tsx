@@ -26,6 +26,7 @@ interface ChargeAssignment {
 
 interface Teacher {
   id: number;
+  teacher_code?: string | null;
   name: string;
   email: string;
   subject_ids: number[];
@@ -37,14 +38,24 @@ interface Teacher {
   charge_hours: number;
   unavailable_slots: UnavailableSlot[];
   is_class_teacher: boolean;
+  class_teacher_batch_id?: number | null;
   max_periods_per_week: number;
   phone?: string | null;
+  gender?: string | null;
   qualification?: string | null;
   designation?: string | null;
   joining_date?: string | null;
+  primary_subject?: string | null;
+  secondary_subject?: string | null;
+  experience_years?: number | null;
+  availability?: string | null;
+  status?: string | null;
 }
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const GENDERS = ["Male", "Female", "Other"];
+const AVAILABILITY = ["Full-time", "Part-time", "Visiting", "On Leave"];
+const STATUSES = ["active", "inactive"];
 
 interface Subject {
   id: number;
@@ -67,13 +78,20 @@ const emptyForm = {
   name: "",
   email: "",
   phone: "",
+  gender: "",
   qualification: "",
   designation: "",
   joining_date: "",
+  primary_subject: "",
+  secondary_subject: "",
+  experience_years: "" as number | "",
+  availability: "Full-time",
+  status: "active",
   subject_grades: [] as SubjectGrade[],
   charges: [] as ChargeAssignment[],
   unavailable_slots: [] as UnavailableSlot[],
   is_class_teacher: false,
+  class_teacher_batch_id: "" as number | "",
 };
 
 export default function TeacherManagement() {
@@ -247,13 +265,22 @@ export default function TeacherManagement() {
         name: formData.name,
         email: formData.email,
         phone: formData.phone || null,
+        gender: formData.gender || null,
         qualification: formData.qualification || null,
         designation: formData.designation || null,
         joining_date: formData.joining_date || null,
+        primary_subject: formData.primary_subject || null,
+        secondary_subject: formData.secondary_subject || null,
+        experience_years: formData.experience_years === "" ? null : Number(formData.experience_years),
+        availability: formData.availability || null,
+        status: formData.status || "active",
         subject_grades: formData.subject_grades,
         charges: formData.charges,
         unavailable_slots: formData.unavailable_slots,
         is_class_teacher: formData.is_class_teacher,
+        class_teacher_batch_id: formData.is_class_teacher && formData.class_teacher_batch_id !== ""
+          ? Number(formData.class_teacher_batch_id)
+          : null,
       };
       if (editingId) {
         await api.admin.teachers.update(editingId, payload);
@@ -315,13 +342,20 @@ export default function TeacherManagement() {
       name: teacher.name,
       email: teacher.email,
       phone: teacher.phone || "",
+      gender: teacher.gender || "",
       qualification: teacher.qualification || "",
       designation: teacher.designation || "",
       joining_date: teacher.joining_date ? teacher.joining_date.slice(0, 10) : "",
+      primary_subject: teacher.primary_subject || "",
+      secondary_subject: teacher.secondary_subject || "",
+      experience_years: teacher.experience_years ?? "",
+      availability: teacher.availability || "Full-time",
+      status: teacher.status || "active",
       subject_grades: caps.map((a) => ({ subject_id: a.subject_id, grades: a.grades || [] })),
       charges: (teacher.charges || []).map((c) => ({ ...c })),
       unavailable_slots: teacher.unavailable_slots || [],
       is_class_teacher: teacher.is_class_teacher,
+      class_teacher_batch_id: teacher.class_teacher_batch_id ?? "",
     });
     setEditingId(teacher.id);
     setShowForm(true);
@@ -384,11 +418,52 @@ export default function TeacherManagement() {
           {/* Profile / HR details (optional) */}
           <div className="grid grid-cols-2 gap-4">
             <input type="text" placeholder="Phone" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} className="border rounded px-3 py-2" />
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">Gender</label>
+              <select value={formData.gender} onChange={(e) => setFormData({ ...formData, gender: e.target.value })} className="border rounded px-3 py-2 w-full">
+                <option value="">Select…</option>
+                {GENDERS.map((g) => <option key={g} value={g}>{g}</option>)}
+              </select>
+            </div>
             <input type="text" placeholder="Designation (e.g. Coordinator, PGT)" value={formData.designation} onChange={(e) => setFormData({ ...formData, designation: e.target.value })} className="border rounded px-3 py-2" />
             <input type="text" placeholder="Qualification (e.g. M.Sc, B.Ed)" value={formData.qualification} onChange={(e) => setFormData({ ...formData, qualification: e.target.value })} className="border rounded px-3 py-2" />
+          </div>
+
+          {/* Subjects (profile labels) + experience */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">Primary subject</label>
+              <select value={formData.primary_subject} onChange={(e) => setFormData({ ...formData, primary_subject: e.target.value })} className="border rounded px-3 py-2 w-full">
+                <option value="">Select…</option>
+                {subjects.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">Secondary subject</label>
+              <select value={formData.secondary_subject} onChange={(e) => setFormData({ ...formData, secondary_subject: e.target.value })} className="border rounded px-3 py-2 w-full">
+                <option value="">None</option>
+                {subjects.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">Experience (years)</label>
+              <input type="number" min={0} max={60} value={formData.experience_years} onChange={(e) => setFormData({ ...formData, experience_years: e.target.value === "" ? "" : Number(e.target.value) })} className="border rounded px-3 py-2 w-full" />
+            </div>
             <div>
               <label className="block text-xs text-slate-500 mb-1">Joining date</label>
               <input type="date" value={formData.joining_date} onChange={(e) => setFormData({ ...formData, joining_date: e.target.value })} className="border rounded px-3 py-2 w-full" />
+            </div>
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">Availability</label>
+              <select value={formData.availability} onChange={(e) => setFormData({ ...formData, availability: e.target.value })} className="border rounded px-3 py-2 w-full">
+                {AVAILABILITY.map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">Status</label>
+              <select value={formData.status} onChange={(e) => setFormData({ ...formData, status: e.target.value })} className="border rounded px-3 py-2 w-full">
+                {STATUSES.map((s) => <option key={s} value={s}>{s === "active" ? "Active" : "Inactive"}</option>)}
+              </select>
             </div>
           </div>
 
@@ -481,10 +556,22 @@ export default function TeacherManagement() {
                 {ctHours === 0 && " (Set class-teacher hours under Configuration → Teacher Workload.)"}
               </div>
             </div>
-            <label className="flex items-center mt-3">
-              <input type="checkbox" checked={formData.is_class_teacher} onChange={(e) => setFormData({ ...formData, is_class_teacher: e.target.checked })} className="mr-2" />
-              Class Teacher
-            </label>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <label className="flex items-center">
+                <input type="checkbox" checked={formData.is_class_teacher} onChange={(e) => setFormData({ ...formData, is_class_teacher: e.target.checked, class_teacher_batch_id: e.target.checked ? formData.class_teacher_batch_id : "" })} className="mr-2" />
+                Class Teacher
+              </label>
+              {formData.is_class_teacher && (
+                <select
+                  value={formData.class_teacher_batch_id}
+                  onChange={(e) => setFormData({ ...formData, class_teacher_batch_id: e.target.value === "" ? "" : Number(e.target.value) })}
+                  className="border rounded px-3 py-2 text-sm"
+                >
+                  <option value="">Class teacher of… (select section)</option>
+                  {batches.map((b) => <option key={b.id} value={b.id}>{b.grade}-{b.section}</option>)}
+                </select>
+              )}
+            </div>
           </div>
 
           {/* Availability */}
@@ -520,54 +607,87 @@ export default function TeacherManagement() {
         <table className="w-full">
           <thead className="bg-slate-100 border-b">
             <tr>
-              <th className="px-4 py-2 text-left">Name</th>
-              <th className="px-4 py-2 text-left">Can teach (subject → grades)</th>
-              <th className="px-4 py-2 text-left">Assigned sections</th>
-              <th className="px-4 py-2 text-left">Charges</th>
-              <th className="px-4 py-2 text-left">Cap.</th>
-              <th className="px-4 py-2 text-left">Unavailable</th>
-              <th className="px-4 py-2 text-left">Actions</th>
+              <th className="px-3 py-2 text-left">ID</th>
+              <th className="px-3 py-2 text-left">Name &amp; contact</th>
+              <th className="px-3 py-2 text-left">Profile</th>
+              <th className="px-3 py-2 text-left">Subjects</th>
+              <th className="px-3 py-2 text-left">Assigned sections</th>
+              <th className="px-3 py-2 text-left">Class teacher of</th>
+              <th className="px-3 py-2 text-left">Charges</th>
+              <th className="px-3 py-2 text-left">Cap.</th>
+              <th className="px-3 py-2 text-left">Unavailable</th>
+              <th className="px-3 py-2 text-left">Status</th>
+              <th className="px-3 py-2 text-left">Actions</th>
             </tr>
           </thead>
           <tbody>
             {teachers.map((teacher) => {
               const assignments = teacher.teaching_assignments || [];
               const caps = teacher.subject_grades || [];
+              const isActive = (teacher.status || "active") === "active";
               return (
                 <tr key={teacher.id} className="border-b hover:bg-slate-50 align-top">
-                  <td className="px-4 py-2">
-                    <div>{teacher.name}</div>
+                  <td className="px-3 py-2 text-sm font-mono text-slate-600">{teacher.teacher_code || "—"}</td>
+                  <td className="px-3 py-2">
+                    <div className="font-medium text-slate-800">{teacher.name}</div>
                     <div className="text-xs text-slate-400">{teacher.email}</div>
+                    {teacher.phone && <div className="text-xs text-slate-500">📞 {teacher.phone}</div>}
+                    <div className="text-xs text-slate-500">{teacher.gender || ""}</div>
                     {!teacher.takes_classes && <span className="text-xs bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded">substitute</span>}
                   </td>
-                  <td className="px-4 py-2 text-sm">
+                  <td className="px-3 py-2 text-sm">
+                    {teacher.designation && <div className="text-slate-700">{teacher.designation}</div>}
+                    {teacher.qualification && <div className="text-xs text-slate-500">{teacher.qualification}</div>}
+                    <div className="text-xs text-slate-500">
+                      {teacher.experience_years != null ? `${teacher.experience_years} yr exp` : ""}
+                      {teacher.availability ? ` · ${teacher.availability}` : ""}
+                    </div>
+                    {teacher.joining_date && <div className="text-xs text-slate-400">Joined {teacher.joining_date.slice(0, 10)}</div>}
+                  </td>
+                  <td className="px-3 py-2 text-sm">
+                    {(teacher.primary_subject || teacher.secondary_subject) && (
+                      <div className="mb-1">
+                        {teacher.primary_subject && <span className="inline-block bg-blue-50 text-blue-700 text-xs px-1.5 py-0.5 rounded mr-1">{teacher.primary_subject}</span>}
+                        {teacher.secondary_subject && <span className="inline-block bg-slate-100 text-slate-600 text-xs px-1.5 py-0.5 rounded">{teacher.secondary_subject}</span>}
+                      </div>
+                    )}
                     {caps.length === 0 ? <span className="text-slate-400">—</span> : caps.map((a) => (
-                      <div key={a.subject_id}>
+                      <div key={a.subject_id} className="text-xs">
                         <span className="font-medium">{subjectName(a.subject_id)}</span>
                         <span className="text-slate-500"> → {a.grades.join(", ") || "—"}</span>
                       </div>
                     ))}
                   </td>
-                  <td className="px-4 py-2 text-sm">
+                  <td className="px-3 py-2 text-sm">
                     {assignments.length === 0 ? <span className="text-slate-400">—</span> : assignments.map((a) => (
-                      <div key={a.subject_id}>
+                      <div key={a.subject_id} className="text-xs">
                         <span className="font-medium">{subjectName(a.subject_id)}</span>
                         <span className="text-slate-500"> → {a.batch_ids.map(batchLabel).join(", ") || "—"}</span>
                       </div>
                     ))}
                   </td>
-                  <td className="px-4 py-2 text-sm">
+                  <td className="px-3 py-2 text-sm">
+                    {teacher.is_class_teacher
+                      ? <span className="inline-block bg-emerald-50 text-emerald-700 text-xs px-1.5 py-0.5 rounded">{teacher.class_teacher_batch_id ? batchLabel(teacher.class_teacher_batch_id) : "yes"}</span>
+                      : <span className="text-slate-400">—</span>}
+                  </td>
+                  <td className="px-3 py-2 text-sm">
                     {(teacher.charges && teacher.charges.length > 0)
                       ? teacher.charges.map((c) => `${c.name} (${c.hours_per_week}h)`).join(", ")
                       : <span className="text-slate-400">—</span>}
                   </td>
-                  <td className="px-4 py-2 text-sm">{teacher.max_periods_per_week}/wk</td>
-                  <td className="px-4 py-2 text-sm">
+                  <td className="px-3 py-2 text-sm">{teacher.max_periods_per_week}/wk</td>
+                  <td className="px-3 py-2 text-sm">
                     {(teacher.unavailable_slots && teacher.unavailable_slots.length > 0)
                       ? teacher.unavailable_slots.map((s) => `${s.day.slice(0, 3)} P${s.period}`).join(", ")
                       : <span className="text-slate-400">—</span>}
                   </td>
-                  <td className="px-4 py-2 whitespace-nowrap">
+                  <td className="px-3 py-2 text-sm">
+                    <span className={`inline-block text-xs px-2 py-0.5 rounded ${isActive ? "bg-green-100 text-green-700" : "bg-slate-200 text-slate-600"}`}>
+                      {isActive ? "Active" : "Inactive"}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap">
                     <div className="flex gap-2">
                       <button onClick={() => handleEdit(teacher)} className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-3 py-1.5 rounded">Edit</button>
                       <button onClick={() => setPrefTeacher(teacher)} className="bg-white hover:bg-purple-50 text-purple-700 border border-purple-300 text-sm font-medium px-3 py-1.5 rounded">Preferences</button>
