@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { api } from "../api";
 import TeacherPreferenceEditor from "./TeacherPreferenceEditor";
 
@@ -91,10 +91,20 @@ export default function TeacherManagement() {
   const [customHours, setCustomHours] = useState(2);
   const [autoMsg, setAutoMsg] = useState("");
   const [autoBusy, setAutoBusy] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
     loadData();
   }, []);
+
+  // Bring the form into view whenever it opens (Add) or switches teacher (Edit).
+  // Without this, clicking Edit on a row far down the long list opens the form
+  // at the top, off-screen, making it look like nothing happened.
+  useEffect(() => {
+    if (showForm && formRef.current) {
+      formRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [showForm, editingId]);
 
   const loadData = async () => {
     try {
@@ -323,7 +333,8 @@ export default function TeacherManagement() {
       {error && <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">{error}</div>}
 
       {showForm && (
-        <form onSubmit={handleSubmit} className="bg-white p-6 rounded-lg shadow-md space-y-5">
+        <form ref={formRef} onSubmit={handleSubmit} className="bg-white p-6 rounded-lg shadow-md space-y-5 ring-2 ring-blue-200">
+          <h3 className="text-lg font-semibold text-slate-900">{editingId ? "Edit teacher" : "Add teacher"}</h3>
           <div className="grid grid-cols-2 gap-4">
             <input type="text" placeholder="Name" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} className="border rounded px-3 py-2" required />
             <input type="email" placeholder="Email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} className="border rounded px-3 py-2" required />

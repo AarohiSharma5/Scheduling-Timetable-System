@@ -871,8 +871,20 @@ def update_teacher(teacher_id):
     try:
         teacher = owned_or_404(Teacher, teacher_id)
         data = request.get_json() or {}
+        user = User.query.get(teacher.user_id)
 
-        if "name" in data: teacher.name = data["name"]
+        if "name" in data:
+            teacher.name = data["name"]
+            if user:
+                user.name = data["name"]
+        if "email" in data and data["email"] and data["email"] != teacher.email:
+            # Email is the login id, so it must stay unique across all users.
+            clash = User.query.filter(User.email == data["email"], User.id != teacher.user_id).first()
+            if clash:
+                return jsonify({"error": "A user with this email already exists"}), 409
+            teacher.email = data["email"]
+            if user:
+                user.email = data["email"]
         if "unavailable_slots" in data: teacher.unavailable_slots = data["unavailable_slots"]
         if "is_class_teacher" in data: teacher.is_class_teacher = data["is_class_teacher"]
         if "class_teacher_batch_id" in data: teacher.class_teacher_batch_id = data["class_teacher_batch_id"]
