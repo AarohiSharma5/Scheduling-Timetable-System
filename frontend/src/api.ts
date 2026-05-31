@@ -128,6 +128,14 @@ export const api = {
       delete: async (id: number) => {
         await axiosInstance.delete(`/admin/teachers/${id}`);
       },
+      getPreferences: async (id: number) => {
+        const { data } = await axiosInstance.get(`/admin/teachers/${id}/preferences`);
+        return data;
+      },
+      savePreferences: async (id: number, prefs: any) => {
+        const { data } = await axiosInstance.put(`/admin/teachers/${id}/preferences`, prefs);
+        return data;
+      },
     },
 
     // Batches

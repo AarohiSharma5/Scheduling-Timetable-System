@@ -13,7 +13,23 @@ Constraints:
 
 from datetime import time
 from typing import Dict, List, Tuple, Optional, Set
-from models import db, Teacher, Batch, Subject, SchoolConfig, Timetable, TimetableSlot, PinnedSlot
+from models import db, Teacher, Batch, Subject, SchoolConfig, Timetable, TimetableSlot, PinnedSlot, TeacherPreference
+
+# ---------------------------------------------------------------------------
+# Soft-preference / workload scoring weights. Higher = more desirable slot.
+# These are *soft*: a low score never blocks a placement, it only influences
+# which valid slot is chosen, so a feasible timetable is always produced.
+# ---------------------------------------------------------------------------
+W_PREFERRED_CLASS = 10
+W_PREFERRED_SUBJECT = 8
+W_PREFERRED_PERIOD = 6
+P_FOUR_CONSECUTIVE = -12     # creating a 4th (or longer) back-to-back period
+P_THREE_CONSECUTIVE = -5     # mild nudge away from 3 in a row
+P_NO_BREAK_HALF_DAY = -8     # teaching a full half-day with no gap
+P_OVER_SOFT_DAY = -15        # exceeding the soft per-day workload target
+P_OVER_SOFT_WEEK = -10       # exceeding the soft per-week workload target
+W_LIGHTER_DAY = -2           # per period already taught that day (spreads load)
+DEFAULT_SOFT_PERIODS_DAY = 6 # fallback soft daily cap when teacher sets none
 
 # ============================================================================
 # DATA STRUCTURES FOR SCHEDULING
@@ -273,18 +289,50 @@ class SchedulingEngine:
             s.id: bool(getattr(s, "requires_double", False)) for s in subjects
         }
 
+        self.teacher_by_id = {t.id: t for t in teachers}
+
+        # Load optional soft preferences (one row per teacher), scoped to org.
+        self.prefs = {}
+        pq = TeacherPreference.query
+        if self.organization_id is not None:
+            pq = pq.filter_by(organization_id=self.organization_id)
+        for p in pq.all():
+            self.prefs[p.teacher_id] = p
+
         # Teacher availability: set of (day, period) the teacher cannot teach.
+        # This is HARD and merges Teacher.unavailable_slots with the (also hard)
+        # blocked_slots from preferences.
         self.teacher_unavail = {}
         for t in teachers:
             blocked = set()
-            for entry in (t.unavailable_slots or []):
+            pref = self.prefs.get(t.id)
+            sources = list(t.unavailable_slots or [])
+            if pref:
+                sources += list(pref.blocked_slots or [])
+            for entry in sources:
                 try:
                     blocked.add((entry.get("day"), int(entry.get("period"))))
                 except (AttributeError, TypeError, ValueError):
                     continue
             self.teacher_unavail[t.id] = blocked
 
+        # Soft weekly target per teacher (preference overrides; falls back to the
+        # hard weekly max). Used only for scoring, never to block a placement.
+        self.soft_week = {}
+        self.soft_day = {}
+        for t in teachers:
+            pref = self.prefs.get(t.id)
+            self.soft_week[t.id] = (pref.max_periods_week if pref and pref.max_periods_week
+                                    else (t.max_periods_per_week or 24))
+            self.soft_day[t.id] = (pref.max_periods_day if pref and pref.max_periods_day
+                                   else DEFAULT_SOFT_PERIODS_DAY)
+
+        # Full school day length (periods), used for preferred-period categories
+        # and the half-day no-break heuristic.
+        self.school_periods = max((p.period_num for p in self.slots), default=1)
+
         self.teacher_load = {t.id: 0 for t in teachers}
+        self.teacher_day_load = {}        # (teacher_id, day) -> periods that day
         self.occupied = set()             # (day, period, batch_id)
         self.teacher_busy = set()         # (teacher_id, day, period)
         self.batch_day_subject = {}       # (batch_id, day, subject_id) -> count
@@ -317,6 +365,24 @@ class SchedulingEngine:
                         f"No teacher found for {subject.name} in Grade {batch.grade}-{batch.section}"
                     )
                     continue
+
+                # Soft preference at selection time: among eligible teachers,
+                # favor one who has listed this class and/or subject as preferred.
+                # Whichever teacher is chosen keeps the (batch, subject) for ALL
+                # of its weekly periods, so a teacher assigned to a section teaches
+                # that section consistently across the week.
+                def _pref_rank(t):
+                    p = self.prefs.get(t.id)
+                    if not p:
+                        return 0
+                    rank = 0
+                    if batch.id in (p.preferred_classes or []):
+                        rank += 2
+                    if subject_id in (p.preferred_subjects or []):
+                        rank += 1
+                    return rank
+
+                eligible_teachers.sort(key=lambda t: (_pref_rank(t), -self.teacher_max.get(t.id, 24)), reverse=True)
 
                 requirements.append(Requirement(
                     teacher_id=eligible_teachers[0].id,
@@ -372,9 +438,92 @@ class SchedulingEngine:
         self.occupied.add((day, period, batch_id))
         self.teacher_busy.add((teacher_id, day, period))
         self.teacher_load[teacher_id] = self.teacher_load.get(teacher_id, 0) + 1
+        self.teacher_day_load[(teacher_id, day)] = self.teacher_day_load.get((teacher_id, day), 0) + 1
         self.batch_schedule[batch_id][subject_id] = self.batch_schedule[batch_id].get(subject_id, 0) + 1
         key = (batch_id, day, subject_id)
         self.batch_day_subject[key] = self.batch_day_subject.get(key, 0) + 1
+
+    # ========================================================================
+    # SOFT-PREFERENCE / WORKLOAD SCORING
+    # ========================================================================
+
+    def _period_category(self, period: int) -> str:
+        """Map a period number to a time-of-day bucket: morning / midday / last."""
+        n = max(self.school_periods, 1)
+        if period <= n / 3.0:
+            return "morning"
+        if period <= 2.0 * n / 3.0:
+            return "midday"
+        return "last"
+
+    def _consecutive_len(self, teacher_id, day, period) -> int:
+        """Length of the back-to-back teaching run that would include (day, period)."""
+        length = 1
+        p = period - 1
+        while (teacher_id, day, p) in self.teacher_busy:
+            length += 1
+            p -= 1
+        p = period + 1
+        while (teacher_id, day, p) in self.teacher_busy:
+            length += 1
+            p += 1
+        return length
+
+    def _score_slot(self, teacher_id, batch_id, subject_id, day, period) -> float:
+        """Weighted desirability of placing (teacher, subject, batch) at (day, period).
+
+        Purely advisory: only valid (hard-constraint-passing) slots are scored, so
+        a low score never prevents a placement, it only ranks the choices.
+        """
+        score = 0.0
+        pref = self.prefs.get(teacher_id)
+
+        # --- Soft preferences ---
+        if pref:
+            if batch_id in (pref.preferred_classes or []):
+                score += W_PREFERRED_CLASS
+            if subject_id in (pref.preferred_subjects or []):
+                score += W_PREFERRED_SUBJECT
+            wanted = pref.preferred_slots or []
+            if self._period_category(period) in wanted or period in wanted:
+                score += W_PREFERRED_PERIOD
+
+        # --- Workload balancing ---
+        run = self._consecutive_len(teacher_id, day, period)
+        if run >= 4:
+            score += P_FOUR_CONSECUTIVE
+        elif run == 3:
+            score += P_THREE_CONSECUTIVE
+
+        # No break in a half-day: a run spanning at least half the day's periods.
+        if run >= max(2, (self.school_periods + 1) // 2):
+            score += P_NO_BREAK_HALF_DAY
+
+        # Soft daily / weekly targets (exceeding is allowed but discouraged).
+        day_load = self.teacher_day_load.get((teacher_id, day), 0)
+        if day_load + 1 > self.soft_day.get(teacher_id, DEFAULT_SOFT_PERIODS_DAY):
+            score += P_OVER_SOFT_DAY
+        if self.teacher_load.get(teacher_id, 0) + 1 > self.soft_week.get(teacher_id, 24):
+            score += P_OVER_SOFT_WEEK
+
+        # Even distribution: prefer days where this teacher is so far lighter.
+        score += W_LIGHTER_DAY * day_load
+        return score
+
+    def _best_slot(self, req):
+        """Return the highest-scoring valid single slot for a requirement, or None."""
+        best = None
+        best_score = None
+        for slot in self.slots:
+            if not self._can_place(req.teacher_id, req.batch_id, req.subject_id,
+                                   slot.day, slot.period_num):
+                continue
+            s = self._score_slot(req.teacher_id, req.batch_id, req.subject_id,
+                                 slot.day, slot.period_num)
+            if best_score is None or s > best_score:
+                best_score = s
+                best = slot
+        return best
 
     def _place_pinned(self, teachers):
         """Place admin-locked periods before anything else."""
@@ -426,14 +575,18 @@ class SchedulingEngine:
                 self._place_singles(req, remaining)
 
     def _place_singles(self, req: Requirement, remaining: int):
-        """Place `remaining` single periods for a requirement, one per slot."""
+        """Place `remaining` single periods, each time picking the best-scoring slot.
+
+        Re-evaluating after every placement lets the workload/preference score react
+        to the slots already taken (consecutive runs, day load, etc.).
+        """
         placed = 0
-        for slot in self.slots:
-            if placed >= remaining:
+        for _ in range(remaining):
+            slot = self._best_slot(req)
+            if slot is None:
                 break
-            if self._can_place(req.teacher_id, req.batch_id, req.subject_id, slot.day, slot.period_num):
-                self._commit(req.teacher_id, req.subject_id, req.batch_id, slot.day, slot.period_num)
-                placed += 1
+            self._commit(req.teacher_id, req.subject_id, req.batch_id, slot.day, slot.period_num)
+            placed += 1
         if placed < remaining:
             self.conflicts.append(
                 f"Could only place {placed}/{remaining} periods of subject {req.subject_id} "
@@ -446,29 +599,36 @@ class SchedulingEngine:
         leftover_single = remaining % 2
         pairs_placed = 0
 
-        for day in self.days_in_order:
-            if pairs_placed >= pairs_needed:
-                break
-            # One double block of a subject per day for a batch.
-            if self.batch_day_subject.get((req.batch_id, day, req.subject_id), 0) > 0:
-                continue
+        for _ in range(pairs_needed):
             # Weekly quota must allow two more.
             if self.batch_schedule[req.batch_id].get(req.subject_id, 0) + 2 > self.subject_periods.get(req.subject_id, 1):
                 break
 
-            periods = self.slots_by_day.get(day, [])
-            for i in range(len(periods) - 1):
-                p1, p2 = periods[i], periods[i + 1]
-                if p2 != p1 + 1:
-                    continue  # must be back-to-back (no lunch gap between)
-                # Spacing is enforced by the one-block-per-day guard above, so we
-                # skip the per-day spacing check for the pair itself.
-                if (self._can_place(req.teacher_id, req.batch_id, req.subject_id, day, p1, check_spacing=False)
-                        and self._can_place(req.teacher_id, req.batch_id, req.subject_id, day, p2, check_spacing=False)):
-                    self._commit(req.teacher_id, req.subject_id, req.batch_id, day, p1)
-                    self._commit(req.teacher_id, req.subject_id, req.batch_id, day, p2)
-                    pairs_placed += 1
-                    break
+            # Gather every feasible back-to-back pair and pick the best-scoring one.
+            best_pair = None
+            best_score = None
+            for day in self.days_in_order:
+                # One double block of a subject per day for a batch.
+                if self.batch_day_subject.get((req.batch_id, day, req.subject_id), 0) > 0:
+                    continue
+                periods = self.slots_by_day.get(day, [])
+                for i in range(len(periods) - 1):
+                    p1, p2 = periods[i], periods[i + 1]
+                    if p2 != p1 + 1:
+                        continue  # must be back-to-back (no lunch gap between)
+                    if (self._can_place(req.teacher_id, req.batch_id, req.subject_id, day, p1, check_spacing=False)
+                            and self._can_place(req.teacher_id, req.batch_id, req.subject_id, day, p2, check_spacing=False)):
+                        s = (self._score_slot(req.teacher_id, req.batch_id, req.subject_id, day, p1)
+                             + self._score_slot(req.teacher_id, req.batch_id, req.subject_id, day, p2))
+                        if best_score is None or s > best_score:
+                            best_score = s
+                            best_pair = (day, p1, p2)
+            if best_pair is None:
+                break
+            day, p1, p2 = best_pair
+            self._commit(req.teacher_id, req.subject_id, req.batch_id, day, p1)
+            self._commit(req.teacher_id, req.subject_id, req.batch_id, day, p2)
+            pairs_placed += 1
 
         if leftover_single:
             self._place_singles(req, 1)

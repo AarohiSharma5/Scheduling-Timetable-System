@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { api } from "../api";
+import TeacherPreferenceEditor from "./TeacherPreferenceEditor";
 
 interface UnavailableSlot {
   day: string;
@@ -38,6 +39,7 @@ export default function TeacherManagement() {
   const [error, setError] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [prefTeacher, setPrefTeacher] = useState<Teacher | null>(null);
 
   const [formData, setFormData] = useState({
     name: "",
@@ -269,6 +271,9 @@ export default function TeacherManagement() {
                   <button onClick={() => handleEdit(teacher)} className="text-blue-600 hover:underline text-sm">
                     Edit
                   </button>
+                  <button onClick={() => setPrefTeacher(teacher)} className="text-purple-600 hover:underline text-sm">
+                    Preferences
+                  </button>
                   <button onClick={() => handleDelete(teacher.id)} className="text-red-600 hover:underline text-sm">
                     Delete
                   </button>
@@ -278,6 +283,16 @@ export default function TeacherManagement() {
           </tbody>
         </table>
       </div>
+
+      {prefTeacher && (
+        <TeacherPreferenceEditor
+          teacherId={prefTeacher.id}
+          teacherName={prefTeacher.name}
+          subjects={subjects}
+          batches={batches}
+          onClose={() => setPrefTeacher(null)}
+        />
+      )}
     </div>
   );
 }

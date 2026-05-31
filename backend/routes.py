@@ -11,7 +11,7 @@ Endpoints organized by module:
 """
 
 from flask import Blueprint, request, jsonify, abort, make_response
-from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification, Organization, PinnedSlot
+from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification, Organization, PinnedSlot, TeacherPreference
 from datetime import datetime, timedelta
 from functools import wraps
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -780,6 +780,85 @@ def delete_teacher(teacher_id):
             db.session.delete(user)
         db.session.commit()
         return jsonify({"message": "Teacher deleted"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# TEACHER PREFERENCE ENDPOINTS (soft scheduling constraints + workload targets)
+# ============================================================================
+
+def _default_preference_payload(teacher_id):
+    """Empty-but-valid preference object used when a teacher has none saved yet."""
+    return {
+        "teacher_id": teacher_id,
+        "preferred_classes": [],
+        "preferred_subjects": [],
+        "preferred_slots": [],
+        "blocked_slots": [],
+        "max_periods_day": None,
+        "max_periods_week": None,
+        "allow_class_teacher_charge": True,
+        "allow_extra_charge": True,
+    }
+
+
+@api.route("/admin/teachers/<int:teacher_id>/preferences", methods=["GET"])
+@role_required("admin", "principal")
+def get_teacher_preferences(teacher_id):
+    """Return a teacher's soft preferences (defaults if none have been set)."""
+    teacher = owned_or_404(Teacher, teacher_id)
+    pref = TeacherPreference.query.filter_by(
+        teacher_id=teacher.id, organization_id=current_org_id()
+    ).first()
+    if not pref:
+        return jsonify(_default_preference_payload(teacher.id)), 200
+    return jsonify(pref.to_dict()), 200
+
+
+@api.route("/admin/teachers/<int:teacher_id>/preferences", methods=["PUT"])
+@role_required("admin")
+def upsert_teacher_preferences(teacher_id):
+    """Create or update a teacher's soft preferences / workload targets."""
+    try:
+        teacher = owned_or_404(Teacher, teacher_id)
+        org_id = current_org_id()
+        data = request.get_json() or {}
+
+        pref = TeacherPreference.query.filter_by(
+            teacher_id=teacher.id, organization_id=org_id
+        ).first()
+        if not pref:
+            pref = TeacherPreference(organization_id=org_id, teacher_id=teacher.id)
+            db.session.add(pref)
+
+        def _int_or_none(v):
+            try:
+                return int(v) if v not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+
+        if "preferred_classes" in data:
+            pref.preferred_classes = [int(x) for x in (data["preferred_classes"] or [])]
+        if "preferred_subjects" in data:
+            pref.preferred_subjects = [int(x) for x in (data["preferred_subjects"] or [])]
+        if "preferred_slots" in data:
+            pref.preferred_slots = data["preferred_slots"] or []
+        if "blocked_slots" in data:
+            pref.blocked_slots = data["blocked_slots"] or []
+        if "max_periods_day" in data:
+            pref.max_periods_day = _int_or_none(data["max_periods_day"])
+        if "max_periods_week" in data:
+            pref.max_periods_week = _int_or_none(data["max_periods_week"])
+        if "allow_class_teacher_charge" in data:
+            pref.allow_class_teacher_charge = bool(data["allow_class_teacher_charge"])
+        if "allow_extra_charge" in data:
+            pref.allow_extra_charge = bool(data["allow_extra_charge"])
+
+        pref.updated_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify(pref.to_dict()), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500

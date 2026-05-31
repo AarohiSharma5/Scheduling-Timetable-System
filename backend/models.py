@@ -187,6 +187,46 @@ class Teacher(db.Model):
 
 
 # ============================================================================
+# TEACHER PREFERENCE MODEL - Soft preferences + workload targets
+# ============================================================================
+class TeacherPreference(db.Model):
+    """Optional, *soft* scheduling preferences for a teacher.
+
+    The scheduler tries to satisfy these (via a weighted score) but will violate
+    them when the timetable would otherwise be impossible. One row per teacher.
+    """
+    __tablename__ = "teacher_preferences"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
+    teacher_id = db.Column(db.Integer, db.ForeignKey("teachers.id"), nullable=False, unique=True, index=True)
+
+    preferred_classes = db.Column(db.JSON, default=list)   # list of batch ids
+    preferred_subjects = db.Column(db.JSON, default=list)  # list of subject ids
+    preferred_slots = db.Column(db.JSON, default=list)     # ["morning","midday","last"] and/or period numbers
+    blocked_slots = db.Column(db.JSON, default=list)       # [{"day": "Monday", "period": 1}] (hard, merged with Teacher.unavailable_slots)
+    max_periods_day = db.Column(db.Integer)                # soft daily target
+    max_periods_week = db.Column(db.Integer)               # soft weekly target
+    allow_class_teacher_charge = db.Column(db.Boolean, nullable=False, default=True)
+    allow_extra_charge = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "teacher_id": self.teacher_id,
+            "preferred_classes": self.preferred_classes or [],
+            "preferred_subjects": self.preferred_subjects or [],
+            "preferred_slots": self.preferred_slots or [],
+            "blocked_slots": self.blocked_slots or [],
+            "max_periods_day": self.max_periods_day,
+            "max_periods_week": self.max_periods_week,
+            "allow_class_teacher_charge": self.allow_class_teacher_charge,
+            "allow_extra_charge": self.allow_extra_charge,
+        }
+
+
+# ============================================================================
 # SCHOOL CONFIG MODEL - School timing settings
 # ============================================================================
 class SchoolConfig(db.Model):
