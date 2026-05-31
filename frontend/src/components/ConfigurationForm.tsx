@@ -26,6 +26,7 @@ export default function ConfigurationForm() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [workload, setWorkload] = useState<any>(null);
 
   const [formData, setFormData] = useState({
     start_time: "08:00",
@@ -49,6 +50,7 @@ export default function ConfigurationForm() {
 
   useEffect(() => {
     loadConfig();
+    api.admin.workload.summary().then(setWorkload).catch(() => {});
   }, []);
 
   const loadConfig = async () => {
@@ -236,6 +238,35 @@ export default function ConfigurationForm() {
               </p>
             </div>
           </div>
+
+          {workload && (
+            <div className="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <h4 className="font-semibold text-slate-900 mb-2">Suggested workload (from this school's size)</h4>
+              <ul className="text-sm text-slate-700 grid grid-cols-2 gap-x-6 gap-y-1">
+                <li>👨‍🎓 Students: <strong>{workload.total_students ?? "—"}</strong></li>
+                <li>🏫 Classes: <strong>{workload.total_classes}</strong></li>
+                <li>📖 Subjects: <strong>{workload.total_subjects}</strong></li>
+                <li>📅 Weekly periods demanded: <strong>{workload.total_weekly_periods_demanded}</strong></li>
+                <li>👩‍🏫 Class-taking teachers: <strong>{workload.teaching_teachers}</strong></li>
+                <li>🔁 Substitute pool: <strong>{workload.substitute_teachers}</strong></li>
+              </ul>
+              <div className="mt-3 flex items-center gap-3">
+                <span className="text-sm text-slate-700">
+                  Suggested target: <strong>{workload.suggested_target_periods_per_week}</strong> periods/week/teacher
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setFormData({ ...formData, target_contact_periods_per_week: workload.suggested_target_periods_per_week })}
+                  className="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-1.5 rounded"
+                >
+                  Use suggested
+                </button>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                = total weekly periods ÷ class-taking teachers. Save to apply &amp; rebalance everyone.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Summary */}

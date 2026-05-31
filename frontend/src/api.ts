@@ -136,6 +136,18 @@ export const api = {
         const { data } = await axiosInstance.put(`/admin/teachers/${id}/preferences`, prefs);
         return data;
       },
+      autoAssignSections: async () => {
+        const { data } = await axiosInstance.post("/admin/teachers/auto-assign-sections", {});
+        return data;
+      },
+    },
+
+    // Workload stats that drive the suggested per-teacher contact target
+    workload: {
+      summary: async () => {
+        const { data } = await axiosInstance.get("/admin/workload/summary");
+        return data;
+      },
     },
 
     // Batches

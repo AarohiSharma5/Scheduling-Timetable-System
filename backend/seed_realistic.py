@@ -592,13 +592,14 @@ def seed_database():
         # and class-teacher hours are left empty/zero for the coordinator to set;
         # with no charges every teacher's capacity equals the target.
         # =====================================================================
-        print("\n🧩 Building structured teaching assignments...")
+        print("\n🧩 Building capability + structured teaching assignments...")
         batch_by_id = {b.id: b for b in batches}
         TARGET = 40
         CT_HOURS = 5  # matches the org's class_teacher_hours_per_week above
         for t in teachers:
             assigned = list(t.assigned_batch_ids or [])
             assignments = []
+            grade_caps = {}  # subject_id -> set(grades)
             for sid in (t.subject_ids or []):
                 # This subject is taught only to the teacher's batches that
                 # actually take it.
@@ -606,13 +607,79 @@ def seed_database():
                         if batch_by_id.get(bid) and sid in (batch_by_id[bid].subject_ids or [])]
                 if bids:
                     assignments.append({"subject_id": sid, "batch_ids": sorted(set(bids))})
+                    grade_caps[sid] = {str(batch_by_id[bid].grade) for bid in bids}
             t.teaching_assignments = assignments
+            # Grade-level capability so the fair auto-distributor can redistribute.
+            t.subject_grades = [{"subject_id": sid, "grades": sorted(gs)} for sid, gs in grade_caps.items()]
             t.charges = []  # extra charges left for the coordinator to add
-            # Capacity = target minus reserved class-teacher hours (if a CT).
+            t.takes_classes = True
             t.max_periods_per_week = TARGET - (CT_HOURS if t.is_class_teacher else 0)
         db.session.commit()
-        print("   ✅ Teaching assignments set; capacity = target − class-teacher hours "
-              f"(target {TARGET}, CT {CT_HOURS})")
+
+        # ------------------------------------------------------------------
+        # Predefined departments for this organization (editable by the user).
+        # Library/Fees do NOT take classes — those members are the substitute pool.
+        # ------------------------------------------------------------------
+        print("🏢 Seeding predefined departments...")
+        num_class_teachers = sum(1 for t in teachers if t.is_class_teacher)
+        dept_specs = [
+            # (name, hours/week, members_required, takes_classes)
+            ("Class Teacher", 5, max(1, num_class_teachers), True),
+            ("Library", 0, 2, False),
+            ("Fees", 0, 2, False),
+            ("Club", 2, 10, True),
+            ("Transport", 5, 1, True),
+        ]
+        depts = {}
+        for name, hours, req, takes in dept_specs:
+            ch = Charge(organization_id=org_id, name=name, default_hours_per_week=hours,
+                        members_required=req, takes_classes=takes)
+            db.session.add(ch)
+            depts[name] = ch
+        db.session.commit()
+
+        # Assign department members. Non-teaching depts pull teachers OUT of the
+        # teaching pool (substitute-only); teaching depts just add charge hours.
+        def assign_dept(dept_name, teacher_objs):
+            ch = depts[dept_name]
+            for t in teacher_objs:
+                entry = {"charge_id": ch.id, "name": ch.name, "hours_per_week": ch.default_hours_per_week}
+                t.charges = list(t.charges or []) + [entry]
+                if not ch.takes_classes:
+                    t.takes_classes = False
+                    t.teaching_assignments = []
+                    t.subject_ids = []
+                    t.assigned_batch_ids = []
+                    t.subject_grades = []
+
+        used = set()
+
+        def take(n, prefer_non_ct=True):
+            chosen = []
+            order = ([t for t in teachers if not t.is_class_teacher] if prefer_non_ct else []) + teachers
+            for t in order:
+                if len(chosen) >= n:
+                    break
+                if t.id in used:
+                    continue
+                chosen.append(t)
+                used.add(t.id)
+            return chosen
+
+        # Library/Fees prefer non-class-teachers so we don't orphan a section's
+        # class teacher; Club/Transport members still teach, so any teacher works.
+        assign_dept("Library", take(2))
+        assign_dept("Fees", take(2))
+        assign_dept("Club", take(10, prefer_non_ct=False))
+        assign_dept("Transport", take(1, prefer_non_ct=False))
+
+        # Recompute capacity now that charges/takes_classes are set.
+        for t in teachers:
+            reserved = (t.charge_hours or 0) + (CT_HOURS if t.is_class_teacher else 0)
+            t.max_periods_per_week = max(0, TARGET - reserved)
+        db.session.commit()
+        print(f"   ✅ {len(depts)} departments; capability + teaching assignments set "
+              f"(target {TARGET}, CT {CT_HOURS}h)")
 
         # =====================================================================
         # 8c. CONSTRAINT DEMO: teacher availability + a pinned/fixed period

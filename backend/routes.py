@@ -11,7 +11,7 @@ Endpoints organized by module:
 """
 
 from flask import Blueprint, request, jsonify, abort, make_response
-from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification, Organization, PinnedSlot, TeacherPreference, Charge
+from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification, Organization, PinnedSlot, TeacherPreference, Charge, Student
 from datetime import datetime, timedelta
 from functools import wraps
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -756,6 +756,18 @@ def _apply_teaching_and_charges(teacher, data, org_id):
         if "assigned_batch_ids" in data:
             teacher.assigned_batch_ids = data["assigned_batch_ids"]
 
+    # Grade-level capability (subject + grades) used by the fair auto-distributor.
+    if "subject_grades" in data:
+        caps = []
+        for entry in (data.get("subject_grades") or []):
+            try:
+                sid = int(entry.get("subject_id"))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            grades = [str(g) for g in (entry.get("grades") or [])]
+            caps.append({"subject_id": sid, "grades": grades})
+        teacher.subject_grades = caps
+
     if "charges" in data:
         charges = []
         for c in (data.get("charges") or []):
@@ -769,6 +781,12 @@ def _apply_teaching_and_charges(teacher, data, org_id):
                 "hours_per_week": max(0, hours),
             })
         teacher.charges = charges
+
+    # Members of a non-teaching department (Library/Fees) are substitute-only.
+    dept_takes = {c.id: c.takes_classes for c in Charge.query.filter_by(organization_id=org_id).all()}
+    teacher.takes_classes = not any(
+        dept_takes.get(c.get("charge_id")) is False for c in (teacher.charges or [])
+    )
 
     # Dynamic weekly teaching capacity so total contact load stays balanced.
     # Class-teacher hours come from the coordinator-entered config, never assumed.
@@ -973,18 +991,44 @@ def upsert_teacher_preferences(teacher_id):
 # CHARGE CATALOG ENDPOINTS (non-teaching duties teachers can be assigned)
 # ============================================================================
 
+def _assigned_member_counts(org_id):
+    """How many teachers are currently assigned to each charge/department id."""
+    counts = {}
+    for t in Teacher.query.filter_by(organization_id=org_id).all():
+        for c in (t.charges or []):
+            cid = c.get("charge_id")
+            if cid is not None:
+                counts[cid] = counts.get(cid, 0) + 1
+    return counts
+
+
 @api.route("/admin/charges", methods=["GET"])
 @role_required("admin", "principal")
 def list_charges():
-    """List the org's catalog of assignable charges (duties)."""
-    charges = Charge.query.filter_by(organization_id=current_org_id()).order_by(Charge.name).all()
-    return jsonify([c.to_dict() for c in charges]), 200
+    """List the org's departments/charges with assigned-vs-required coverage."""
+    org_id = current_org_id()
+    charges = Charge.query.filter_by(organization_id=org_id).order_by(Charge.name).all()
+    counts = _assigned_member_counts(org_id)
+    # Class teachership is tracked via the is_class_teacher flag, not a charge,
+    # so reflect that count for a department literally named "Class Teacher".
+    class_teacher_count = Teacher.query.filter_by(
+        organization_id=org_id, is_class_teacher=True
+    ).count()
+    out = []
+    for c in charges:
+        d = c.to_dict()
+        if c.name.strip().lower() == "class teacher":
+            d["assigned_members"] = class_teacher_count
+        else:
+            d["assigned_members"] = counts.get(c.id, 0)
+        out.append(d)
+    return jsonify(out), 200
 
 
 @api.route("/admin/charges", methods=["POST"])
 @role_required("admin")
 def create_charge():
-    """Add a new charge type: { name, default_hours_per_week }."""
+    """Add a department/charge: { name, default_hours_per_week, members_required, takes_classes }."""
     try:
         data = request.get_json() or {}
         org_id = current_org_id()
@@ -993,11 +1037,20 @@ def create_charge():
             return jsonify({"error": "Charge name is required"}), 400
         if Charge.query.filter_by(organization_id=org_id, name=name).first():
             return jsonify({"error": "A charge with this name already exists"}), 409
-        try:
-            hours = int(data.get("default_hours_per_week") or 2)
-        except (TypeError, ValueError):
-            hours = 2
-        charge = Charge(organization_id=org_id, name=name, default_hours_per_week=max(0, hours))
+
+        def _int(v, default):
+            try:
+                return max(0, int(v))
+            except (TypeError, ValueError):
+                return default
+
+        charge = Charge(
+            organization_id=org_id,
+            name=name,
+            default_hours_per_week=_int(data.get("default_hours_per_week"), 2),
+            members_required=_int(data.get("members_required"), 1),
+            takes_classes=bool(data.get("takes_classes", True)),
+        )
         db.session.add(charge)
         db.session.commit()
         return jsonify(charge.to_dict()), 201
@@ -1009,7 +1062,7 @@ def create_charge():
 @api.route("/admin/charges/<int:charge_id>", methods=["PUT"])
 @role_required("admin")
 def update_charge(charge_id):
-    """Rename a charge or change its default weekly hours."""
+    """Edit a department/charge (name, hours, members required, takes-classes)."""
     try:
         charge = owned_or_404(Charge, charge_id)
         data = request.get_json() or {}
@@ -1020,6 +1073,13 @@ def update_charge(charge_id):
                 charge.default_hours_per_week = max(0, int(data["default_hours_per_week"]))
             except (TypeError, ValueError):
                 pass
+        if "members_required" in data:
+            try:
+                charge.members_required = max(0, int(data["members_required"]))
+            except (TypeError, ValueError):
+                pass
+        if "takes_classes" in data:
+            charge.takes_classes = bool(data["takes_classes"])
         db.session.commit()
         return jsonify(charge.to_dict()), 200
     except Exception as e:
@@ -1039,6 +1099,127 @@ def delete_charge(charge_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# FAIR AUTO-ASSIGNMENT + WORKLOAD SUMMARY
+# ============================================================================
+
+@api.route("/admin/teachers/auto-assign-sections", methods=["POST"])
+@role_required("admin")
+def auto_assign_sections():
+    """Distribute concrete sections across teachers from their grade-level
+    capability (subject + grades), balancing load and guaranteeing coverage.
+
+    For every (class, subject) the class needs, the least-loaded capable teacher
+    who *takes classes* is chosen. Non-teaching staff (Library/Fees) are skipped
+    and left as the substitute pool. The result is written to teaching_assignments
+    (and is fully editable afterward)."""
+    try:
+        from collections import defaultdict
+        org_id = current_org_id()
+        batches = Batch.query.filter_by(organization_id=org_id).all()
+        subjects = {s.id: s for s in Subject.query.filter_by(organization_id=org_id).all()}
+        teachers = Teacher.query.filter_by(organization_id=org_id).all()
+
+        capable = defaultdict(list)   # (subject_id, grade) -> [teacher]
+        load = {t.id: 0 for t in teachers}     # projected weekly periods
+        sections = {t.id: 0 for t in teachers}
+        work = {t.id: defaultdict(set) for t in teachers}  # subject_id -> {batch_ids}
+        for t in teachers:
+            if not t.takes_classes:
+                continue
+            for cap in (t.subject_grades or []):
+                sid = cap.get("subject_id")
+                for g in (cap.get("grades") or []):
+                    capable[(sid, str(g))].append(t)
+
+        uncovered = []
+        assigned_count = 0
+        over_capacity = 0
+        for b in batches:
+            for sid in (b.subject_ids or []):
+                subj = subjects.get(sid)
+                periods = subj.periods_per_week if subj else 1
+                pool = capable.get((sid, str(b.grade)), [])
+                if not pool:
+                    uncovered.append({
+                        "grade": b.grade, "section": b.section,
+                        "subject_id": sid, "subject": subj.name if subj else f"#{sid}",
+                    })
+                    continue
+                under = [t for t in pool if load[t.id] + periods <= (t.max_periods_per_week or 0)]
+                chooser = under if under else pool
+                if not under:
+                    over_capacity += 1
+                chooser.sort(key=lambda t: (load[t.id], sections[t.id]))
+                chosen = chooser[0]
+                work[chosen.id][sid].add(b.id)
+                load[chosen.id] += periods
+                sections[chosen.id] += 1
+                assigned_count += 1
+
+        for t in teachers:
+            assignments = [{"subject_id": sid, "batch_ids": sorted(bids)}
+                           for sid, bids in work[t.id].items() if bids]
+            t.teaching_assignments = assignments
+            t.subject_ids = sorted({a["subject_id"] for a in assignments})
+            t.assigned_batch_ids = sorted({bid for a in assignments for bid in a["batch_ids"]})
+        db.session.commit()
+
+        return jsonify({
+            "assigned": assigned_count,
+            "over_capacity_assignments": over_capacity,
+            "uncovered": uncovered,
+            "teacher_loads": sorted(
+                [{"teacher_id": t.id, "name": t.name, "periods": load[t.id],
+                  "sections": sections[t.id], "capacity": t.max_periods_per_week}
+                 for t in teachers if t.takes_classes],
+                key=lambda x: -x["periods"],
+            ),
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/workload/summary", methods=["GET"])
+@role_required("admin", "principal")
+def workload_summary():
+    """Stats that drive the suggested per-teacher contact target."""
+    import math
+    org_id = current_org_id()
+    batches = Batch.query.filter_by(organization_id=org_id).all()
+    subjects = {s.id: s for s in Subject.query.filter_by(organization_id=org_id).all()}
+    teachers = Teacher.query.filter_by(organization_id=org_id).all()
+    try:
+        total_students = Student.query.filter_by(organization_id=org_id).count()
+    except Exception:
+        total_students = None
+
+    total_demand = 0
+    for b in batches:
+        for sid in (b.subject_ids or []):
+            s = subjects.get(sid)
+            total_demand += (s.periods_per_week if s else 0)
+
+    teaching_teachers = sum(1 for t in teachers if t.takes_classes)
+    substitute_teachers = sum(1 for t in teachers if not t.takes_classes)
+    suggested = math.ceil(total_demand / teaching_teachers) if teaching_teachers else 0
+    cfg = SchoolConfig.query.filter_by(organization_id=org_id).first()
+
+    return jsonify({
+        "total_students": total_students,
+        "total_classes": len(batches),
+        "total_subjects": len(subjects),
+        "total_weekly_periods_demanded": total_demand,
+        "teaching_teachers": teaching_teachers,
+        "substitute_teachers": substitute_teachers,
+        "suggested_target_periods_per_week": suggested,
+        "current_target": cfg.target_contact_periods_per_week if cfg else None,
+        "periods_per_day": cfg.periods_per_day if cfg else None,
+        "working_days": cfg.working_days if cfg else None,
+    }), 200
 
 
 # ============================================================================

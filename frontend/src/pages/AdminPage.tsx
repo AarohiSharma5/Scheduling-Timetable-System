@@ -19,7 +19,7 @@ const tabs: Record<Tab, { icon: string; label: string }> = {
   teachers: { icon: "👨‍🏫", label: "Teachers" },
   batches: { icon: "📚", label: "Batches" },
   subjects: { icon: "📖", label: "Subjects" },
-  charges: { icon: "🏅", label: "Charges" },
+  charges: { icon: "🏅", label: "Departments" },
   pinned: { icon: "📌", label: "Fixed Periods" },
   leaves: { icon: "📋", label: "Leave Requests" },
   notifications: { icon: "🔔", label: "Notifications" },

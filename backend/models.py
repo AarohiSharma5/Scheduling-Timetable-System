@@ -165,6 +165,14 @@ class Teacher(db.Model):
     # This is the source of truth for eligibility; subject_ids/assigned_batch_ids
     # are kept in sync for backward compatibility.
     teaching_assignments = db.Column(db.JSON, default=list)
+    # Capability declared at GRADE level, e.g.
+    #   [{"subject_id": 1, "grades": ["8", "9", "10"]}]
+    # The fair auto-distributor turns these into concrete section-level
+    # teaching_assignments so every class is covered and load is balanced.
+    subject_grades = db.Column(db.JSON, default=list)
+    # False when the teacher belongs to a non-teaching department (Library/Fees):
+    # they are excluded from regular scheduling and used only as substitutes.
+    takes_classes = db.Column(db.Boolean, nullable=False, default=True)
     # Non-teaching duties that consume weekly contact hours, e.g.
     #   [{"charge_id": 2, "name": "House Charge", "hours_per_week": 3}]
     charges = db.Column(db.JSON, default=list)
@@ -202,6 +210,8 @@ class Teacher(db.Model):
             "subject_ids": self.subject_ids or [],
             "assigned_batch_ids": self.assigned_batch_ids or [],
             "teaching_assignments": self.teaching_assignments or [],
+            "subject_grades": self.subject_grades or [],
+            "takes_classes": self.takes_classes,
             "charges": self.charges or [],
             "charge_hours": self.charge_hours,
             "unavailable_slots": self.unavailable_slots or [],
@@ -266,6 +276,11 @@ class Charge(db.Model):
     organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
     name = db.Column(db.String(120), nullable=False)
     default_hours_per_week = db.Column(db.Integer, nullable=False, default=2)
+    # How many teachers should staff this department (e.g. Club = 10, Transport = 1).
+    members_required = db.Column(db.Integer, nullable=False, default=1)
+    # Do members of this department also teach classes? Library/Fees = False:
+    # those staff are held back as the substitute pool, not given regular periods.
+    takes_classes = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
@@ -273,6 +288,8 @@ class Charge(db.Model):
             "id": self.id,
             "name": self.name,
             "default_hours_per_week": self.default_hours_per_week,
+            "members_required": self.members_required,
+            "takes_classes": self.takes_classes,
         }
 
 

@@ -12,6 +12,11 @@ interface TeachingAssignment {
   batch_ids: number[];
 }
 
+interface SubjectGrade {
+  subject_id: number;
+  grades: string[];
+}
+
 interface ChargeAssignment {
   charge_id: number | null;
   name: string;
@@ -25,6 +30,8 @@ interface Teacher {
   subject_ids: number[];
   assigned_batch_ids: number[];
   teaching_assignments: TeachingAssignment[];
+  subject_grades: SubjectGrade[];
+  takes_classes: boolean;
   charges: ChargeAssignment[];
   charge_hours: number;
   unavailable_slots: UnavailableSlot[];
@@ -54,7 +61,7 @@ interface ChargeType {
 const emptyForm = {
   name: "",
   email: "",
-  teaching_assignments: [] as TeachingAssignment[],
+  subject_grades: [] as SubjectGrade[],
   charges: [] as ChargeAssignment[],
   unavailable_slots: [] as UnavailableSlot[],
   is_class_teacher: false,
@@ -82,6 +89,8 @@ export default function TeacherManagement() {
   const [addChargeId, setAddChargeId] = useState<number | "">("");
   const [customTask, setCustomTask] = useState("");
   const [customHours, setCustomHours] = useState(2);
+  const [autoMsg, setAutoMsg] = useState("");
+  const [autoBusy, setAutoBusy] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -117,13 +126,22 @@ export default function TeacherManagement() {
     return b ? `${b.grade}-${b.section}` : `#${id}`;
   };
 
-  // --- teaching assignments helpers ---
+  // Unique grade list (ordered: numeric grades first, then names like Nursery).
+  const grades = Array.from(new Set(batches.map((b) => b.grade))).sort((a, b) => {
+    const na = Number(a), nb = Number(b);
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    if (!isNaN(na)) return -1;
+    if (!isNaN(nb)) return 1;
+    return a.localeCompare(b);
+  });
+
+  // --- capability helpers (subject + grades) ---
   const addSubjectRow = () => {
     if (addSubjectId === "") return;
-    if (formData.teaching_assignments.some((a) => a.subject_id === addSubjectId)) return;
+    if (formData.subject_grades.some((a) => a.subject_id === addSubjectId)) return;
     setFormData({
       ...formData,
-      teaching_assignments: [...formData.teaching_assignments, { subject_id: Number(addSubjectId), batch_ids: [] }],
+      subject_grades: [...formData.subject_grades, { subject_id: Number(addSubjectId), grades: [] }],
     });
     setAddSubjectId("");
   };
@@ -131,15 +149,15 @@ export default function TeacherManagement() {
   const removeSubjectRow = (subjectId: number) => {
     setFormData({
       ...formData,
-      teaching_assignments: formData.teaching_assignments.filter((a) => a.subject_id !== subjectId),
+      subject_grades: formData.subject_grades.filter((a) => a.subject_id !== subjectId),
     });
   };
 
-  const setRowBatches = (subjectId: number, batchIds: number[]) => {
+  const setRowGrades = (subjectId: number, gradeVals: string[]) => {
     setFormData({
       ...formData,
-      teaching_assignments: formData.teaching_assignments.map((a) =>
-        a.subject_id === subjectId ? { ...a, batch_ids: batchIds } : a
+      subject_grades: formData.subject_grades.map((a) =>
+        a.subject_id === subjectId ? { ...a, grades: gradeVals } : a
       ),
     });
   };
@@ -199,7 +217,7 @@ export default function TeacherManagement() {
       const payload = {
         name: formData.name,
         email: formData.email,
-        teaching_assignments: formData.teaching_assignments,
+        subject_grades: formData.subject_grades,
         charges: formData.charges,
         unavailable_slots: formData.unavailable_slots,
         is_class_teacher: formData.is_class_teacher,
@@ -228,16 +246,42 @@ export default function TeacherManagement() {
     }
   };
 
+  const handleAutoAssign = async () => {
+    if (!window.confirm("Redistribute all sections fairly from teachers' subject + grade capability? This rewrites current section assignments.")) return;
+    try {
+      setAutoBusy(true);
+      setAutoMsg("");
+      const res = await api.admin.teachers.autoAssignSections();
+      const uncovered = res.uncovered?.length || 0;
+      let msg = `Assigned ${res.assigned} class-subjects across ${res.teacher_loads?.length || 0} teachers.`;
+      if (res.over_capacity_assignments) msg += ` ${res.over_capacity_assignments} placed over soft capacity.`;
+      if (uncovered) msg += ` ⚠️ ${uncovered} class-subject(s) have no capable teacher.`;
+      setAutoMsg(msg);
+      await loadData();
+    } catch (err) {
+      setAutoMsg("Auto-assign failed.");
+      console.error(err);
+    } finally {
+      setAutoBusy(false);
+    }
+  };
+
   const handleEdit = (teacher: Teacher) => {
-    // Derive teaching_assignments; fall back to flat lists for legacy records.
-    let assignments = teacher.teaching_assignments || [];
-    if ((!assignments || assignments.length === 0) && (teacher.subject_ids || []).length) {
-      assignments = teacher.subject_ids.map((sid) => ({ subject_id: sid, batch_ids: teacher.assigned_batch_ids || [] }));
+    // Prefer declared capability; fall back to deriving grades from current sections.
+    let caps = teacher.subject_grades || [];
+    if ((!caps || caps.length === 0) && (teacher.teaching_assignments || []).length) {
+      caps = teacher.teaching_assignments.map((a) => ({
+        subject_id: a.subject_id,
+        grades: Array.from(new Set((a.batch_ids || []).map((bid) => {
+          const b = batches.find((x) => x.id === bid);
+          return b ? b.grade : "";
+        }).filter(Boolean))),
+      }));
     }
     setFormData({
       name: teacher.name,
       email: teacher.email,
-      teaching_assignments: assignments.map((a) => ({ subject_id: a.subject_id, batch_ids: a.batch_ids || [] })),
+      subject_grades: caps.map((a) => ({ subject_id: a.subject_id, grades: a.grades || [] })),
       charges: (teacher.charges || []).map((c) => ({ ...c })),
       unavailable_slots: teacher.unavailable_slots || [],
       is_class_teacher: teacher.is_class_teacher,
@@ -258,13 +302,24 @@ export default function TeacherManagement() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-slate-900">Teachers</h2>
-        {!showForm && (
-          <button onClick={() => setShowForm(true)} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
-            + Add Teacher
+        <div className="flex gap-2">
+          <button onClick={handleAutoAssign} disabled={autoBusy} className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg">
+            {autoBusy ? "Assigning…" : "⚖️ Auto-assign sections"}
           </button>
-        )}
+          {!showForm && (
+            <button onClick={() => setShowForm(true)} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
+              + Add Teacher
+            </button>
+          )}
+        </div>
       </div>
 
+      <p className="text-sm text-slate-500 -mt-2">
+        Teachers declare the subjects and <strong>grades</strong> they can teach; "Auto-assign sections" then
+        distributes the actual sections fairly so every class is covered and load is balanced.
+      </p>
+
+      {autoMsg && <div className="bg-indigo-50 border border-indigo-200 text-indigo-800 px-4 py-3 rounded text-sm">{autoMsg}</div>}
       {error && <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">{error}</div>}
 
       {showForm && (
@@ -274,13 +329,14 @@ export default function TeacherManagement() {
             <input type="email" placeholder="Email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} className="border rounded px-3 py-2" required />
           </div>
 
-          {/* Subjects → classes */}
+          {/* Capability: subjects + grades they can teach */}
           <div className="border-t pt-4">
-            <label className="block text-sm font-medium mb-2">Subjects &amp; the classes they teach</label>
+            <label className="block text-sm font-medium mb-1">Subjects &amp; grades they can teach</label>
+            <p className="text-xs text-slate-500 mb-2">Pick the grades (e.g. 8, 9, 10). Exact sections are distributed fairly by "Auto-assign sections".</p>
             <div className="flex items-end gap-2 mb-3">
               <select value={addSubjectId} onChange={(e) => setAddSubjectId(e.target.value === "" ? "" : Number(e.target.value))} className="border rounded px-3 py-2">
                 <option value="">Select a subject…</option>
-                {subjects.filter((s) => !formData.teaching_assignments.some((a) => a.subject_id === s.id)).map((s) => (
+                {subjects.filter((s) => !formData.subject_grades.some((a) => a.subject_id === s.id)).map((s) => (
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
               </select>
@@ -288,26 +344,31 @@ export default function TeacherManagement() {
             </div>
 
             <div className="space-y-3">
-              {formData.teaching_assignments.length === 0 && (
-                <span className="text-sm text-slate-400">No subjects yet. Add a subject, then pick its classes.</span>
+              {formData.subject_grades.length === 0 && (
+                <span className="text-sm text-slate-400">No subjects yet. Add a subject, then pick the grades.</span>
               )}
-              {formData.teaching_assignments.map((a) => (
+              {formData.subject_grades.map((a) => (
                 <div key={a.subject_id} className="border rounded p-3 bg-slate-50">
                   <div className="flex justify-between items-center mb-2">
                     <span className="font-medium text-slate-800">{subjectName(a.subject_id)}</span>
                     <button type="button" onClick={() => removeSubjectRow(a.subject_id)} className="text-red-600 hover:underline text-sm">Remove</button>
                   </div>
-                  <label className="block text-xs text-slate-500 mb-1">Classes for {subjectName(a.subject_id)}</label>
-                  <select
-                    multiple
-                    value={a.batch_ids.map(String)}
-                    onChange={(e) => setRowBatches(a.subject_id, Array.from(e.target.selectedOptions, (o) => Number(o.value)))}
-                    className="border rounded px-3 py-2 w-full h-24"
-                  >
-                    {batches.map((b) => (
-                      <option key={b.id} value={b.id}>Grade {b.grade} - {b.section}</option>
-                    ))}
-                  </select>
+                  <label className="block text-xs text-slate-500 mb-1">Grades for {subjectName(a.subject_id)}</label>
+                  <div className="flex flex-wrap gap-2">
+                    {grades.map((g) => {
+                      const on = a.grades.includes(g);
+                      return (
+                        <button
+                          type="button"
+                          key={g}
+                          onClick={() => setRowGrades(a.subject_id, on ? a.grades.filter((x) => x !== g) : [...a.grades, g])}
+                          className={`px-2 py-1 rounded text-sm border ${on ? "bg-blue-600 text-white border-blue-600" : "bg-white text-slate-700 border-slate-300"}`}
+                        >
+                          {g}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               ))}
             </div>
@@ -396,23 +457,32 @@ export default function TeacherManagement() {
           <thead className="bg-slate-100 border-b">
             <tr>
               <th className="px-4 py-2 text-left">Name</th>
-              <th className="px-4 py-2 text-left">Teaches</th>
+              <th className="px-4 py-2 text-left">Can teach (subject → grades)</th>
+              <th className="px-4 py-2 text-left">Assigned sections</th>
               <th className="px-4 py-2 text-left">Charges</th>
-              <th className="px-4 py-2 text-left">Teaching cap.</th>
+              <th className="px-4 py-2 text-left">Cap.</th>
               <th className="px-4 py-2 text-left">Unavailable</th>
               <th className="px-4 py-2 text-left">Actions</th>
             </tr>
           </thead>
           <tbody>
             {teachers.map((teacher) => {
-              const assignments = (teacher.teaching_assignments && teacher.teaching_assignments.length)
-                ? teacher.teaching_assignments
-                : (teacher.subject_ids || []).map((sid) => ({ subject_id: sid, batch_ids: teacher.assigned_batch_ids || [] }));
+              const assignments = teacher.teaching_assignments || [];
+              const caps = teacher.subject_grades || [];
               return (
                 <tr key={teacher.id} className="border-b hover:bg-slate-50 align-top">
                   <td className="px-4 py-2">
                     <div>{teacher.name}</div>
                     <div className="text-xs text-slate-400">{teacher.email}</div>
+                    {!teacher.takes_classes && <span className="text-xs bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded">substitute</span>}
+                  </td>
+                  <td className="px-4 py-2 text-sm">
+                    {caps.length === 0 ? <span className="text-slate-400">—</span> : caps.map((a) => (
+                      <div key={a.subject_id}>
+                        <span className="font-medium">{subjectName(a.subject_id)}</span>
+                        <span className="text-slate-500"> → {a.grades.join(", ") || "—"}</span>
+                      </div>
+                    ))}
                   </td>
                   <td className="px-4 py-2 text-sm">
                     {assignments.length === 0 ? <span className="text-slate-400">—</span> : assignments.map((a) => (
