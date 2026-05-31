@@ -352,6 +352,12 @@ class TimetableSlot(db.Model):
     teacher_id = db.Column(db.Integer, db.ForeignKey("teachers.id"))
     subject_id = db.Column(db.Integer, db.ForeignKey("subjects.id"))
     is_lunch = db.Column(db.Boolean, default=False)
+    # Optional free-text room/lab label. Used for room double-booking checks
+    # ("lab conflict") during manual editing.
+    room = db.Column(db.String(120))
+    # When True this period was manually locked by an admin and should be
+    # preserved across future auto-generation (mirrored into pinned_slots).
+    is_pinned = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     def to_dict(self):
@@ -363,6 +369,8 @@ class TimetableSlot(db.Model):
             "teacher_id": self.teacher_id,
             "subject_id": self.subject_id,
             "is_lunch": self.is_lunch,
+            "room": self.room,
+            "is_pinned": bool(self.is_pinned),
         }
 
 
@@ -381,6 +389,12 @@ class Timetable(db.Model):
     warnings = db.Column(db.JSON, default=list)  # Any constraint violations or warnings
     school_name = db.Column(db.String(255))  # For PDF export header
     school_logo_path = db.Column(db.String(255))  # Path to logo image
+    # Manual-edit provenance (set when an admin edits/clones a timetable).
+    edited_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    edited_at = db.Column(db.DateTime)
+    # Append-only audit trail of manual changes, each entry like
+    #   {"at": iso, "by": user_id, "action": "swap"|"assign"|"clear"|"pin"|..., "detail": {...}}
+    change_log = db.Column(db.JSON, default=list)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -397,6 +411,9 @@ class Timetable(db.Model):
             "warnings": self.warnings or [],
             "school_name": self.school_name,
             "school_logo_path": self.school_logo_path,
+            "edited_by": self.edited_by,
+            "edited_at": self.edited_at.isoformat() if self.edited_at else None,
+            "change_log": self.change_log or [],
         }
         if include_slots:
             result["slots"] = [slot.to_dict() for slot in self.slots]

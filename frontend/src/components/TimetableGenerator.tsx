@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import TimetableEditor from "./TimetableEditor";
 
 interface GenerationStatus {
   status: "idle" | "loading" | "success" | "error";
@@ -37,6 +38,7 @@ export default function TimetableGenerator() {
   const [subjectCount, setSubjectCount] = useState<number>(0);
 
   const [selectedTimetable, setSelectedTimetable] = useState<number | "">("");
+  const [showEditor, setShowEditor] = useState(false);
   const [exportMode, setExportMode] = useState<ExportMode>("batch");
   // "all" or a specific batch/teacher id (as string for the <select>).
   const [selectedTarget, setSelectedTarget] = useState<string>("all");
@@ -260,14 +262,35 @@ export default function TimetableGenerator() {
           </div>
         </div>
 
-        <button
-          onClick={handleExport}
-          disabled={status.status === "loading" || selectedTimetable === ""}
-          className="mt-4 w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500 text-white font-semibold py-2.5 px-4 rounded transition"
-        >
-          Download PDF
-        </button>
+        <div className="mt-4 flex flex-col sm:flex-row gap-3">
+          <button
+            onClick={handleExport}
+            disabled={status.status === "loading" || selectedTimetable === ""}
+            className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500 text-white font-semibold py-2.5 px-4 rounded transition"
+          >
+            Download PDF
+          </button>
+          <button
+            onClick={() => setShowEditor(true)}
+            disabled={selectedTimetable === ""}
+            className="flex-1 bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-300 disabled:opacity-50 font-semibold py-2.5 px-4 rounded transition"
+          >
+            ✏️ Edit timetable
+          </button>
+        </div>
       </div>
+
+      {showEditor && selectedTimetable !== "" && (
+        <TimetableEditor
+          timetableId={selectedTimetable as number}
+          onClose={() => setShowEditor(false)}
+          onSaved={(newId) => {
+            setShowEditor(false);
+            loadData().then(() => { if (newId) setSelectedTimetable(newId); });
+            setStatus({ status: "success", message: "Saved manual edits as a new draft version." });
+          }}
+        />
+      )}
 
       {/* Statistics */}
       <div className="bg-white rounded-lg p-6 border border-gray-200 shadow-sm">

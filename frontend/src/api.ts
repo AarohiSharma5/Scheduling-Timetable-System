@@ -273,6 +273,42 @@ export const api = {
       const { data } = await axiosInstance.get(`/timetable/${id}/conflicts/by-type`);
       return data;
     },
+
+    // Manual editing (drag-and-drop grid)
+    getGrid: async (id: number) => {
+      const { data } = await axiosInstance.get(`/timetable/${id}/grid`);
+      return data;
+    },
+    updateSlot: async (
+      id: number,
+      payload: { batch_id: number; day: string; period_number: number; subject_id: number | null; teacher_id: number | null; room?: string | null }
+    ) => {
+      const { data } = await axiosInstance.patch(`/timetable/${id}/slot`, payload);
+      return data;
+    },
+    swapSlots: async (
+      id: number,
+      payload: { batch_id: number; a: { day: string; period_number: number }; b: { day: string; period_number: number } }
+    ) => {
+      const { data } = await axiosInstance.patch(`/timetable/${id}/swap`, payload);
+      return data;
+    },
+    pinSlot: async (id: number, payload: { batch_id: number; day: string; period_number: number }) => {
+      const { data } = await axiosInstance.patch(`/timetable/${id}/pin`, payload);
+      return data;
+    },
+    unpinSlot: async (id: number, payload: { batch_id: number; day: string; period_number: number }) => {
+      const { data } = await axiosInstance.patch(`/timetable/${id}/unpin`, payload);
+      return data;
+    },
+    validateGrid: async (id: number, slots: any[]) => {
+      const { data } = await axiosInstance.post(`/timetable/${id}/validate-grid`, { slots });
+      return data;
+    },
+    saveVersion: async (id: number, payload: { name?: string; slots?: any[] }) => {
+      const { data } = await axiosInstance.post(`/timetable/${id}/save-version`, payload);
+      return data;
+    },
   },
 
   analytics: {
