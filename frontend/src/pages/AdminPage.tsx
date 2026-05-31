@@ -50,18 +50,18 @@ export default function AdminPage() {
 
       {/* Tab Navigation */}
       <div className="bg-white border-b border-slate-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex gap-2">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex gap-1 overflow-x-auto">
           {(Object.entries(tabs) as [Tab, typeof tabs[Tab]][]).map(([key, { icon, label }]) => (
             <button
               key={key}
               onClick={() => setActiveTab(key)}
-              className={`px-4 py-3 font-medium flex items-center gap-2 border-b-2 transition ${
+              className={`px-4 py-3 text-sm font-medium flex items-center gap-2 border-b-2 whitespace-nowrap transition ${
                 activeTab === key
-                  ? "border-blue-600 text-blue-600"
-                  : "border-transparent text-slate-600 hover:text-slate-900"
+                  ? "border-blue-600 text-blue-700 bg-blue-50"
+                  : "border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-50"
               }`}
             >
-              <span className="text-lg">{icon}</span>
+              <span className="text-base">{icon}</span>
               {label}
             </button>
           ))}

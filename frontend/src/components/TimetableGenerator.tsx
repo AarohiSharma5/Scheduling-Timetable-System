@@ -190,9 +190,9 @@ export default function TimetableGenerator() {
       </div>
 
       {/* Export Timetables Section */}
-      <div className="bg-gradient-to-r from-purple-50 to-purple-100 rounded-lg p-6 border-2 border-purple-200">
-        <h2 className="text-2xl font-bold text-purple-900 mb-2">Download Timetable</h2>
-        <p className="text-purple-700 mb-4">
+      <div className="bg-gradient-to-r from-indigo-50 to-indigo-100 rounded-lg p-6 border-2 border-indigo-200">
+        <h2 className="text-2xl font-bold text-indigo-900 mb-2">Download Timetable</h2>
+        <p className="text-indigo-700 mb-4">
           Choose a timetable, then download it class-wise or teacher-wise — for everyone or a specific
           class/teacher.
         </p>
@@ -200,11 +200,11 @@ export default function TimetableGenerator() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Timetable selector */}
           <div>
-            <label className="block text-sm font-semibold text-purple-900 mb-1">Timetable</label>
+            <label className="block text-sm font-semibold text-indigo-900 mb-1">Timetable</label>
             <select
               value={selectedTimetable}
               onChange={(e) => setSelectedTimetable(e.target.value ? Number(e.target.value) : "")}
-              className="w-full border border-purple-300 rounded px-3 py-2 bg-white"
+              className="w-full border border-indigo-300 rounded px-3 py-2 bg-white"
             >
               {timetables.length === 0 && <option value="">No timetables yet</option>}
               {timetables.map((tt) => (
@@ -218,11 +218,11 @@ export default function TimetableGenerator() {
 
           {/* Mode selector */}
           <div>
-            <label className="block text-sm font-semibold text-purple-900 mb-1">Download by</label>
+            <label className="block text-sm font-semibold text-indigo-900 mb-1">Download by</label>
             <select
               value={exportMode}
               onChange={(e) => setExportMode(e.target.value as ExportMode)}
-              className="w-full border border-purple-300 rounded px-3 py-2 bg-white"
+              className="w-full border border-indigo-300 rounded px-3 py-2 bg-white"
             >
               <option value="batch">Class-wise</option>
               <option value="teacher">Teacher-wise</option>
@@ -231,13 +231,13 @@ export default function TimetableGenerator() {
 
           {/* Target selector */}
           <div>
-            <label className="block text-sm font-semibold text-purple-900 mb-1">
+            <label className="block text-sm font-semibold text-indigo-900 mb-1">
               {exportMode === "batch" ? "Class" : "Teacher"}
             </label>
             <select
               value={selectedTarget}
               onChange={(e) => setSelectedTarget(e.target.value)}
-              className="w-full border border-purple-300 rounded px-3 py-2 bg-white"
+              className="w-full border border-indigo-300 rounded px-3 py-2 bg-white"
             >
               <option value="all">{exportMode === "batch" ? "All classes" : "All teachers"}</option>
               {exportMode === "batch"
@@ -258,7 +258,7 @@ export default function TimetableGenerator() {
         <button
           onClick={handleExport}
           disabled={status.status === "loading" || selectedTimetable === ""}
-          className="mt-4 w-full bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white font-semibold py-2.5 px-4 rounded transition"
+          className="mt-4 w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500 text-white font-semibold py-2.5 px-4 rounded transition"
         >
           Download PDF
         </button>
@@ -268,21 +268,21 @@ export default function TimetableGenerator() {
       <div className="bg-white rounded-lg p-6 border border-gray-200 shadow-sm">
         <h2 className="text-xl font-bold text-gray-900 mb-4">Timetable Statistics</h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-lg">
-            <p className="text-2xl font-bold text-blue-600">{batches.length}</p>
-            <p className="text-sm text-gray-600">Classes</p>
+          <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-lg border border-blue-100">
+            <p className="text-2xl font-bold text-blue-700">{batches.length}</p>
+            <p className="text-sm text-slate-600">Classes</p>
           </div>
-          <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-4 rounded-lg">
-            <p className="text-2xl font-bold text-purple-600">{teachers.length}</p>
-            <p className="text-sm text-gray-600">Teachers</p>
+          <div className="bg-gradient-to-br from-indigo-50 to-indigo-100 p-4 rounded-lg border border-indigo-100">
+            <p className="text-2xl font-bold text-indigo-700">{teachers.length}</p>
+            <p className="text-sm text-slate-600">Teachers</p>
           </div>
-          <div className="bg-gradient-to-br from-green-50 to-green-100 p-4 rounded-lg">
-            <p className="text-2xl font-bold text-green-600">{studentTotal.toLocaleString()}</p>
-            <p className="text-sm text-gray-600">Students</p>
+          <div className="bg-gradient-to-br from-emerald-50 to-emerald-100 p-4 rounded-lg border border-emerald-100">
+            <p className="text-2xl font-bold text-emerald-700">{studentTotal.toLocaleString()}</p>
+            <p className="text-sm text-slate-600">Students</p>
           </div>
-          <div className="bg-gradient-to-br from-orange-50 to-orange-100 p-4 rounded-lg">
-            <p className="text-2xl font-bold text-orange-600">{subjectCount}</p>
-            <p className="text-sm text-gray-600">Subjects</p>
+          <div className="bg-gradient-to-br from-amber-50 to-amber-100 p-4 rounded-lg border border-amber-100">
+            <p className="text-2xl font-bold text-amber-700">{subjectCount}</p>
+            <p className="text-sm text-slate-600">Subjects</p>
           </div>
         </div>
       </div>
