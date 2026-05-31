@@ -266,14 +266,14 @@ export default function TimetableGenerator() {
           <button
             onClick={handleExport}
             disabled={status.status === "loading" || selectedTimetable === ""}
-            className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500 text-white font-semibold py-2.5 px-4 rounded transition"
+            className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed font-semibold py-2.5 px-4 rounded transition"
           >
             Download PDF
           </button>
           <button
             onClick={() => setShowEditor(true)}
             disabled={selectedTimetable === ""}
-            className="flex-1 bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-300 disabled:opacity-50 font-semibold py-2.5 px-4 rounded transition"
+            className="flex-1 bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-300 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-200 disabled:cursor-not-allowed font-semibold py-2.5 px-4 rounded transition"
           >
             ✏️ Edit timetable
           </button>

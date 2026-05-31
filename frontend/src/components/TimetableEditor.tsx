@@ -368,8 +368,8 @@ export default function TimetableEditor({
             ))}
           </select>
           <div className="flex gap-2">
-            <button onClick={undo} disabled={!past.length} className="px-3 py-1.5 text-sm rounded border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-40">↶ Undo</button>
-            <button onClick={redo} disabled={!future.length} className="px-3 py-1.5 text-sm rounded border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-40">↷ Redo</button>
+            <button onClick={undo} disabled={!past.length} className="px-3 py-1.5 text-sm font-medium rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-200 disabled:cursor-not-allowed">↶ Undo</button>
+            <button onClick={redo} disabled={!future.length} className="px-3 py-1.5 text-sm font-medium rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-200 disabled:cursor-not-allowed">↷ Redo</button>
           </div>
           <div className="ml-auto flex items-center gap-3">
             {hardCount > 0 ? (
@@ -382,7 +382,7 @@ export default function TimetableEditor({
             <button
               onClick={saveVersion}
               disabled={saving || hardCount > 0}
-              className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:text-slate-500 text-white text-sm font-medium px-4 py-1.5 rounded"
+              className="bg-blue-600 hover:bg-blue-700 text-white disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed text-sm font-medium px-4 py-1.5 rounded"
             >
               {saving ? "Saving…" : "Save as new version"}
             </button>
@@ -616,8 +616,8 @@ function CellEditor({
             {exchangeOptions.length === 0 ? (
               <p className="text-xs text-slate-400">No other class has a teacher at {day} P{period}.</p>
             ) : (
-              <div className="flex gap-2">
-                <select value={exchangeWith} onChange={(e) => setExchangeWith(e.target.value ? Number(e.target.value) : "")} className="flex-1 border rounded px-3 py-2 text-sm">
+              <div className="space-y-2">
+                <select value={exchangeWith} onChange={(e) => setExchangeWith(e.target.value ? Number(e.target.value) : "")} className="w-full border rounded px-3 py-2 text-sm">
                   <option value="">Select a teacher to swap with…</option>
                   {exchangeOptions.map((c) => (
                     <option key={c.batchId} value={c.batchId}>
@@ -629,7 +629,7 @@ function CellEditor({
                   type="button"
                   onClick={() => exchangeWith !== "" && onExchange(exchangeWith as number)}
                   disabled={exchangeWith === ""}
-                  className="px-3 py-2 text-sm rounded bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500 text-white whitespace-nowrap"
+                  className="w-full px-4 py-2 text-sm font-medium rounded bg-indigo-600 hover:bg-indigo-700 text-white disabled:bg-slate-100 disabled:text-slate-400 disabled:border disabled:border-slate-200 disabled:cursor-not-allowed"
                 >
                   Exchange
                 </button>
