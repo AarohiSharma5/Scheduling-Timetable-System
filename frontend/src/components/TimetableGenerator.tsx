@@ -55,8 +55,13 @@ export default function TimetableGenerator() {
         const raw: any = ttRes.value;
         const list: TimetableSummary[] = Array.isArray(raw) ? raw : raw?.timetables || [];
         setTimetables(list);
-        if (list.length && selectedTimetable === "") {
-          setSelectedTimetable(list[0].id);
+        // Always make sure a valid timetable is selected after (re)login. If the
+        // current selection is empty or no longer exists, fall back to the most
+        // recent one — preferring a published version, else the newest draft.
+        const stillValid = list.some((t) => t.id === selectedTimetable);
+        if (list.length && !stillValid) {
+          const published = list.find((t) => t.status === "published");
+          setSelectedTimetable((published || list[0]).id);
         }
       }
       if (batchRes.status === "fulfilled") setBatches(batchRes.value || []);

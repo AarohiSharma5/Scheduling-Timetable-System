@@ -293,7 +293,14 @@ def list_timetables():
         ]
     }
     """
-    timetables = Timetable.query.filter_by(organization_id=_org_id()).all()
+    # Newest first so the UI can default-select the most recent timetable
+    # right after login (drafts and published versions all persist per-org).
+    timetables = (
+        Timetable.query
+        .filter_by(organization_id=_org_id())
+        .order_by(Timetable.generated_at.desc().nullslast())
+        .all()
+    )
     
     result = []
     for tt in timetables:
