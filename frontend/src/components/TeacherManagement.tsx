@@ -97,12 +97,21 @@ export default function TeacherManagement() {
     loadData();
   }, []);
 
-  // Bring the form into view whenever it opens (Add) or switches teacher (Edit).
-  // Without this, clicking Edit on a row far down the long list opens the form
-  // at the top, off-screen, making it look like nothing happened.
+  // Lock the background page scroll while the edit/add modal is open so the
+  // focus stays on the dialog and the page behind doesn't drift.
+  useEffect(() => {
+    if (showForm) {
+      const prev = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+      return () => { document.body.style.overflow = prev; };
+    }
+  }, [showForm]);
+
+  // Move keyboard focus into the dialog when it opens (Add) or switches teacher (Edit).
   useEffect(() => {
     if (showForm && formRef.current) {
-      formRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+      const first = formRef.current.querySelector<HTMLInputElement>("input, select, textarea");
+      first?.focus();
     }
   }, [showForm, editingId]);
 
@@ -333,8 +342,19 @@ export default function TeacherManagement() {
       {error && <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">{error}</div>}
 
       {showForm && (
-        <form ref={formRef} onSubmit={handleSubmit} className="bg-white p-6 rounded-lg shadow-md space-y-5 ring-2 ring-blue-200">
-          <h3 className="text-lg font-semibold text-slate-900">{editingId ? "Edit teacher" : "Add teacher"}</h3>
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/50 p-4 sm:p-6"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) resetForm(); }}
+        >
+          <form
+            ref={formRef}
+            onSubmit={handleSubmit}
+            className="bg-white p-6 rounded-lg shadow-2xl space-y-5 w-full max-w-2xl my-8 max-h-[90vh] overflow-y-auto"
+          >
+          <div className="flex justify-between items-center">
+            <h3 className="text-lg font-semibold text-slate-900">{editingId ? "Edit teacher" : "Add teacher"}</h3>
+            <button type="button" onClick={resetForm} className="text-slate-400 hover:text-slate-700 text-2xl leading-none" aria-label="Close">×</button>
+          </div>
           <div className="grid grid-cols-2 gap-4">
             <input type="text" placeholder="Name" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} className="border rounded px-3 py-2" required />
             <input type="email" placeholder="Email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} className="border rounded px-3 py-2" required />
@@ -460,7 +480,8 @@ export default function TeacherManagement() {
             <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded">{editingId ? "Update" : "Create"}</button>
             <button type="button" onClick={resetForm} className="bg-gray-400 hover:bg-gray-500 text-white px-4 py-2 rounded">Cancel</button>
           </div>
-        </form>
+          </form>
+        </div>
       )}
 
       <div className="bg-white rounded-lg shadow-md overflow-hidden">

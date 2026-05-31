@@ -64,10 +64,18 @@ def create_app(config_name=None):
                 if os.path.isfile(asset_path):
                     return send_from_directory(react_build_path, path)
             # Otherwise serve index.html so React Router can handle the route.
+            # index.html references hashed JS/CSS bundles, so it must never be
+            # cached by the browser — otherwise users keep loading stale assets
+            # after a rebuild. The hashed bundles themselves can be cached freely.
             index_path = os.path.join(react_build_path, 'index.html')
             if os.path.exists(index_path):
                 with open(index_path, 'r') as f:
-                    return f.read(), 200, {'Content-Type': 'text/html; charset=utf-8'}
+                    return f.read(), 200, {
+                        'Content-Type': 'text/html; charset=utf-8',
+                        'Cache-Control': 'no-cache, no-store, must-revalidate',
+                        'Pragma': 'no-cache',
+                        'Expires': '0',
+                    }
             return {'error': 'index.html not found'}, 500
     
     # Schema is managed by Flask-Migrate (Alembic). Run `flask db upgrade` to
