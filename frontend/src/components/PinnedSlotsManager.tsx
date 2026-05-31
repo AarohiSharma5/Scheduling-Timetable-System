@@ -191,8 +191,8 @@ export default function PinnedSlotsManager() {
                 <td className="px-4 py-2">{subjectLabel(p.subject_id)}</td>
                 <td className="px-4 py-2 text-sm">{teacherLabel(p.teacher_id)}</td>
                 <td className="px-4 py-2">{p.day} · P{p.period_number}</td>
-                <td className="px-4 py-2">
-                  <button onClick={() => handleDelete(p.id)} className="text-red-600 hover:underline text-sm">
+                <td className="px-4 py-2 whitespace-nowrap">
+                  <button onClick={() => handleDelete(p.id)} className="bg-red-600 hover:bg-red-700 text-white text-sm font-medium px-3 py-1.5 rounded">
                     Remove
                   </button>
                 </td>

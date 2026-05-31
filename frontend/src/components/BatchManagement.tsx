@@ -258,13 +258,15 @@ export default function BatchManagement() {
                 <td className="px-4 py-2">{batch.section}</td>
                 <td className="px-4 py-2">{batch.student_count}</td>
                 <td className="px-4 py-2">{batch.periods_per_day ?? <span className="text-slate-400">full day</span>}</td>
-                <td className="px-4 py-2 space-x-2">
-                  <button onClick={() => handleEdit(batch)} className="text-blue-600 hover:underline text-sm">
-                    Edit
-                  </button>
-                  <button onClick={() => handleDelete(batch.id)} className="text-red-600 hover:underline text-sm">
-                    Delete
-                  </button>
+                <td className="px-4 py-2 whitespace-nowrap">
+                  <div className="flex gap-2">
+                    <button onClick={() => handleEdit(batch)} className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-3 py-1.5 rounded">
+                      Edit
+                    </button>
+                    <button onClick={() => handleDelete(batch.id)} className="bg-red-600 hover:bg-red-700 text-white text-sm font-medium px-3 py-1.5 rounded">
+                      Delete
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}

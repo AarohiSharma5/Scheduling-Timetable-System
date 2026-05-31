@@ -151,8 +151,8 @@ export default function ChargeManagement() {
                   <td className="px-4 py-2">
                     <input type="checkbox" checked={d.takes_classes} onChange={(e) => patch(d.id, { takes_classes: e.target.checked })} />
                   </td>
-                  <td className="px-4 py-2">
-                    <button onClick={() => handleDelete(d.id)} className="text-red-600 hover:underline text-sm">Delete</button>
+                  <td className="px-4 py-2 whitespace-nowrap">
+                    <button onClick={() => handleDelete(d.id)} className="bg-red-600 hover:bg-red-700 text-white text-sm font-medium px-3 py-1.5 rounded">Delete</button>
                   </td>
                 </tr>
               );
