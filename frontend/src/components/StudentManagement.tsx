@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { api } from "../api";
+import ImportWizard from "./ImportWizard";
 
 interface Student {
   id: number;
@@ -66,6 +67,7 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
   const [formData, setFormData] = useState({ ...emptyForm });
   const [transferStudent, setTransferStudent] = useState<Student | null>(null);
   const [transferSection, setTransferSection] = useState("");
+  const [showImport, setShowImport] = useState(false);
 
   const flash = (kind: "ok" | "err", text: string) => {
     setMessage({ kind, text });
@@ -302,6 +304,12 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
             className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-medium px-4 py-2 rounded-lg"
           >
             🔢 Renumber rolls
+          </button>
+          <button
+            onClick={() => setShowImport(true)}
+            className="bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300 font-medium px-4 py-2 rounded-lg"
+          >
+            ⬆️ Import CSV/Excel
           </button>
           <button
             onClick={openAdd}
@@ -668,6 +676,18 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
             </div>
           </form>
         </div>
+      )}
+
+      {/* Bulk import wizard */}
+      {showImport && (
+        <ImportWizard
+          entity="students"
+          onClose={() => setShowImport(false)}
+          onImported={() => {
+            fetchStudents();
+            fetchStrengths();
+          }}
+        />
       )}
 
       {/* Transfer modal */}

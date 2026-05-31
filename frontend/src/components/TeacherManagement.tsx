@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { api } from "../api";
 import TeacherPreferenceEditor from "./TeacherPreferenceEditor";
+import ImportWizard from "./ImportWizard";
 
 interface UnavailableSlot {
   day: string;
@@ -87,6 +88,7 @@ export default function TeacherManagement() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [prefTeacher, setPrefTeacher] = useState<Teacher | null>(null);
+  const [showImport, setShowImport] = useState(false);
 
   const [formData, setFormData] = useState({ ...emptyForm });
 
@@ -341,6 +343,9 @@ export default function TeacherManagement() {
           <button onClick={handleAutoAssign} disabled={autoBusy} className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg">
             {autoBusy ? "Assigning…" : "⚖️ Auto-assign sections"}
           </button>
+          <button onClick={() => setShowImport(true)} className="bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300 px-4 py-2 rounded-lg">
+            ⬆️ Import CSV/Excel
+          </button>
           {!showForm && (
             <button onClick={() => setShowForm(true)} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
               + Add Teacher
@@ -583,6 +588,14 @@ export default function TeacherManagement() {
           subjects={subjects}
           batches={batches}
           onClose={() => setPrefTeacher(null)}
+        />
+      )}
+
+      {showImport && (
+        <ImportWizard
+          entity="teachers"
+          onClose={() => setShowImport(false)}
+          onImported={loadData}
         />
       )}
     </div>

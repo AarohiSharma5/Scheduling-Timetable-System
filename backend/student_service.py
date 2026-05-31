@@ -68,6 +68,35 @@ def next_admission_no(today=None):
     return f"ADM{nxt}"
 
 
+def student_code_allocator():
+    """Return a function that yields sequential ``STU####`` codes.
+
+    Seeds from the current global max once, then increments in memory — safe for
+    bulk inserts within a single transaction (where the DB max won't change
+    until commit).
+    """
+    counter = {"v": _max_suffix("STU")}
+
+    def _next():
+        counter["v"] += 1
+        return f"STU{counter['v']:04d}"
+
+    return _next
+
+
+def admission_no_allocator(today=None):
+    """Return a function that yields sequential ``ADMyy#####`` admission numbers."""
+    today = today or date.today()
+    year_floor = (today.year % 100) * 100000
+    counter = {"v": max(_max_suffix("ADM"), year_floor)}
+
+    def _next():
+        counter["v"] += 1
+        return f"ADM{counter['v']}"
+
+    return _next
+
+
 def _student_name_key(s):
     """Sort key for alphabetical roll ordering: active first, then by name."""
     active = 0 if (s.status or "").strip().lower() in ACTIVE_STATUSES else 1

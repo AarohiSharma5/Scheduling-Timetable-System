@@ -37,10 +37,14 @@ from student_service import (
     resequence_rolls,
     section_strengths,
     sections_for_grade,
+    student_code_allocator,
+    admission_no_allocator,
     DEFAULT_SECTION_CAPACITY,
     DEFAULT_ADMISSION_BUFFER,
 )
+import bulk_import
 import os
+import re
 
 api = Blueprint("api", __name__, url_prefix="/api")
 
@@ -1634,6 +1638,280 @@ def resequence_section_rolls():
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# BULK IMPORT (CSV / XLSX) — students & teachers
+# ============================================================================
+#
+# Two-step flow so the admin always previews before anything is written:
+#   1. POST .../import/<entity>/preview  (multipart file) -> mapped + validated
+#      rows, with per-row status (ok / warning / duplicate / invalid). No writes.
+#   2. POST .../import/<entity>/commit   (JSON rows + skip_invalid) -> bulk create
+#      and an error report (success_count / failure_count / errors).
+
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# Optional fields whose emptiness is surfaced as a (non-blocking) warning.
+_STUDENT_OPTIONAL = ["parent_name", "email", "phone", "section", "admission_number"]
+_TEACHER_OPTIONAL = ["phone", "qualification", "designation"]
+
+
+def _row_status(issues):
+    levels = {i["level"] for i in issues}
+    if "invalid" in levels:
+        return "invalid"
+    if "duplicate" in levels:
+        return "duplicate"
+    return "ok"
+
+
+def _annotate_students(org_id, records, scope):
+    """Validate parsed student rows against the org; return annotated rows + counts."""
+    existing = Student.query.filter_by(organization_id=org_id).all()
+    db_adm = {(s.admission_no or "").lower() for s in existing if s.admission_no}
+    db_namekey = {
+        (f"{s.first_name} {s.last_name}".strip().lower(), str(s.class_grade), s.section)
+        for s in existing
+    }
+    seen_adm, seen_name = set(), set()
+    rows = []
+    for rec in records:
+        data = dict(rec["data"])
+        issues = []
+        name = (data.get("name") or "").strip()
+        klass = (data.get("class") or "").strip()
+        section = (data.get("section") or "").strip()
+        email = (data.get("email") or "").strip()
+        adm = (data.get("admission_number") or "").strip()
+
+        if scope:
+            if klass and str(klass) != scope[0]:
+                issues.append({"level": "invalid", "msg": f"Not your class (you manage {scope[0]})"})
+            klass = scope[0]
+            section = scope[1]
+            data["class"], data["section"] = klass, section
+
+        if not name:
+            issues.append({"level": "invalid", "msg": "Missing name"})
+        if not klass:
+            issues.append({"level": "invalid", "msg": "Missing class"})
+        if email and not EMAIL_RE.match(email):
+            issues.append({"level": "invalid", "msg": "Invalid email format"})
+
+        namekey = (name.lower(), str(klass), section)
+        if adm:
+            al = adm.lower()
+            if al in db_adm:
+                issues.append({"level": "duplicate", "msg": f"Admission no '{adm}' already exists"})
+            elif al in seen_adm:
+                issues.append({"level": "duplicate", "msg": f"Admission no '{adm}' repeated in file"})
+            seen_adm.add(al)
+        if name and klass:
+            if namekey in db_namekey:
+                issues.append({"level": "duplicate", "msg": "A student with this name already exists in that class/section"})
+            elif namekey in seen_name:
+                issues.append({"level": "duplicate", "msg": "Duplicate name in file for this class/section"})
+            seen_name.add(namekey)
+
+        missing = [f for f in _STUDENT_OPTIONAL if not (data.get(f) or "").strip()]
+        rows.append({"row": rec["row"], "data": data, "issues": issues,
+                     "missing": missing, "status": _row_status(issues)})
+    return rows
+
+
+def _annotate_teachers(org_id, records):
+    """Validate parsed teacher rows; emails must be present & unique (login id)."""
+    db_email = {u.email.lower() for u in User.query.all() if u.email}
+    seen_email = set()
+    rows = []
+    for rec in records:
+        data = dict(rec["data"])
+        issues = []
+        name = (data.get("name") or "").strip()
+        email = (data.get("email") or "").strip()
+
+        if not name:
+            issues.append({"level": "invalid", "msg": "Missing name"})
+        if not email:
+            issues.append({"level": "invalid", "msg": "Email is required (used as login id)"})
+        elif not EMAIL_RE.match(email):
+            issues.append({"level": "invalid", "msg": "Invalid email format"})
+        else:
+            el = email.lower()
+            if el in db_email:
+                issues.append({"level": "duplicate", "msg": f"A user with email '{email}' already exists"})
+            elif el in seen_email:
+                issues.append({"level": "duplicate", "msg": f"Email '{email}' repeated in file"})
+            seen_email.add(el)
+
+        missing = [f for f in _TEACHER_OPTIONAL if not (data.get(f) or "").strip()]
+        rows.append({"row": rec["row"], "data": data, "issues": issues,
+                     "missing": missing, "status": _row_status(issues)})
+    return rows
+
+
+def _counts(rows):
+    return {
+        "total": len(rows),
+        "valid": sum(1 for r in rows if r["status"] == "ok"),
+        "duplicates": sum(1 for r in rows if r["status"] == "duplicate"),
+        "invalid": sum(1 for r in rows if r["status"] == "invalid"),
+    }
+
+
+@api.route("/admin/import/<entity>/preview", methods=["POST"])
+@role_required("admin", "principal", "teacher")
+def import_preview(entity):
+    """Parse an uploaded CSV/XLSX, fuzzy-match headers, validate — no writes."""
+    if entity not in ("students", "teachers"):
+        return jsonify({"error": "Unknown import type"}), 404
+    org_id = current_org_id()
+
+    scope = None
+    if not _is_admin_or_principal():
+        if entity == "teachers":
+            return jsonify({"error": "Only admin/principal can import teachers"}), 403
+        scope = _class_teacher_scope()
+        if not scope:
+            return jsonify({"error": "You are not assigned as a class teacher"}), 403
+
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    try:
+        headers, raw_rows = bulk_import.read_table(file.filename, file.read())
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception:
+        return jsonify({"error": "Could not read the file. Please check the format."}), 400
+
+    fields = bulk_import.FIELD_SETS[entity]
+    mapping = bulk_import.match_columns(headers, fields)
+    records = bulk_import.extract_records(raw_rows, mapping)
+
+    if entity == "students":
+        rows = _annotate_students(org_id, records, scope)
+    else:
+        rows = _annotate_teachers(org_id, records)
+
+    return jsonify({
+        "entity": entity,
+        "fields": list(fields.keys()),
+        "mapping": mapping,
+        "unmapped_headers": bulk_import.unmapped_headers(headers, mapping),
+        "scope": {"class_grade": scope[0], "section": scope[1]} if scope else None,
+        "counts": _counts(rows),
+        "rows": rows,
+    }), 200
+
+
+@api.route("/admin/import/<entity>/commit", methods=["POST"])
+@role_required("admin", "principal", "teacher")
+def import_commit(entity):
+    """Bulk-create from confirmed rows. Body: { rows:[{data}], skip_invalid:bool }."""
+    if entity not in ("students", "teachers"):
+        return jsonify({"error": "Unknown import type"}), 404
+    org_id = current_org_id()
+
+    scope = None
+    if not _is_admin_or_principal():
+        if entity == "teachers":
+            return jsonify({"error": "Only admin/principal can import teachers"}), 403
+        scope = _class_teacher_scope()
+        if not scope:
+            return jsonify({"error": "You are not assigned as a class teacher"}), 403
+
+    payload = request.get_json() or {}
+    in_rows = payload.get("rows") or []
+    skip_invalid = bool(payload.get("skip_invalid", True))
+    # Re-validate server-side; never trust the client's status flags.
+    records = [{"row": r.get("row", i + 2), "data": r.get("data") or {}}
+               for i, r in enumerate(in_rows)]
+
+    if entity == "students":
+        annotated = _annotate_students(org_id, records, scope)
+    else:
+        annotated = _annotate_teachers(org_id, records)
+
+    success, errors = 0, []
+    touched_sections = set()
+
+    try:
+        if entity == "students":
+            alloc_code = student_code_allocator()
+            alloc_adm = admission_no_allocator()
+            for r in annotated:
+                if r["status"] != "ok":
+                    if skip_invalid:
+                        errors.append({"row": r["row"], "name": r["data"].get("name", ""),
+                                       "error": "; ".join(i["msg"] for i in r["issues"])})
+                        continue
+                    return jsonify({"error": f"Row {r['row']} has problems. Fix it or enable 'skip invalid rows'.",
+                                    "row": r["row"]}), 400
+                d = r["data"]
+                first, last = _split_name({"full_name": d.get("name")})
+                klass = scope[0] if scope else str(d.get("class"))
+                section = scope[1] if scope else (d.get("section") or "").strip()
+                if not section:
+                    section, _ = choose_section(org_id, klass)
+                student = Student(
+                    organization_id=org_id,
+                    student_id=alloc_code(),
+                    admission_no=(d.get("admission_number") or "").strip() or alloc_adm(),
+                    first_name=first, last_name=last,
+                    email=(d.get("email") or None),
+                    father_name=(d.get("parent_name") or None),
+                    contact_number=(d.get("phone") or None),
+                    class_grade=klass, section=section,
+                    admission_date=date.today(), status="Active",
+                )
+                db.session.add(student)
+                touched_sections.add((klass, section))
+                success += 1
+            db.session.flush()
+            for grade, section in touched_sections:
+                resequence_rolls(org_id, grade, section)
+            db.session.commit()
+        else:
+            target = _org_target_contact(org_id)
+            ct_hours = _class_teacher_hours(org_id)
+            for r in annotated:
+                if r["status"] != "ok":
+                    if skip_invalid:
+                        errors.append({"row": r["row"], "name": r["data"].get("name", ""),
+                                       "error": "; ".join(i["msg"] for i in r["issues"])})
+                        continue
+                    return jsonify({"error": f"Row {r['row']} has problems. Fix it or enable 'skip invalid rows'.",
+                                    "row": r["row"]}), 400
+                d = r["data"]
+                user = User(name=d.get("name"), email=d.get("email"), role="teacher",
+                            organization_id=org_id,
+                            password_hash=generate_password_hash("changeme123"))
+                db.session.add(user)
+                db.session.flush()
+                teacher = Teacher(
+                    organization_id=org_id, user_id=user.id,
+                    name=d.get("name"), email=d.get("email"),
+                    phone=(d.get("phone") or None),
+                    qualification=(d.get("qualification") or None),
+                    designation=(d.get("designation") or None),
+                )
+                _apply_teaching_and_charges(teacher, {}, org_id)
+                db.session.add(teacher)
+                success += 1
+            db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e), "success_count": 0,
+                        "failure_count": len(annotated)}), 500
+
+    return jsonify({
+        "success_count": success,
+        "failure_count": len(errors),
+        "errors": errors,
+    }), 200
 
 
 # ============================================================================

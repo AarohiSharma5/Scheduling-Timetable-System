@@ -246,6 +246,29 @@ export const api = {
       },
     },
 
+    // Bulk import (CSV / XLSX) for students & teachers
+    imports: {
+      preview: async (entity: "students" | "teachers", file: File) => {
+        const form = new FormData();
+        form.append("file", file);
+        const { data } = await axiosInstance.post(`/admin/import/${entity}/preview`, form, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+        return data;
+      },
+      commit: async (
+        entity: "students" | "teachers",
+        rows: any[],
+        skip_invalid: boolean
+      ) => {
+        const { data } = await axiosInstance.post(`/admin/import/${entity}/commit`, {
+          rows,
+          skip_invalid,
+        });
+        return data;
+      },
+    },
+
     // Pinned / fixed periods the scheduler must honor
     pinnedSlots: {
       list: async () => {
