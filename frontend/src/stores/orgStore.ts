@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:5001/api";
+const API_BASE = process.env.REACT_APP_API_URL || "/api";
 
 // We only persist NON-SENSITIVE org info (name/slug/logo) for gating and
 // display. The actual org token lives in an httpOnly cookie the browser

@@ -7,10 +7,29 @@ interface Batch {
   section: string;
   student_count: number;
   periods_per_day: number | null;
+  homeroom_teacher_id: number | null;
 }
+
+interface TeacherLite {
+  id: number;
+  name: string;
+  teacher_code?: string;
+}
+
+// Mirror of backend period_utils.is_pre_primary so the homeroom selector only
+// appears for Nursery / LKG / UKG / Prep style grades.
+const PRE_PRIMARY = new Set([
+  "nursery", "prenursery", "playgroup", "pg", "lkg", "ukg", "kg", "kg1", "kg2",
+  "kindergarten", "prep", "preparatory", "preprimary", "pp", "pp1", "pp2", "preschool",
+]);
+const isPrePrimary = (grade: string): boolean => {
+  const n = String(grade || "").toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
+  return PRE_PRIMARY.has(n) || PRE_PRIMARY.has(n.replace(/ /g, ""));
+};
 
 export default function BatchManagement() {
   const [batches, setBatches] = useState<Batch[]>([]);
+  const [teachers, setTeachers] = useState<TeacherLite[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showForm, setShowForm] = useState(false);
@@ -21,6 +40,7 @@ export default function BatchManagement() {
     section: "",
     student_count: 30,
     periods_per_day: "" as number | "",
+    homeroom_teacher_id: "" as number | "",
   });
 
   // "Set day length by grade" controls.
@@ -67,8 +87,12 @@ export default function BatchManagement() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const res = await api.admin.batches.list();
+      const [res, teacherRes] = await Promise.all([
+        api.admin.batches.list(),
+        api.admin.teachers.list().catch(() => []),
+      ]);
       setBatches(res || []);
+      setTeachers((teacherRes || []).map((t: any) => ({ id: t.id, name: t.name, teacher_code: t.teacher_code })));
     } catch (err) {
       setError("Failed to load batches");
       console.error(err);
@@ -110,6 +134,7 @@ export default function BatchManagement() {
       section: batch.section,
       student_count: batch.student_count,
       periods_per_day: batch.periods_per_day ?? "",
+      homeroom_teacher_id: batch.homeroom_teacher_id ?? "",
     });
     setEditingId(batch.id);
     setShowForm(true);
@@ -121,6 +146,7 @@ export default function BatchManagement() {
       section: "",
       student_count: 30,
       periods_per_day: "",
+      homeroom_teacher_id: "",
     });
     setEditingId(null);
     setShowForm(false);
@@ -183,6 +209,35 @@ export default function BatchManagement() {
               <p className="text-xs text-slate-500 mt-1">Shorter day for juniors. Blank = school default.</p>
             </div>
           </div>
+
+          {isPrePrimary(formData.grade) && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Homeroom teacher (pre-primary)
+              </label>
+              <select
+                value={formData.homeroom_teacher_id}
+                onChange={(e) =>
+                  setFormData({
+                    ...formData,
+                    homeroom_teacher_id: e.target.value ? Number(e.target.value) : "",
+                  })
+                }
+                className="border rounded px-3 py-2 w-full md:w-80"
+              >
+                <option value="">Use class teacher of this section</option>
+                {teachers.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}{t.teacher_code ? ` (${t.teacher_code})` : ""}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-slate-500 mt-1">
+                In <strong>Single Teacher Mode</strong> this teacher takes most subjects for the class.
+                Leave blank to use the section's class teacher.
+              </p>
+            </div>
+          )}
 
           <div className="flex gap-2">
             <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded">
@@ -248,6 +303,7 @@ export default function BatchManagement() {
               <th className="px-4 py-2 text-left">Section</th>
               <th className="px-4 py-2 text-left">Students</th>
               <th className="px-4 py-2 text-left">Periods/Day</th>
+              <th className="px-4 py-2 text-left">Homeroom</th>
               <th className="px-4 py-2 text-left">Actions</th>
             </tr>
           </thead>
@@ -258,6 +314,13 @@ export default function BatchManagement() {
                 <td className="px-4 py-2">{batch.section}</td>
                 <td className="px-4 py-2">{batch.student_count}</td>
                 <td className="px-4 py-2">{batch.periods_per_day ?? <span className="text-slate-400">full day</span>}</td>
+                <td className="px-4 py-2">
+                  {isPrePrimary(batch.grade)
+                    ? (batch.homeroom_teacher_id
+                        ? (teachers.find((t) => t.id === batch.homeroom_teacher_id)?.name ?? `#${batch.homeroom_teacher_id}`)
+                        : <span className="text-slate-400">class teacher</span>)
+                    : <span className="text-slate-300">—</span>}
+                </td>
                 <td className="px-4 py-2 whitespace-nowrap">
                   <div className="flex gap-2">
                     <button onClick={() => handleEdit(batch)} className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-3 py-1.5 rounded">

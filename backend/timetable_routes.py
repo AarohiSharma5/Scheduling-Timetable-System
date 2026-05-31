@@ -524,6 +524,157 @@ def _log_edit(timetable, action, detail):
     timetable.change_log = log[-200:]
 
 
+def _resolve_homeroom_teacher(batch, org_id):
+    """The homeroom teacher of a (pre-primary) batch.
+
+    Prefers the explicit Batch.homeroom_teacher_id, then the teacher whose
+    class_teacher_batch_id points at this batch. Returns a Teacher or None.
+    """
+    if batch is None:
+        return None
+    if getattr(batch, "homeroom_teacher_id", None):
+        t = Teacher.query.filter_by(id=batch.homeroom_teacher_id, organization_id=org_id).first()
+        if t:
+            return t
+    return Teacher.query.filter_by(organization_id=org_id, class_teacher_batch_id=batch.id).first()
+
+
+def _substitute_candidates(org_id, timetable_id, day, required_periods, absent_id):
+    """Teachers who could cover `required_periods` on `day` in this timetable.
+
+    A candidate is "free" if they have no class of their own in any required
+    period. Teachers who only clash because they *self-marked* those periods
+    unavailable (emergency reserve) are still offered but flagged tentative,
+    mirroring the manual-edit teacher picker.
+    """
+    teachers = Teacher.query.filter_by(organization_id=org_id).all()
+    prefs = TeacherPreference.query.filter_by(organization_id=org_id).all()
+    unavailable = build_teacher_unavailable(teachers, prefs)
+
+    # Per-teacher busy periods (real classes) and total day load in this grid.
+    busy = {}
+    day_load = {}
+    for s in TimetableSlot.query.filter_by(timetable_id=timetable_id, day=day).all():
+        if s.is_lunch or not s.teacher_id:
+            continue
+        busy.setdefault(s.teacher_id, set()).add(s.period_number)
+        day_load[s.teacher_id] = day_load.get(s.teacher_id, 0) + 1
+
+    req = set(required_periods)
+    out = []
+    for t in teachers:
+        if t.id == absent_id:
+            continue
+        # Hard clash: an actual class of their own in a required period.
+        if busy.get(t.id, set()) & req:
+            continue
+        # Self-marked-unavailable overlap → still offered, but flagged.
+        tentative = bool({(day, p) for p in req} & unavailable.get(t.id, set()))
+        out.append({
+            "id": t.id,
+            "name": t.name,
+            "teacher_code": t.teacher_code,
+            "day_load": day_load.get(t.id, 0),
+            "tentative": tentative,
+        })
+    # Freest (and non-tentative) first.
+    out.sort(key=lambda c: (c["tentative"], c["day_load"], c["name"]))
+    return out
+
+
+@timetable_bp.route("/<int:timetable_id>/substitute-homeroom", methods=["POST"])
+@token_required
+@role_required("admin", "principal")
+def substitute_homeroom(timetable_id):
+    """Assign a substitute when a (homeroom) teacher is absent.
+
+    Body: {
+      batch_id?: int,            # pre-primary class whose homeroom is absent
+      teacher_id?: int,          # or the absent teacher directly
+      day: "Monday",             # weekday to cover
+      periods?: [1,2,3],         # selected periods; omitted = the full day
+      substitute_teacher_id?: int,
+      preview?: bool             # list candidates without applying
+    }
+
+    With no substitute chosen (or preview=true) it returns the affected periods
+    and the ranked list of available substitutes. With a substitute it reassigns
+    those periods and records the change in the timetable's audit log.
+    """
+    org_id = _org_id()
+    timetable = _owned_timetable(timetable_id)
+    if not timetable:
+        return jsonify({"error": "Timetable not found"}), 404
+
+    data = request.get_json() or {}
+    day = data.get("day")
+    if not day:
+        return jsonify({"error": "day is required"}), 400
+
+    absent_id = data.get("teacher_id")
+    batch = None
+    if data.get("batch_id"):
+        batch = Batch.query.filter_by(id=data["batch_id"], organization_id=org_id).first()
+        if not batch:
+            return jsonify({"error": "Batch not found"}), 404
+        if not absent_id:
+            hr = _resolve_homeroom_teacher(batch, org_id)
+            if not hr:
+                return jsonify({"error": "No homeroom/class teacher set for this class"}), 400
+            absent_id = hr.id
+    if not absent_id:
+        return jsonify({"error": "Provide batch_id or teacher_id"}), 400
+
+    # The absent teacher's classes that day in this timetable.
+    q = TimetableSlot.query.filter_by(timetable_id=timetable_id, day=day, teacher_id=absent_id)
+    affected = [s for s in q.all() if not s.is_lunch]
+    sel = data.get("periods")
+    if sel:
+        wanted = {int(p) for p in sel}
+        affected = [s for s in affected if s.period_number in wanted]
+
+    if not affected:
+        return jsonify({"error": "The teacher has no classes to cover for the selected periods"}), 400
+
+    required_periods = sorted({s.period_number for s in affected})
+    candidates = _substitute_candidates(org_id, timetable_id, day, required_periods, absent_id)
+
+    sub_id = data.get("substitute_teacher_id")
+    if data.get("preview") or not sub_id:
+        return jsonify({
+            "absent_teacher_id": absent_id,
+            "day": day,
+            "required_periods": required_periods,
+            "affected": [s.to_dict() for s in affected],
+            "candidates": candidates,
+        }), 200
+
+    # Apply: the chosen substitute must actually be able to cover every period.
+    valid_ids = {c["id"] for c in candidates}
+    if sub_id not in valid_ids:
+        return jsonify({"error": "Selected substitute is not available for all of those periods"}), 409
+
+    for s in affected:
+        s.teacher_id = sub_id
+    _log_edit(timetable, "substitute", {
+        "day": day,
+        "periods": required_periods,
+        "absent_teacher_id": absent_id,
+        "substitute_teacher_id": sub_id,
+        "batch_id": batch.id if batch else None,
+    })
+    db.session.commit()
+
+    sub = Teacher.query.get(sub_id)
+    return jsonify({
+        "message": f"{len(affected)} period(s) reassigned to substitute",
+        "substitute_teacher_id": sub_id,
+        "substitute_name": sub.name if sub else None,
+        "day": day,
+        "periods": required_periods,
+    }), 200
+
+
 @timetable_bp.route("/<int:timetable_id>/grid", methods=["GET"])
 @token_required
 @role_required("admin", "principal")

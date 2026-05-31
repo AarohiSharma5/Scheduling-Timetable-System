@@ -69,16 +69,20 @@ class Requirement:
     is_double marks lab/double subjects that must be placed as consecutive pairs.
     """
     def __init__(self, teacher_id: int, subject_id: int, batch_id: int,
-                 periods: int, is_double: bool):
+                 periods: int, is_double: bool, is_homeroom: bool = False):
         self.teacher_id = teacher_id
         self.subject_id = subject_id
         self.batch_id = batch_id
         self.periods = periods
         self.is_double = is_double
+        # Pre-primary single-teacher subjects: placed first so the dedicated
+        # class always fills before the homeroom teacher's budget is spent.
+        self.is_homeroom = is_homeroom
 
     def __repr__(self):
         kind = "DBL" if self.is_double else "SGL"
-        return f"{kind} T{self.teacher_id}->S{self.subject_id}->B{self.batch_id}x{self.periods}"
+        hr = "/HR" if self.is_homeroom else ""
+        return f"{kind}{hr} T{self.teacher_id}->S{self.subject_id}->B{self.batch_id}x{self.periods}"
 
 
 # ============================================================================
@@ -360,13 +364,61 @@ class SchedulingEngine:
     # ASSIGNMENT CALCULATION
     # ========================================================================
 
+    def _setup_pre_primary(self, batches, subjects, teachers):
+        """Resolve pre-primary mode, support subjects, and per-batch homeroom teacher.
+
+        In single-teacher mode a pre-primary class is taught mostly by one homeroom
+        teacher (resolved from Batch.homeroom_teacher_id, else the class teacher of
+        that batch). Specialist subjects (art/music/dance/PE) still go to subject
+        teachers. The homeroom teacher's weekly cap is widened so the dedicated
+        load of a whole class never trips the hard max.
+        """
+        from period_utils import is_pre_primary, DEFAULT_SUPPORT_SUBJECTS
+
+        cfg = getattr(self, "config", None)
+        self.pre_primary_mode = (getattr(cfg, "pre_primary_mode", "single") or "single").lower()
+        support = getattr(cfg, "pre_primary_support_subjects", None) or DEFAULT_SUPPORT_SUBJECTS
+        self.support_subject_names = {str(n).strip().lower() for n in support if str(n).strip()}
+
+        # subject_id -> is a specialist/support subject (by name).
+        self.is_support_subject = {
+            s.id: (s.name or "").strip().lower() in self.support_subject_names
+            for s in subjects
+        }
+
+        # batch_id -> homeroom teacher id (single-teacher mode only).
+        self.homeroom_of_batch = {}
+        if self.pre_primary_mode != "single":
+            return
+        class_teacher_of = {}
+        for t in teachers:
+            bid = getattr(t, "class_teacher_batch_id", None)
+            if bid:
+                class_teacher_of.setdefault(bid, t.id)
+        for b in batches:
+            if not is_pre_primary(b.grade):
+                continue
+            hr = getattr(b, "homeroom_teacher_id", None) or class_teacher_of.get(b.id)
+            if hr and hr in self.teacher_by_id:
+                self.homeroom_of_batch[b.id] = hr
+            else:
+                self.warnings.append(
+                    f"Pre-primary class Grade {b.grade}-{b.section} has no homeroom "
+                    f"teacher set; scheduling it with subject specialists instead"
+                )
+
     def _calculate_requirements(self, batches, subjects, teachers) -> List[Requirement]:
         """Build one Requirement per (batch, subject) the batch needs."""
         subject_by_id = {s.id: s for s in subjects}
         requirements = []
 
+        self._setup_pre_primary(batches, subjects, teachers)
+        # Extra weekly headroom each homeroom teacher needs for their dedicated class.
+        homeroom_extra = {}
+
         for batch in batches:
             self.batch_schedule[batch.id] = {}
+            homeroom_id = self.homeroom_of_batch.get(batch.id)
 
             for subject_id in (batch.subject_ids or []):
                 subject = subject_by_id.get(subject_id) or Subject.query.get(subject_id)
@@ -375,14 +427,43 @@ class SchedulingEngine:
 
                 self.batch_schedule[batch.id][subject_id] = 0
 
+                # ---- Pre-primary single-teacher mode -------------------------
+                # The homeroom teacher takes every non-specialist subject so the
+                # children stay with one adult for most of the (short) day.
+                if homeroom_id and not self.is_support_subject.get(subject_id, False):
+                    homeroom_extra[homeroom_id] = homeroom_extra.get(homeroom_id, 0) + subject.periods_per_week
+                    requirements.append(Requirement(
+                        teacher_id=homeroom_id,
+                        subject_id=subject_id,
+                        batch_id=batch.id,
+                        periods=subject.periods_per_week,
+                        is_double=self.subject_double.get(subject_id, False),
+                        is_homeroom=True,
+                    ))
+                    continue
+
                 eligible_teachers = [
                     t for t in teachers
                     if (subject_id, batch.id) in self.teacher_can_teach.get(t.id, ())
                 ]
+
+                # Specialist subject in a pre-primary class with no specialist
+                # available: let the homeroom teacher cover it rather than drop it.
                 if not eligible_teachers:
-                    self.warnings.append(
-                        f"No teacher found for {subject.name} in Grade {batch.grade}-{batch.section}"
-                    )
+                    if homeroom_id:
+                        homeroom_extra[homeroom_id] = homeroom_extra.get(homeroom_id, 0) + subject.periods_per_week
+                        requirements.append(Requirement(
+                            teacher_id=homeroom_id,
+                            subject_id=subject_id,
+                            batch_id=batch.id,
+                            periods=subject.periods_per_week,
+                            is_double=self.subject_double.get(subject_id, False),
+                            is_homeroom=True,
+                        ))
+                    else:
+                        self.warnings.append(
+                            f"No teacher found for {subject.name} in Grade {batch.grade}-{batch.section}"
+                        )
                     continue
 
                 # Soft preference at selection time: among eligible teachers,
@@ -411,8 +492,14 @@ class SchedulingEngine:
                     is_double=self.subject_double.get(subject_id, False),
                 ))
 
-        # Hardest-to-place first: doubles, then by subject for determinism.
-        requirements.sort(key=lambda r: (not r.is_double, r.subject_id))
+        # Add the homeroom class's periods as headroom ON TOP of the teacher's
+        # normal weekly cap, so dedicating them to a pre-primary class never
+        # starves it even if they also cover other duties.
+        for tid, extra in homeroom_extra.items():
+            self.teacher_max[tid] = self.teacher_max.get(tid, 24) + extra
+
+        # Homeroom (dedicated pre-primary) first, then doubles, then by subject.
+        requirements.sort(key=lambda r: (not r.is_homeroom, not r.is_double, r.subject_id))
         return requirements
 
     # ========================================================================

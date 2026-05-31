@@ -674,6 +674,17 @@ def update_school_config():
         if "working_days" in data: config.working_days = data["working_days"]
         if "has_lunch_break" in data: config.has_lunch_break = bool(data["has_lunch_break"])
 
+        if "pre_primary_mode" in data:
+            mode = str(data["pre_primary_mode"] or "").strip().lower()
+            if mode not in ("single", "specialist"):
+                return jsonify({"error": "pre_primary_mode must be 'single' or 'specialist'"}), 400
+            config.pre_primary_mode = mode
+        if "pre_primary_support_subjects" in data:
+            raw = data["pre_primary_support_subjects"]
+            if not isinstance(raw, list):
+                return jsonify({"error": "pre_primary_support_subjects must be a list"}), 400
+            config.pre_primary_support_subjects = [str(s).strip() for s in raw if str(s).strip()]
+
         workload_changed = False
         if "target_contact_periods_per_week" in data:
             try:
@@ -1999,6 +2010,7 @@ def create_batch():
             section=data.get("section"),
             student_count=data.get("student_count", 0),
             periods_per_day=data.get("periods_per_day") or None,
+            homeroom_teacher_id=data.get("homeroom_teacher_id") or None,
             subject_ids=data.get("subject_ids", []),
         )
         db.session.add(batch)
@@ -2029,6 +2041,7 @@ def update_batch(batch_id):
         if "section" in data: batch.section = data["section"]
         if "student_count" in data: batch.student_count = data["student_count"]
         if "periods_per_day" in data: batch.periods_per_day = data["periods_per_day"] or None
+        if "homeroom_teacher_id" in data: batch.homeroom_teacher_id = data["homeroom_teacher_id"] or None
         if "subject_ids" in data: batch.subject_ids = data["subject_ids"]
         
         batch.updated_at = datetime.utcnow()

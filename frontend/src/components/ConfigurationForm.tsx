@@ -13,6 +13,8 @@ interface SchoolConfig {
   working_days: number;
   target_contact_periods_per_week: number;
   class_teacher_hours_per_week: number;
+  pre_primary_mode: "single" | "specialist";
+  pre_primary_support_subjects: string[];
 }
 
 const toMinutes = (t: string): number => {
@@ -39,6 +41,8 @@ export default function ConfigurationForm() {
     working_days: 5,
     target_contact_periods_per_week: 40,
     class_teacher_hours_per_week: 5,
+    pre_primary_mode: "single" as "single" | "specialist",
+    pre_primary_support_subjects: ["Art", "Music", "Dance", "PE"] as string[],
   });
 
   // Number of periods is derived from the school hours, not typed in — this is
@@ -264,6 +268,84 @@ export default function ConfigurationForm() {
               </div>
               <p className="text-xs text-slate-500 mt-1">
                 = total weekly periods ÷ class-taking teachers. Save to apply &amp; rebalance everyone.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Pre-primary scheduling */}
+        <div>
+          <h3 className="text-lg font-semibold text-slate-900 mb-1">Pre-primary Scheduling</h3>
+          <p className="text-xs text-slate-500 mb-4">
+            How Nursery / LKG / UKG / Prep classes are staffed. Single-teacher mode keeps young
+            children with one familiar homeroom teacher for most of the (short) day.
+          </p>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <label
+              className={`flex flex-col gap-1 border rounded-lg p-3 cursor-pointer ${
+                formData.pre_primary_mode === "single"
+                  ? "border-green-500 bg-green-50 ring-1 ring-green-500"
+                  : "border-slate-300"
+              }`}
+            >
+              <span className="flex items-center gap-2 font-medium text-slate-900">
+                <input
+                  type="radio"
+                  name="pre_primary_mode"
+                  checked={formData.pre_primary_mode === "single"}
+                  onChange={() => setFormData({ ...formData, pre_primary_mode: "single" })}
+                />
+                Single Teacher Mode
+              </span>
+              <span className="text-xs text-slate-600">
+                One homeroom teacher takes most subjects; specialists only for the support subjects below.
+              </span>
+            </label>
+            <label
+              className={`flex flex-col gap-1 border rounded-lg p-3 cursor-pointer ${
+                formData.pre_primary_mode === "specialist"
+                  ? "border-green-500 bg-green-50 ring-1 ring-green-500"
+                  : "border-slate-300"
+              }`}
+            >
+              <span className="flex items-center gap-2 font-medium text-slate-900">
+                <input
+                  type="radio"
+                  name="pre_primary_mode"
+                  checked={formData.pre_primary_mode === "specialist"}
+                  onChange={() => setFormData({ ...formData, pre_primary_mode: "specialist" })}
+                />
+                Subject Specialist Mode
+              </span>
+              <span className="text-xs text-slate-600">
+                Every subject is scheduled with its own subject teacher, like senior grades.
+              </span>
+            </label>
+          </div>
+
+          {formData.pre_primary_mode === "single" && (
+            <div className="mt-4">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Support / specialist subjects
+              </label>
+              <input
+                type="text"
+                value={(formData.pre_primary_support_subjects || []).join(", ")}
+                onChange={(e) =>
+                  setFormData({
+                    ...formData,
+                    pre_primary_support_subjects: e.target.value
+                      .split(",")
+                      .map((s) => s.trim())
+                      .filter(Boolean),
+                  })
+                }
+                className="border rounded px-3 py-2 w-full"
+                placeholder="Art, Music, Dance, PE"
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                Comma-separated. These subjects go to specialist teachers even in single-teacher mode.
+                Set the homeroom teacher for each pre-primary class under <strong>Batches</strong>.
               </p>
             </div>
           )}

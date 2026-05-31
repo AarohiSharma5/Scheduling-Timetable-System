@@ -8,6 +8,36 @@ generated timetable and the exported PDF never disagree.
 
 WEEK_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
+# Grade labels treated as pre-primary, where a single homeroom teacher can take
+# most subjects. Matching is done on a normalized (lower, no-punctuation) form so
+# "L.K.G", "lkg", "Pre Primary" and "pre-primary" all map correctly.
+PRE_PRIMARY_GRADES = {
+    "nursery", "prenursery", "playgroup", "play group", "pg",
+    "lkg", "ukg", "kg", "kg1", "kg2", "kindergarten",
+    "prep", "preparatory", "preprimary", "pre primary",
+    "pp", "pp1", "pp2", "preschool",
+}
+
+# Subjects that always go to a specialist even in single-teacher mode.
+DEFAULT_SUPPORT_SUBJECTS = ["Art", "Music", "Dance", "PE", "Physical Education", "Games", "Sports"]
+
+
+def _norm_grade(grade):
+    """Normalize a grade label for pre-primary matching."""
+    s = str(grade or "").strip().lower()
+    return "".join(ch for ch in s if ch.isalnum() or ch == " ").strip()
+
+
+def is_pre_primary(grade):
+    """True when a grade label denotes a pre-primary class (Nursery/LKG/UKG/Prep)."""
+    n = _norm_grade(grade)
+    if not n:
+        return False
+    if n in PRE_PRIMARY_GRADES:
+        return True
+    compact = n.replace(" ", "")
+    return compact in PRE_PRIMARY_GRADES
+
 
 def _to_min(hhmm, default=0):
     """Parse 'HH:MM' to minutes-since-midnight; fall back to `default`."""

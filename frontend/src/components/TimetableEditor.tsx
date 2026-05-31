@@ -40,6 +40,12 @@ export default function TimetableEditor({
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
+  // Absentee substitution panel (homeroom teacher out for the day / some periods).
+  const [subOpen, setSubOpen] = useState(false);
+  const [subDay, setSubDay] = useState<string>("");
+  const [subPeriods, setSubPeriods] = useState<number[]>([]); // empty = whole day
+  const [subTeacher, setSubTeacher] = useState<number | "">("");
+
   const subjectName = useCallback((id: number | null) => subjects.find((s) => s.id === id)?.name || "", [subjects]);
   const teacherName = useCallback((id: number | null) => teachers.find((t) => t.id === id)?.name || "", [teachers]);
   const batchLabel = useCallback((id: number) => {
@@ -335,6 +341,83 @@ export default function TimetableEditor({
     pushHistory(next);
   };
 
+  // ---- Absentee substitution -------------------------------------------------
+  // Which teachers are already teaching (any class) at each day|period.
+  const busyBySlot = useMemo(() => {
+    const m: Record<string, Set<number>> = {};
+    for (const [key, c] of Object.entries(grid)) {
+      if (c.is_lunch || c.teacher_id == null) continue;
+      const [, d, p] = key.split("|");
+      (m[`${d}|${p}`] ||= new Set()).add(c.teacher_id);
+    }
+    return m;
+  }, [grid]);
+
+  // Periods the selected class actually has a teacher for on the chosen day.
+  const subClassPeriods = useMemo(() => {
+    if (selectedBatch == null || !subDay) return [] as number[];
+    return batchPeriodRows
+      .filter((p) => !p.is_lunch)
+      .map((p) => p.number)
+      .filter((n) => {
+        const c = grid[cellKey(selectedBatch, subDay, n)];
+        return !!c && !c.is_lunch && c.teacher_id != null;
+      });
+  }, [selectedBatch, subDay, grid, batchPeriodRows]);
+
+  const subTargetPeriods = subPeriods.length ? subPeriods : subClassPeriods;
+
+  // The teacher(s) currently covering those periods (the "absent" homeroom).
+  const subAbsentTeachers = useMemo(() => {
+    const s = new Set<number>();
+    if (selectedBatch == null || !subDay) return s;
+    for (const n of subTargetPeriods) {
+      const c = grid[cellKey(selectedBatch, subDay, n)];
+      if (c?.teacher_id != null) s.add(c.teacher_id);
+    }
+    return s;
+  }, [selectedBatch, subDay, subTargetPeriods, grid]);
+
+  // Teachers free for ALL target periods. Self-marked-unavailable ones are still
+  // offered (emergency reserve) but flagged tentative.
+  const subCandidates = useMemo(() => {
+    if (!subDay || !subTargetPeriods.length) return [] as { id: number; name: string; tentative: boolean }[];
+    return teachers
+      .filter((t) => !subAbsentTeachers.has(t.id))
+      .map((t) => ({
+        id: t.id,
+        name: t.name,
+        clash: subTargetPeriods.some((p) => busyBySlot[`${subDay}|${p}`]?.has(t.id)),
+        tentative: subTargetPeriods.some((p) => teacherUnavail[t.id]?.has(`${subDay}|${p}`)),
+      }))
+      .filter((c) => !c.clash)
+      .map(({ id, name, tentative }) => ({ id, name, tentative }))
+      .sort((a, b) => (a.tentative ? 1 : 0) - (b.tentative ? 1 : 0) || a.name.localeCompare(b.name));
+  }, [subDay, subTargetPeriods, teachers, subAbsentTeachers, busyBySlot, teacherUnavail]);
+
+  const applySubstitute = () => {
+    if (selectedBatch == null || subTeacher === "" || !subTargetPeriods.length) return;
+    const next = { ...grid };
+    for (const n of subTargetPeriods) {
+      const k = cellKey(selectedBatch, subDay, n);
+      const c = next[k];
+      if (c && !c.is_lunch && c.teacher_id != null) next[k] = { ...c, teacher_id: Number(subTeacher) };
+    }
+    pushHistory(next);
+    const subName = teacherName(Number(subTeacher));
+    setSubOpen(false);
+    setSubTeacher("");
+    setSubPeriods([]);
+    setMessage({ kind: "ok", text: `${subName} substituted for ${subTargetPeriods.length} period(s) on ${subDay}. Save as a new version to keep it.` });
+  };
+
+  const openSubstitute = () => {
+    setSubOpen((o) => !o);
+    setSubTeacher("");
+    setSubPeriods([]);
+    if (!subDay) setSubDay(days[0] || "");
+  };
+
   if (loading) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50">
@@ -370,6 +453,7 @@ export default function TimetableEditor({
           <div className="flex gap-2">
             <button onClick={undo} disabled={!past.length} className="px-3 py-1.5 text-sm font-medium rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-200 disabled:cursor-not-allowed">↶ Undo</button>
             <button onClick={redo} disabled={!future.length} className="px-3 py-1.5 text-sm font-medium rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-200 disabled:cursor-not-allowed">↷ Redo</button>
+            <button onClick={openSubstitute} className={`px-3 py-1.5 text-sm font-medium rounded border ${subOpen ? "bg-amber-500 text-white border-amber-500" : "bg-white text-amber-700 border-amber-300 hover:bg-amber-50"}`}>🤒 Substitute</button>
           </div>
           <div className="ml-auto flex items-center gap-3">
             {hardCount > 0 ? (
@@ -388,6 +472,83 @@ export default function TimetableEditor({
             </button>
           </div>
         </div>
+
+        {subOpen && (
+          <div className="mx-5 mt-3 rounded-lg border border-amber-200 bg-amber-50 p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-sm font-semibold text-amber-900">Teacher absent — assign a substitute</h4>
+              <button onClick={() => setSubOpen(false)} className="text-amber-700 hover:text-amber-900 text-sm">Close</button>
+            </div>
+            <p className="text-xs text-amber-800 mb-3">
+              Covers <strong>{batch ? (batch.display_name || `Grade ${batch.grade} - ${batch.section}`) : "the selected class"}</strong>.
+              Pick a day, optionally choose specific periods (else the whole day), then a free teacher.
+              Save as a new version to keep the change.
+            </p>
+            <div className="flex flex-wrap items-end gap-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Day</label>
+                <select
+                  value={subDay}
+                  onChange={(e) => { setSubDay(e.target.value); setSubPeriods([]); setSubTeacher(""); }}
+                  className="border rounded px-3 py-1.5 text-sm bg-white"
+                >
+                  {days.map((d) => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Periods <span className="text-slate-400">(none = whole day)</span>
+                </label>
+                <div className="flex flex-wrap gap-1">
+                  {subClassPeriods.length === 0 && <span className="text-xs text-slate-500 py-1.5">No classes that day.</span>}
+                  {subClassPeriods.map((n) => {
+                    const on = subPeriods.includes(n);
+                    return (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => { setSubPeriods((prev) => prev.includes(n) ? prev.filter((x) => x !== n) : [...prev, n]); setSubTeacher(""); }}
+                        className={`px-2.5 py-1 text-xs rounded border ${on ? "bg-amber-500 text-white border-amber-500" : "bg-white text-slate-700 border-slate-300 hover:bg-slate-100"}`}
+                      >
+                        P{n}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="min-w-[14rem]">
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Substitute <span className="text-slate-400">({subCandidates.length} free)</span>
+                </label>
+                <select
+                  value={subTeacher}
+                  onChange={(e) => setSubTeacher(e.target.value ? Number(e.target.value) : "")}
+                  disabled={!subTargetPeriods.length}
+                  className="border rounded px-3 py-1.5 text-sm bg-white w-full disabled:bg-slate-100"
+                >
+                  <option value="">Select a free teacher…</option>
+                  {subCandidates.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}{c.tentative ? " (marked unavailable)" : ""}</option>
+                  ))}
+                </select>
+              </div>
+              <button
+                type="button"
+                onClick={applySubstitute}
+                disabled={subTeacher === "" || !subTargetPeriods.length}
+                className="bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium px-4 py-1.5 rounded disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed"
+              >
+                Assign substitute
+              </button>
+            </div>
+            {subTargetPeriods.length > 0 && (
+              <p className="text-xs text-amber-800 mt-2">
+                Reassigning {subTargetPeriods.length} period(s): {subTargetPeriods.slice().sort((a, b) => a - b).map((p) => `P${p}`).join(", ")}
+                {subAbsentTeachers.size === 1 && ` — currently ${teacherName([...subAbsentTeachers][0])}`}.
+              </p>
+            )}
+          </div>
+        )}
 
         {message && (
           <div className={`mx-5 mt-3 px-3 py-2 rounded text-sm ${message.kind === "ok" ? "bg-emerald-50 text-emerald-800 border border-emerald-200" : "bg-red-50 text-red-800 border border-red-200"}`}>

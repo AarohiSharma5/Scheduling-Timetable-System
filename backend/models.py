@@ -72,6 +72,10 @@ class Batch(db.Model):
     # Optional per-class day length. null = use the school-wide number of periods.
     # Lets younger grades finish earlier than seniors (e.g. pre-primary = 4 periods).
     periods_per_day = db.Column(db.Integer)
+    # Primary homeroom teacher for pre-primary single-teacher scheduling. When set
+    # (and the org is in single-teacher mode) this teacher takes most subjects for
+    # the class; null falls back to the class teacher of this batch.
+    homeroom_teacher_id = db.Column(db.Integer, db.ForeignKey("teachers.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -83,6 +87,7 @@ class Batch(db.Model):
             "student_count": self.student_count,
             "subject_ids": self.subject_ids or [],
             "periods_per_day": self.periods_per_day,
+            "homeroom_teacher_id": self.homeroom_teacher_id,
             "display_name": f"Grade {self.grade} - Section {self.section}",
         }
 
@@ -328,10 +333,19 @@ class SchoolConfig(db.Model):
     # per organization; each org can edit it independently (it lives on the
     # org-scoped config, so other orgs keep their own value).
     class_teacher_hours_per_week = db.Column(db.Integer, nullable=False, default=5)
+    # Pre-primary (Nursery/LKG/UKG/Prep) scheduling mode:
+    #   "single"     -> one homeroom teacher takes most subjects, specialists only
+    #                   for the support subjects below (art/music/dance/PE).
+    #   "specialist" -> every subject is scheduled with its own subject teacher,
+    #                   exactly like senior grades.
+    pre_primary_mode = db.Column(db.String(20), nullable=False, default="single")
+    # Subjects that always go to a specialist teacher even in single-teacher mode.
+    pre_primary_support_subjects = db.Column(db.JSON, default=list)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     def to_dict(self):
+        from period_utils import DEFAULT_SUPPORT_SUBJECTS
         return {
             "id": self.id,
             "start_time": self.start_time,
@@ -345,6 +359,10 @@ class SchoolConfig(db.Model):
             "target_contact_periods_per_week": self.target_contact_periods_per_week or 40,
             "class_teacher_hours_per_week": (self.class_teacher_hours_per_week
                                              if self.class_teacher_hours_per_week is not None else 5),
+            "pre_primary_mode": self.pre_primary_mode or "single",
+            "pre_primary_support_subjects": (self.pre_primary_support_subjects
+                                             if self.pre_primary_support_subjects
+                                             else list(DEFAULT_SUPPORT_SUBJECTS)),
         }
 
 

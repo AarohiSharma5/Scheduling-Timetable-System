@@ -1,7 +1,10 @@
 import axios from "axios";
 import type { Plan, SchoolProfile, Teacher, Subject } from "./types";
 
-const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:5001/api";
+// Default to a SAME-ORIGIN relative base ("/api") so the app talks to whatever
+// host/port served it (the backend serves the built frontend on the same
+// origin). Override with REACT_APP_API_URL only when the API lives elsewhere.
+const API_BASE = process.env.REACT_APP_API_URL || "/api";
 
 // Auth now rides on httpOnly cookies (access_token / org_token) that the
 // browser attaches automatically. withCredentials makes axios include them; we
@@ -361,6 +364,22 @@ export const api = {
     },
     saveVersion: async (id: number, payload: { name?: string; slots?: any[] }) => {
       const { data } = await axiosInstance.post(`/timetable/${id}/save-version`, payload);
+      return data;
+    },
+    // Assign a substitute when a (homeroom) teacher is absent. Omit
+    // substitute_teacher_id (or pass preview) to list available candidates.
+    substituteHomeroom: async (
+      id: number,
+      payload: {
+        batch_id?: number;
+        teacher_id?: number;
+        day: string;
+        periods?: number[];
+        substitute_teacher_id?: number;
+        preview?: boolean;
+      }
+    ) => {
+      const { data } = await axiosInstance.post(`/timetable/${id}/substitute-homeroom`, payload);
       return data;
     },
   },
