@@ -307,6 +307,34 @@ export default function TimetableEditor({
     return s;
   }, [teachers, teacherUnavail]);
 
+  // All classes that have a teacher at a given day/period (for the exchange picker).
+  const cellsAtSlot = useCallback((day: string, period: number) => {
+    const list: { batchId: number; subjectId: number | null; teacherId: number | null; room: string | null }[] = [];
+    for (const [key, c] of Object.entries(grid)) {
+      if (c.is_lunch || c.teacher_id == null) continue;
+      const [b, d, p] = key.split("|");
+      if (d === day && Number(p) === period) {
+        list.push({ batchId: Number(b), subjectId: c.subject_id, teacherId: c.teacher_id, room: c.room });
+      }
+    }
+    return list.sort((a, b) => batchLabel(a.batchId).localeCompare(batchLabel(b.batchId)));
+  }, [grid, batchLabel]);
+
+  // Exchange the TEACHER of two classes at the same day/period (each class keeps
+  // its own subject/room; only who teaches it is swapped).
+  const exchangeTeachers = (day: string, period: number, batchA: number, batchB: number) => {
+    if (batchA === batchB) return;
+    const ka = cellKey(batchA, day, period);
+    const kb = cellKey(batchB, day, period);
+    const ca = grid[ka];
+    const cb = grid[kb];
+    if (!ca || !cb) return;
+    const next = { ...grid };
+    next[ka] = { ...ca, teacher_id: cb.teacher_id };
+    next[kb] = { ...cb, teacher_id: ca.teacher_id };
+    pushHistory(next);
+  };
+
   if (loading) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50">
@@ -484,6 +512,11 @@ export default function TimetableEditor({
           teachers={teachers}
           slotBusy={slotBusyTeachers(editing.day, editing.period)}
           unavailableAt={slotUnavailableTeachers(editing.day, editing.period)}
+          exchangeOptions={cellsAtSlot(editing.day, editing.period).filter((c) => c.batchId !== selectedBatch)}
+          batchLabel={batchLabel}
+          subjectName={subjectName}
+          teacherName={teacherName}
+          onExchange={(otherBatchId) => { exchangeTeachers(editing.day, editing.period, selectedBatch, otherBatchId); setEditing(null); }}
           onApply={(value) => { applyCell(editing.day, editing.period, value); setEditing(null); }}
           onClear={() => { clearCell(editing.day, editing.period); setEditing(null); }}
           onTogglePin={() => { togglePin(editing.day, editing.period); }}
@@ -495,13 +528,20 @@ export default function TimetableEditor({
 }
 
 function CellEditor({
-  day, period, cell, subjects, teachers, slotBusy, unavailableAt, onApply, onClear, onTogglePin, onCancel,
+  day, period, cell, subjects, teachers, slotBusy, unavailableAt,
+  exchangeOptions, batchLabel, subjectName, teacherName, onExchange,
+  onApply, onClear, onTogglePin, onCancel,
 }: {
   day: string; period: number; cell: Cell | null;
   subjects: SubjectInfo[];
   teachers: TeacherInfo[];
   slotBusy: Record<number, string>;     // teacher id -> class they already teach this slot
   unavailableAt: Set<number>;           // teacher ids who flagged this slot unavailable
+  exchangeOptions: { batchId: number; subjectId: number | null; teacherId: number | null; room: string | null }[];
+  batchLabel: (id: number) => string;
+  subjectName: (id: number | null) => string;
+  teacherName: (id: number | null) => string;
+  onExchange: (otherBatchId: number) => void;
   onApply: (value: Partial<Cell>) => void;
   onClear: () => void;
   onTogglePin: () => void;
@@ -510,6 +550,7 @@ function CellEditor({
   const [subjectId, setSubjectId] = useState<number | null>(cell?.subject_id ?? null);
   const [teacherId, setTeacherId] = useState<number | null>(cell?.teacher_id ?? null);
   const [room, setRoom] = useState<string>(cell?.room ?? "");
+  const [exchangeWith, setExchangeWith] = useState<number | "">("");
 
   const label = (t: TeacherInfo) => (t.teacher_code ? `${t.teacher_code} — ${t.name}` : t.name);
 
@@ -566,6 +607,37 @@ function CellEditor({
           <label className="block text-xs font-medium text-slate-600 mb-1">Room (optional)</label>
           <input value={room} onChange={(e) => setRoom(e.target.value)} placeholder="e.g. Lab 1, R204" className="w-full border rounded px-3 py-2 text-sm" />
         </div>
+
+        {/* Quick exchange: only need to pick the other teacher; their class at
+            this same time is swapped with this one automatically. */}
+        {cell?.teacher_id != null && (
+          <div className="border-t pt-3">
+            <label className="block text-xs font-medium text-slate-600 mb-1">🔁 Exchange with another teacher (same time)</label>
+            {exchangeOptions.length === 0 ? (
+              <p className="text-xs text-slate-400">No other class has a teacher at {day} P{period}.</p>
+            ) : (
+              <div className="flex gap-2">
+                <select value={exchangeWith} onChange={(e) => setExchangeWith(e.target.value ? Number(e.target.value) : "")} className="flex-1 border rounded px-3 py-2 text-sm">
+                  <option value="">Select a teacher to swap with…</option>
+                  {exchangeOptions.map((c) => (
+                    <option key={c.batchId} value={c.batchId}>
+                      {teacherName(c.teacherId)} — {batchLabel(c.batchId)} ({subjectName(c.subjectId) || "—"})
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => exchangeWith !== "" && onExchange(exchangeWith as number)}
+                  disabled={exchangeWith === ""}
+                  className="px-3 py-2 text-sm rounded bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500 text-white whitespace-nowrap"
+                >
+                  Exchange
+                </button>
+              </div>
+            )}
+            <p className="text-[11px] text-slate-400 mt-1">{teacherName(cell.teacher_id)} ↔ the selected teacher swap classes for this period.</p>
+          </div>
+        )}
 
         <div className="flex items-center justify-between pt-1">
           <button onClick={onTogglePin} className="text-sm text-amber-600 hover:underline">{cell?.is_pinned ? "Unpin 📌" : "Pin 📌"}</button>
