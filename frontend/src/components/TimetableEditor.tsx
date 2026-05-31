@@ -87,15 +87,17 @@ export default function TimetableEditor({
     return m;
   }, [teachers]);
 
-  // Validate the WHOLE grid (all batches), mirroring the backend rules.
-  const { conflicts, conflictCells } = useMemo(() => {
+  // Validate a grid (all batches), mirroring the backend rules. Returns the
+  // human messages, the set of conflicting cell keys, and stable conflict
+  // signatures used to diff "did this move introduce anything new?".
+  const validateGrid = useCallback((g: Grid) => {
     const teacherSlot: Record<string, Set<number>> = {};
-    const sectionSlot: Record<string, number> = {};
     const roomSlot: Record<string, Set<number>> = {};
     const out: Conflict[] = [];
     const cells = new Set<string>();
+    const sigs = new Set<string>();
 
-    for (const [key, c] of Object.entries(grid)) {
+    for (const [key, c] of Object.entries(g)) {
       if (c.is_lunch || (c.subject_id == null && c.teacher_id == null)) continue;
       const [bStr, day, pStr] = key.split("|");
       const batch = Number(bStr);
@@ -106,10 +108,9 @@ export default function TimetableEditor({
         if (teacherUnavail[c.teacher_id]?.has(`${day}|${period}`)) {
           out.push({ type: "teacher_unavailable", message: `${teacherName(c.teacher_id)} is unavailable on ${day} P${period} (${batchLabel(batch)}).`, batch_id: batch, day, period });
           cells.add(cellKey(batch, day, period));
+          sigs.add(`unavail|${c.teacher_id}|${day}|${period}|${batch}`);
         }
       }
-      const sk = `${batch}|${day}|${period}`;
-      sectionSlot[sk] = (sectionSlot[sk] || 0) + 1;
       if (c.room) (roomSlot[`${c.room.trim().toLowerCase()}|${day}|${period}`] ||= new Set()).add(batch);
     }
 
@@ -118,17 +119,24 @@ export default function TimetableEditor({
         const [tid, day, period] = tk.split("|");
         out.push({ type: "teacher_double_book", message: `${teacherName(Number(tid))} is double-booked on ${day} P${period}.`, day, period: Number(period) });
         set.forEach((b) => cells.add(cellKey(b, day, Number(period))));
+        sigs.add(`tdb|${tid}|${day}|${period}`);
       }
     }
     for (const [rk, set] of Object.entries(roomSlot)) {
       if (set.size > 1) {
-        const [, day, period] = rk.split("|");
+        const [room, day, period] = rk.split("|");
         out.push({ type: "room_conflict", message: `A room is double-booked on ${day} P${period}.`, day, period: Number(period) });
         set.forEach((b) => cells.add(cellKey(b, day, Number(period))));
+        sigs.add(`room|${room}|${day}|${period}`);
       }
     }
-    return { conflicts: out, conflictCells: cells };
-  }, [grid, teacherUnavail, teacherName, batchLabel]);
+    return { conflicts: out, cells, sigs };
+  }, [teacherUnavail, teacherName, batchLabel]);
+
+  const { conflicts, conflictCells } = useMemo(() => {
+    const r = validateGrid(grid);
+    return { conflicts: r.conflicts, conflictCells: r.cells };
+  }, [grid, validateGrid]);
 
   const pushHistory = (next: Grid) => {
     setPast((p) => [...p, grid]);
@@ -155,6 +163,33 @@ export default function TimetableEditor({
     const cap = batch?.periods_per_day && batch.periods_per_day > 0 ? batch.periods_per_day : periods.length;
     return periods.filter((p) => p.number <= cap);
   }, [batch, periods]);
+
+  // While dragging a period, work out which slots it can be dropped into
+  // without introducing a NEW conflict, so we can highlight them in green.
+  const validTargets = useMemo(() => {
+    const set = new Set<string>();
+    if (!dragFrom || selectedBatch == null) return set;
+    const base = validateGrid(grid).sigs;
+    const srcKey = cellKey(selectedBatch, dragFrom.day, dragFrom.period);
+    const src = grid[srcKey];
+    for (const p of batchPeriodRows) {
+      if (p.is_lunch) continue;
+      for (const day of days) {
+        if (day === dragFrom.day && p.number === dragFrom.period) continue;
+        const tgtKey = cellKey(selectedBatch, day, p.number);
+        if (grid[tgtKey]?.is_lunch) continue;
+        const next = { ...grid };
+        const tgt = grid[tgtKey];
+        if (tgt) next[srcKey] = tgt; else delete next[srcKey];
+        if (src) next[tgtKey] = src; else delete next[tgtKey];
+        const after = validateGrid(next).sigs;
+        let ok = true;
+        after.forEach((s) => { if (!base.has(s)) ok = false; });
+        if (ok) set.add(tgtKey);
+      }
+    }
+    return set;
+  }, [dragFrom, grid, selectedBatch, batchPeriodRows, days, validateGrid]);
 
   const getCell = (day: string, period: number): Cell | null => {
     if (selectedBatch == null) return null;
@@ -204,7 +239,14 @@ export default function TimetableEditor({
   };
 
   const onDrop = (target: { day: string; period: number }) => {
-    if (dragFrom && !(dragFrom.day === target.day && dragFrom.period === target.period)) {
+    if (dragFrom && selectedBatch != null && !(dragFrom.day === target.day && dragFrom.period === target.period)) {
+      const tgtKey = cellKey(selectedBatch, target.day, target.period);
+      if (!validTargets.has(tgtKey)) {
+        setMessage({ kind: "err", text: "That slot isn't a valid drop — it would create a conflict. Drop onto a highlighted (green) slot." });
+        setDragFrom(null);
+        return;
+      }
+      setMessage(null);
       swap(dragFrom, target);
     }
     setDragFrom(null);
@@ -317,6 +359,13 @@ export default function TimetableEditor({
           </div>
         )}
 
+        {dragFrom && (
+          <div className="mx-5 mt-3 px-3 py-2 rounded bg-emerald-50 border border-emerald-200 text-sm text-emerald-800">
+            Drag in progress — <strong>green</strong> slots are valid drops (swap won't create a conflict); dimmed slots aren't.
+            {validTargets.size === 0 && " No valid slot for this period in this class."}
+          </div>
+        )}
+
         {/* Grid */}
         <div className="p-5 overflow-x-auto">
           <table className="w-full border-collapse text-sm">
@@ -341,15 +390,34 @@ export default function TimetableEditor({
                       return <td key={day} className="border px-2 py-3 text-center text-amber-700 bg-amber-50 font-medium">Lunch</td>;
                     }
                     const filled = c && (c.subject_id != null || c.teacher_id != null);
+                    const key = cellKey(selectedBatch!, day, p.number);
+                    const isSource = dragFrom && dragFrom.day === day && dragFrom.period === p.number;
+                    const dragging = !!dragFrom;
+                    const isValidTarget = dragging && validTargets.has(key);
+                    let stateClass: string;
+                    if (isSource) {
+                      stateClass = "bg-blue-100 ring-2 ring-blue-500";
+                    } else if (dragging && isValidTarget) {
+                      stateClass = "bg-emerald-50 ring-2 ring-emerald-400 hover:bg-emerald-100";
+                    } else if (dragging) {
+                      stateClass = "opacity-40"; // not a valid drop while dragging
+                    } else if (conflicted) {
+                      stateClass = "bg-red-50 ring-1 ring-red-300";
+                    } else if (filled) {
+                      stateClass = "bg-white hover:bg-blue-50";
+                    } else {
+                      stateClass = "bg-slate-50 hover:bg-blue-50 text-slate-400";
+                    }
                     return (
                       <td
                         key={day}
                         draggable={!!filled}
                         onDragStart={() => filled && setDragFrom({ day, period: p.number })}
-                        onDragOver={(e) => e.preventDefault()}
+                        onDragEnd={() => setDragFrom(null)}
+                        onDragOver={(e) => { if (isValidTarget) e.preventDefault(); }}
                         onDrop={() => onDrop({ day, period: p.number })}
-                        onClick={() => setEditing({ day, period: p.number })}
-                        className={`border px-2 py-2 align-top cursor-pointer min-w-[130px] ${conflicted ? "bg-red-50 ring-1 ring-red-300" : filled ? "bg-white hover:bg-blue-50" : "bg-slate-50 hover:bg-blue-50 text-slate-400"}`}
+                        onClick={() => !dragging && setEditing({ day, period: p.number })}
+                        className={`border px-2 py-2 align-top cursor-pointer min-w-[130px] transition ${stateClass}`}
                       >
                         {filled ? (
                           <div>
