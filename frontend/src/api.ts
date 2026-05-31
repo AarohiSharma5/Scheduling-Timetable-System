@@ -184,6 +184,25 @@ export const api = {
       },
     },
 
+    // Charge catalog (non-teaching duties assignable to teachers)
+    charges: {
+      list: async () => {
+        const { data } = await axiosInstance.get("/admin/charges");
+        return data;
+      },
+      create: async (charge: any) => {
+        const { data } = await axiosInstance.post("/admin/charges", charge);
+        return data;
+      },
+      update: async (id: number, updates: any) => {
+        const { data } = await axiosInstance.put(`/admin/charges/${id}`, updates);
+        return data;
+      },
+      delete: async (id: number) => {
+        await axiosInstance.delete(`/admin/charges/${id}`);
+      },
+    },
+
     // Pinned / fixed periods the scheduler must honor
     pinnedSlots: {
       list: async () => {

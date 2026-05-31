@@ -11,6 +11,7 @@ interface SchoolConfig {
   periods_per_day: number;
   has_lunch_break: boolean;
   working_days: number;
+  target_contact_periods_per_week: number;
 }
 
 const toMinutes = (t: string): number => {
@@ -34,6 +35,7 @@ export default function ConfigurationForm() {
     periods_per_day: 8,
     has_lunch_break: true,
     working_days: 5,
+    target_contact_periods_per_week: 40,
   });
 
   // Number of periods is derived from the school hours, not typed in — this is
@@ -192,6 +194,29 @@ export default function ConfigurationForm() {
           <p className="text-xs text-slate-500 mt-2">
             Junior grades can finish earlier — set a shorter day per class under <strong>Batches</strong>.
           </p>
+        </div>
+
+        {/* Teacher Workload */}
+        <div>
+          <h3 className="text-lg font-semibold text-slate-900 mb-4">Teacher Workload</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Target contact periods / week</label>
+              <input
+                type="number"
+                min={1}
+                max={48}
+                value={formData.target_contact_periods_per_week}
+                onChange={(e) => setFormData({ ...formData, target_contact_periods_per_week: Number(e.target.value) })}
+                className="border rounded px-3 py-2 w-full"
+                required
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                Every teacher is balanced to this total. Teaching capacity = target − charge hours, so teachers
+                with extra duties teach proportionally fewer classes. Changing this rebalances all teachers.
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* Summary */}

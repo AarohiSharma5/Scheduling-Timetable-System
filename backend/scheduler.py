@@ -291,6 +291,25 @@ class SchedulingEngine:
 
         self.teacher_by_id = {t.id: t for t in teachers}
 
+        # Precise "who can teach what to whom": set of (subject_id, batch_id) per
+        # teacher. Built from structured teaching_assignments when present (so a
+        # teacher can teach Maths to 9 & 8 but English only to 8), falling back to
+        # the cartesian product of the flat subject/batch lists for older data.
+        self.teacher_can_teach = {}
+        for t in teachers:
+            pairs = set()
+            assignments = getattr(t, "teaching_assignments", None) or []
+            if assignments:
+                for a in assignments:
+                    sid = a.get("subject_id")
+                    for bid in (a.get("batch_ids") or []):
+                        pairs.add((sid, bid))
+            else:
+                for sid in (t.subject_ids or []):
+                    for bid in (t.assigned_batch_ids or []):
+                        pairs.add((sid, bid))
+            self.teacher_can_teach[t.id] = pairs
+
         # Load optional soft preferences (one row per teacher), scoped to org.
         self.prefs = {}
         pq = TeacherPreference.query
@@ -358,7 +377,7 @@ class SchedulingEngine:
 
                 eligible_teachers = [
                     t for t in teachers
-                    if subject_id in (t.subject_ids or []) and batch.id in (t.assigned_batch_ids or [])
+                    if (subject_id, batch.id) in self.teacher_can_teach.get(t.id, ())
                 ]
                 if not eligible_teachers:
                     self.warnings.append(
@@ -544,7 +563,7 @@ class SchedulingEngine:
             if not teacher_id:
                 eligible = [
                     t for t in teachers
-                    if subject_id in (t.subject_ids or []) and ps.batch_id in (t.assigned_batch_ids or [])
+                    if (subject_id, ps.batch_id) in self.teacher_can_teach.get(t.id, ())
                 ]
                 teacher_id = eligible[0].id if eligible else (teachers[0].id if teachers else None)
             if teacher_id is None:

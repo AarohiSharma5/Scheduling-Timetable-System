@@ -11,7 +11,7 @@ from app import create_app
 from models import (
     db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot,
     LeaveRequest, Notification, Student, Classroom, House, Principal, Coordinator,
-    SubjectMaster, Organization, PinnedSlot
+    SubjectMaster, Organization, PinnedSlot, Charge
 )
 from datetime import datetime, date, timedelta
 from werkzeug.security import generate_password_hash
@@ -197,10 +197,29 @@ def seed_database():
             periods_per_day=8,
             has_lunch_break=True,
             working_days=5,
+            target_contact_periods_per_week=40,
         )
         db.session.add(school_config)
         db.session.commit()
         print("   ✅ School config created")
+
+        # Catalog of non-teaching duties admins can assign to teachers. The hours
+        # each carries reduce a teacher's teaching capacity so everyone's total
+        # weekly contact load stays balanced around the target above.
+        charge_catalog = {}
+        for cname, chours in [
+            ("Class Teacher", 5),
+            ("Club Charge", 3),
+            ("House Charge", 3),
+            ("Construction Charge", 4),
+            ("Cleanliness Charge", 2),
+            ("Examination Charge", 4),
+        ]:
+            ch = Charge(organization_id=org_id, name=cname, default_hours_per_week=chours)
+            db.session.add(ch)
+            charge_catalog[cname] = ch
+        db.session.commit()
+        print(f"   ✅ Created {len(charge_catalog)} charge types")
         
         # =====================================================================
         # 2. HOUSES
@@ -579,6 +598,59 @@ def seed_database():
                 t.assigned_batch_ids = list(t.assigned_batch_ids or []) + [b.id]
         db.session.commit()
         print("   ✅ Teacher / subject / batch coverage ensured")
+
+        # =====================================================================
+        # 8b. STRUCTURED ASSIGNMENTS + CHARGES + DYNAMIC CONTACT HOURS
+        # Build per-subject batch lists (so "Maths → 9, 8" is explicit), assign a
+        # few demo charges, and set each teacher's teaching capacity to
+        #   target (40) - charge hours, so totals stay balanced.
+        # =====================================================================
+        print("\n🧩 Building structured teaching assignments + charges...")
+        batch_by_id = {b.id: b for b in batches}
+        TARGET = 40
+        for t in teachers:
+            assigned = list(t.assigned_batch_ids or [])
+            assignments = []
+            for sid in (t.subject_ids or []):
+                # This subject is taught only to the teacher's batches that
+                # actually take it.
+                bids = [bid for bid in assigned
+                        if batch_by_id.get(bid) and sid in (batch_by_id[bid].subject_ids or [])]
+                if bids:
+                    assignments.append({"subject_id": sid, "batch_ids": sorted(set(bids))})
+            t.teaching_assignments = assignments
+            t.charges = []
+
+        # Class teachers carry the "Class Teacher" charge for their extra duties.
+        ct_charge = charge_catalog.get("Class Teacher")
+        for t in teachers:
+            if t.is_class_teacher and ct_charge:
+                t.charges = [{"charge_id": ct_charge.id, "name": ct_charge.name,
+                              "hours_per_week": ct_charge.default_hours_per_week}]
+
+        # Sprinkle a few extra charges to demonstrate balancing across staff.
+        demo_extra = [
+            ("House Charge", 3),
+            ("Club Charge", 5),
+            ("Construction Charge", 11),
+            ("Cleanliness Charge", 17),
+            ("Examination Charge", 23),
+        ]
+        for cname, idx in demo_extra:
+            ch = charge_catalog.get(cname)
+            if ch and len(teachers) > idx:
+                existing = list(teachers[idx].charges or [])
+                existing.append({"charge_id": ch.id, "name": ch.name,
+                                 "hours_per_week": ch.default_hours_per_week})
+                teachers[idx].charges = existing
+
+        # Dynamic teaching capacity: target minus charge hours, so a teacher with
+        # charges teaches fewer periods but carries the same total contact load.
+        for t in teachers:
+            t.max_periods_per_week = max(0, TARGET - (t.charge_hours or 0))
+        db.session.commit()
+        print("   ✅ Assignments + charges set; teaching capacity balanced to "
+              f"{TARGET} contact periods/week")
 
         # =====================================================================
         # 8c. CONSTRAINT DEMO: teacher availability + a pinned/fixed period

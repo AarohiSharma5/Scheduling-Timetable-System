@@ -157,18 +157,41 @@ class Teacher(db.Model):
     teacher_code = db.Column(db.String(50), index=True)  # Human-readable employee id, e.g. "TCHR0001"
     name = db.Column(db.String(120), nullable=False)
     email = db.Column(db.String(120), nullable=False)
-    subject_ids = db.Column(db.JSON, default=list)  # Subjects they teach
-    assigned_batch_ids = db.Column(db.JSON, default=list)  # Batches assigned to them
+    subject_ids = db.Column(db.JSON, default=list)  # Flat list of subjects (derived from teaching_assignments)
+    assigned_batch_ids = db.Column(db.JSON, default=list)  # Flat list of batches (derived from teaching_assignments)
+    # Structured "what do they teach to whom": one entry per subject, each listing
+    # the batches that subject is taught to, e.g.
+    #   [{"subject_id": 1, "batch_ids": [9, 8]}, {"subject_id": 3, "batch_ids": [9]}]
+    # This is the source of truth for eligibility; subject_ids/assigned_batch_ids
+    # are kept in sync for backward compatibility.
+    teaching_assignments = db.Column(db.JSON, default=list)
+    # Non-teaching duties that consume weekly contact hours, e.g.
+    #   [{"charge_id": 2, "name": "House Charge", "hours_per_week": 3}]
+    charges = db.Column(db.JSON, default=list)
     # Hard availability constraint: slots the teacher cannot teach, as a list of
     # {"day": "Monday", "period": 1}. The scheduler never places them here.
     unavailable_slots = db.Column(db.JSON, default=list)
     is_class_teacher = db.Column(db.Boolean, default=False)  # Class teacher of a section?
     class_teacher_batch_id = db.Column(db.Integer, db.ForeignKey("batches.id"))  # Which batch they're class teacher of
     has_duties = db.Column(db.Boolean, default=False)  # Has extra duties (sports, admin, etc.)?
-    max_periods_per_week = db.Column(db.Integer)  # Max hours/periods per week (auto-calculated based on duties)
+    # Max teaching periods/week. Computed dynamically as
+    #   target_contact_periods_per_week - sum(charge hours)
+    # so a teacher with charges teaches fewer classes but carries the same total load.
+    max_periods_per_week = db.Column(db.Integer)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
+    @property
+    def charge_hours(self):
+        """Total weekly contact hours consumed by non-teaching charges."""
+        total = 0
+        for c in (self.charges or []):
+            try:
+                total += int(c.get("hours_per_week") or 0)
+            except (AttributeError, TypeError, ValueError):
+                continue
+        return total
+
     def to_dict(self):
         return {
             "id": self.id,
@@ -178,6 +201,9 @@ class Teacher(db.Model):
             "email": self.email,
             "subject_ids": self.subject_ids or [],
             "assigned_batch_ids": self.assigned_batch_ids or [],
+            "teaching_assignments": self.teaching_assignments or [],
+            "charges": self.charges or [],
+            "charge_hours": self.charge_hours,
             "unavailable_slots": self.unavailable_slots or [],
             "is_class_teacher": self.is_class_teacher,
             "class_teacher_batch_id": self.class_teacher_batch_id,
@@ -227,6 +253,30 @@ class TeacherPreference(db.Model):
 
 
 # ============================================================================
+# CHARGE MODEL - Catalog of non-teaching duties (class teacher, clubs, houses…)
+# ============================================================================
+class Charge(db.Model):
+    """A reusable, admin-defined non-teaching duty with a default weekly load.
+
+    Charges are assigned to teachers (see Teacher.charges); the hours they carry
+    reduce the teacher's teaching capacity so total contact hours stay balanced.
+    """
+    __tablename__ = "charges"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
+    name = db.Column(db.String(120), nullable=False)
+    default_hours_per_week = db.Column(db.Integer, nullable=False, default=2)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "default_hours_per_week": self.default_hours_per_week,
+        }
+
+
+# ============================================================================
 # SCHOOL CONFIG MODEL - School timing settings
 # ============================================================================
 class SchoolConfig(db.Model):
@@ -243,6 +293,10 @@ class SchoolConfig(db.Model):
     # (back-to-back classes), which is common for younger grades / many schools.
     has_lunch_break = db.Column(db.Boolean, nullable=False, default=True)
     working_days = db.Column(db.Integer, default=5)  # Mon-Fri = 5
+    # The common total weekly contact load every teacher is balanced to:
+    #   teaching periods + charge hours == target. Used to derive each teacher's
+    #   max teaching periods dynamically.
+    target_contact_periods_per_week = db.Column(db.Integer, nullable=False, default=40)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -257,6 +311,7 @@ class SchoolConfig(db.Model):
             "periods_per_day": self.periods_per_day,
             "has_lunch_break": self.has_lunch_break,
             "working_days": self.working_days,
+            "target_contact_periods_per_week": self.target_contact_periods_per_week,
         }
 
 
