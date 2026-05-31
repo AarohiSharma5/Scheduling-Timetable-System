@@ -37,6 +37,10 @@ interface Teacher {
   unavailable_slots: UnavailableSlot[];
   is_class_teacher: boolean;
   max_periods_per_week: number;
+  phone?: string | null;
+  qualification?: string | null;
+  designation?: string | null;
+  joining_date?: string | null;
 }
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -61,6 +65,10 @@ interface ChargeType {
 const emptyForm = {
   name: "",
   email: "",
+  phone: "",
+  qualification: "",
+  designation: "",
+  joining_date: "",
   subject_grades: [] as SubjectGrade[],
   charges: [] as ChargeAssignment[],
   unavailable_slots: [] as UnavailableSlot[],
@@ -236,6 +244,10 @@ export default function TeacherManagement() {
       const payload = {
         name: formData.name,
         email: formData.email,
+        phone: formData.phone || null,
+        qualification: formData.qualification || null,
+        designation: formData.designation || null,
+        joining_date: formData.joining_date || null,
         subject_grades: formData.subject_grades,
         charges: formData.charges,
         unavailable_slots: formData.unavailable_slots,
@@ -300,6 +312,10 @@ export default function TeacherManagement() {
     setFormData({
       name: teacher.name,
       email: teacher.email,
+      phone: teacher.phone || "",
+      qualification: teacher.qualification || "",
+      designation: teacher.designation || "",
+      joining_date: teacher.joining_date ? teacher.joining_date.slice(0, 10) : "",
       subject_grades: caps.map((a) => ({ subject_id: a.subject_id, grades: a.grades || [] })),
       charges: (teacher.charges || []).map((c) => ({ ...c })),
       unavailable_slots: teacher.unavailable_slots || [],
@@ -358,6 +374,17 @@ export default function TeacherManagement() {
           <div className="grid grid-cols-2 gap-4">
             <input type="text" placeholder="Name" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} className="border rounded px-3 py-2" required />
             <input type="email" placeholder="Email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} className="border rounded px-3 py-2" required />
+          </div>
+
+          {/* Profile / HR details (optional) */}
+          <div className="grid grid-cols-2 gap-4">
+            <input type="text" placeholder="Phone" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} className="border rounded px-3 py-2" />
+            <input type="text" placeholder="Designation (e.g. Coordinator, PGT)" value={formData.designation} onChange={(e) => setFormData({ ...formData, designation: e.target.value })} className="border rounded px-3 py-2" />
+            <input type="text" placeholder="Qualification (e.g. M.Sc, B.Ed)" value={formData.qualification} onChange={(e) => setFormData({ ...formData, qualification: e.target.value })} className="border rounded px-3 py-2" />
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">Joining date</label>
+              <input type="date" value={formData.joining_date} onChange={(e) => setFormData({ ...formData, joining_date: e.target.value })} className="border rounded px-3 py-2 w-full" />
+            </div>
           </div>
 
           {/* Capability: subjects + grades they can teach */}

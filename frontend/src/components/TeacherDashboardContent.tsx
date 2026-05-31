@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import NotificationsCenter from "./NotificationsCenter";
+import StudentManagement from "./StudentManagement";
 import { useAuthStore } from "../stores/authStore";
 
 interface TeacherStats {
@@ -13,8 +14,10 @@ const STUDENTS_PER_CLASS_ESTIMATE = 35;
 export default function TeacherDashboardContent() {
   const { user } = useAuthStore();
   const [stats, setStats] = useState<TeacherStats>({ classes: 0, students: 0, subjects: 0 });
-  const [activeTab, setActiveTab] = useState<"overview" | "schedule" | "notifications">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "schedule" | "myclass" | "notifications">("overview");
   const [loading, setLoading] = useState(true);
+
+  const isClassTeacher = !!user?.is_class_teacher && !!user?.class_teacher_grade;
 
   useEffect(() => {
     // Derive stats from the logged-in teacher's own profile (populated by
@@ -53,6 +56,18 @@ export default function TeacherDashboardContent() {
         >
           📅 Timetable
         </button>
+        {isClassTeacher && (
+          <button
+            onClick={() => setActiveTab("myclass")}
+            className={`px-4 py-2 rounded-lg font-medium transition ${
+              activeTab === "myclass"
+                ? "bg-blue-600 text-white"
+                : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+            }`}
+          >
+            🧑‍🎓 My Class
+          </button>
+        )}
         <button
           onClick={() => setActiveTab("notifications")}
           className={`px-4 py-2 rounded-lg font-medium transition ${
@@ -143,6 +158,14 @@ export default function TeacherDashboardContent() {
             📥 Download My Timetable PDF
           </button>
         </div>
+      )}
+
+      {/* My Class Tab (class teachers only) — scoped to their own section */}
+      {activeTab === "myclass" && isClassTeacher && (
+        <StudentManagement
+          scopedGrade={user!.class_teacher_grade}
+          scopedSection={user!.class_teacher_section}
+        />
       )}
 
       {/* Notifications Tab */}

@@ -215,6 +215,37 @@ export const api = {
       },
     },
 
+    // Students (admin + principal full; class teacher scoped server-side)
+    students: {
+      list: async (params: { class_grade?: string; section?: string; status?: string; q?: string } = {}) => {
+        const { data } = await axiosInstance.get("/admin/students", { params });
+        return data;
+      },
+      sections: async (class_grade: string) => {
+        const { data } = await axiosInstance.get("/admin/students/sections", { params: { class_grade } });
+        return data;
+      },
+      create: async (student: any) => {
+        const { data } = await axiosInstance.post("/admin/students", student);
+        return data;
+      },
+      update: async (id: number, updates: any) => {
+        const { data } = await axiosInstance.put(`/admin/students/${id}`, updates);
+        return data;
+      },
+      delete: async (id: number) => {
+        await axiosInstance.delete(`/admin/students/${id}`);
+      },
+      transfer: async (id: number, payload: { section: string; class_grade?: string }) => {
+        const { data } = await axiosInstance.post(`/admin/students/${id}/transfer`, payload);
+        return data;
+      },
+      resequenceRolls: async (payload: { class_grade: string; section: string }) => {
+        const { data } = await axiosInstance.post("/admin/students/resequence-rolls", payload);
+        return data;
+      },
+    },
+
     // Pinned / fixed periods the scheduler must honor
     pinnedSlots: {
       list: async () => {

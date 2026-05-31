@@ -182,6 +182,12 @@ class Teacher(db.Model):
     is_class_teacher = db.Column(db.Boolean, default=False)  # Class teacher of a section?
     class_teacher_batch_id = db.Column(db.Integer, db.ForeignKey("batches.id"))  # Which batch they're class teacher of
     has_duties = db.Column(db.Boolean, default=False)  # Has extra duties (sports, admin, etc.)?
+    # HR / profile fields (all optional). designation can carry roles like
+    # "Coordinator", "Senior Teacher", "PGT", etc.
+    phone = db.Column(db.String(20))
+    qualification = db.Column(db.String(200))
+    designation = db.Column(db.String(120))
+    joining_date = db.Column(db.Date)
     # Max teaching periods/week. Computed dynamically as
     #   target_contact_periods_per_week - sum(charge hours)
     # so a teacher with charges teaches fewer classes but carries the same total load.
@@ -218,6 +224,10 @@ class Teacher(db.Model):
             "is_class_teacher": self.is_class_teacher,
             "class_teacher_batch_id": self.class_teacher_batch_id,
             "has_duties": self.has_duties,
+            "phone": self.phone,
+            "qualification": self.qualification,
+            "designation": self.designation,
+            "joining_date": self.joining_date.isoformat() if self.joining_date else None,
             "max_periods_per_week": self.max_periods_per_week,
         }
 
@@ -519,8 +529,9 @@ class Student(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"))  # Link to auth User
     first_name = db.Column(db.String(100), nullable=False)
     last_name = db.Column(db.String(100), nullable=False)
-    gender = db.Column(db.String(20), nullable=False)  # Male, Female, Other
-    date_of_birth = db.Column(db.Date, nullable=False)
+    email = db.Column(db.String(120))  # Optional student/parent contact email
+    gender = db.Column(db.String(20))  # Male, Female, Other (optional)
+    date_of_birth = db.Column(db.Date)  # optional
     class_grade = db.Column(db.String(20), nullable=False)  # 1, 2, 7, 11 Science, 12 Commerce
     section = db.Column(db.String(10), nullable=False)  # A, B, C, D
     roll_no = db.Column(db.Integer)  # Roll number in class
@@ -544,7 +555,8 @@ class Student(db.Model):
             "user_id": self.user_id,
             "first_name": self.first_name,
             "last_name": self.last_name,
-            "full_name": f"{self.first_name} {self.last_name}",
+            "full_name": f"{self.first_name} {self.last_name}".strip(),
+            "email": self.email,
             "gender": self.gender,
             "date_of_birth": self.date_of_birth.isoformat() if self.date_of_birth else None,
             "class_grade": self.class_grade,

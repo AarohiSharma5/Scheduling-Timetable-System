@@ -12,7 +12,7 @@ Endpoints organized by module:
 
 from flask import Blueprint, request, jsonify, abort, make_response
 from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification, Organization, PinnedSlot, TeacherPreference, Charge, Student
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from functools import wraps
 from werkzeug.security import check_password_hash, generate_password_hash
 from jwt_utils import (
@@ -30,6 +30,16 @@ from jwt_utils import (
     ORG_TOKEN_EXPIRY_DAYS,
 )
 from extensions import limiter
+from student_service import (
+    next_student_code,
+    next_admission_no,
+    choose_section,
+    resequence_rolls,
+    section_strengths,
+    sections_for_grade,
+    DEFAULT_SECTION_CAPACITY,
+    DEFAULT_ADMISSION_BUFFER,
+)
 import os
 
 api = Blueprint("api", __name__, url_prefix="/api")
@@ -267,6 +277,15 @@ def get_current_user():
                 additional_info["teacher_id"] = teacher.id
                 additional_info["assigned_batches"] = teacher.assigned_batch_ids
                 additional_info["subjects"] = teacher.subject_ids
+                additional_info["is_class_teacher"] = bool(teacher.is_class_teacher)
+                additional_info["class_teacher_batch_id"] = teacher.class_teacher_batch_id
+                # Surface the concrete grade/section so the class teacher's UI can
+                # scope itself to exactly the class they own.
+                if teacher.class_teacher_batch_id:
+                    b = Batch.query.get(teacher.class_teacher_batch_id)
+                    if b:
+                        additional_info["class_teacher_grade"] = b.grade
+                        additional_info["class_teacher_section"] = b.section
         elif user.role == "student":
             additional_info["batch_id"] = user.batch_id
         
@@ -802,7 +821,7 @@ def get_teachers():
 
 
 @api.route("/admin/teachers", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "principal")
 def create_teacher():
     """Create a new teacher"""
     try:
@@ -843,6 +862,10 @@ def create_teacher():
             is_class_teacher=data.get("is_class_teacher", False),
             class_teacher_batch_id=data.get("class_teacher_batch_id"),
             has_duties=data.get("has_duties", False),
+            phone=(data.get("phone") or None),
+            qualification=(data.get("qualification") or None),
+            designation=(data.get("designation") or None),
+            joining_date=_parse_date(data.get("joining_date")),
         )
         # Subjects→classes, charges, and dynamic teaching capacity.
         _apply_teaching_and_charges(teacher, data, org_id)
@@ -865,7 +888,7 @@ def get_teacher(teacher_id):
 
 
 @api.route("/admin/teachers/<int:teacher_id>", methods=["PUT"])
-@role_required("admin")
+@role_required("admin", "principal")
 def update_teacher(teacher_id):
     """Update a teacher"""
     try:
@@ -889,6 +912,10 @@ def update_teacher(teacher_id):
         if "is_class_teacher" in data: teacher.is_class_teacher = data["is_class_teacher"]
         if "class_teacher_batch_id" in data: teacher.class_teacher_batch_id = data["class_teacher_batch_id"]
         if "has_duties" in data: teacher.has_duties = data["has_duties"]
+        if "phone" in data: teacher.phone = data["phone"] or None
+        if "qualification" in data: teacher.qualification = data["qualification"] or None
+        if "designation" in data: teacher.designation = data["designation"] or None
+        if "joining_date" in data: teacher.joining_date = _parse_date(data["joining_date"])
 
         # Subjects→classes, charges, and dynamic teaching capacity. This also
         # keeps subject_ids/assigned_batch_ids in sync and recomputes the cap.
@@ -903,7 +930,7 @@ def update_teacher(teacher_id):
 
 
 @api.route("/admin/teachers/<int:teacher_id>", methods=["DELETE"])
-@role_required("admin")
+@role_required("admin", "principal")
 def delete_teacher(teacher_id):
     """Delete a teacher"""
     try:
@@ -1281,6 +1308,333 @@ def get_students():
         } for s in students]), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# STUDENT MANAGEMENT (admin + principal + scoped class teacher)
+# ============================================================================
+#
+# Permission model:
+#   * admin / principal -> full access to every student in their organization
+#   * class teacher      -> manage ONLY students of the class+section they own
+# Transfers (moving a student between sections) are admin/principal only, since
+# a class teacher should not move a pupil out of their own scope.
+
+def _acting_teacher():
+    """Teacher row for the currently authenticated user (None if not a teacher)."""
+    user = getattr(request, "user", None)
+    if not user or user.get("role") != "teacher":
+        return None
+    return Teacher.query.filter_by(
+        user_id=user.get("user_id"), organization_id=current_org_id()
+    ).first()
+
+
+def _class_teacher_scope():
+    """(grade, section) the acting class teacher owns, else None."""
+    t = _acting_teacher()
+    if not t or not t.is_class_teacher or not t.class_teacher_batch_id:
+        return None
+    b = Batch.query.filter_by(
+        id=t.class_teacher_batch_id, organization_id=current_org_id()
+    ).first()
+    return (str(b.grade), b.section) if b else None
+
+
+def _is_admin_or_principal():
+    return (getattr(request, "user", {}) or {}).get("role") in ("admin", "principal")
+
+
+def _can_manage_scope(class_grade, section):
+    """May the caller manage students in this grade/section?"""
+    if _is_admin_or_principal():
+        return True
+    scope = _class_teacher_scope()
+    return bool(scope) and (str(class_grade), section) == scope
+
+
+def _split_name(data):
+    """Resolve first/last name from either explicit fields or a single full_name."""
+    first = (data.get("first_name") or "").strip()
+    last = (data.get("last_name") or "").strip()
+    if not first and data.get("full_name"):
+        parts = str(data["full_name"]).strip().split()
+        first = parts[0] if parts else ""
+        last = " ".join(parts[1:]) if len(parts) > 1 else ""
+    return first, last
+
+
+def _parse_date(value):
+    """Parse an ISO date string (YYYY-MM-DD) into a date, tolerating None/blank."""
+    if not value:
+        return None
+    try:
+        return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+
+@api.route("/admin/students", methods=["GET"])
+@role_required("admin", "principal", "teacher")
+def list_students():
+    """List students, filtered by class/section/status/search.
+
+    Class teachers are automatically restricted to their own class+section.
+    """
+    org_id = current_org_id()
+    scope = None if _is_admin_or_principal() else _class_teacher_scope()
+    if not _is_admin_or_principal() and not scope:
+        return jsonify({"error": "You are not assigned as a class teacher"}), 403
+
+    q = Student.query.filter_by(organization_id=org_id)
+
+    class_grade = request.args.get("class_grade") or request.args.get("class")
+    section = request.args.get("section")
+    status = request.args.get("status")
+    search = (request.args.get("q") or "").strip().lower()
+
+    if scope:
+        class_grade, section = scope[0], scope[1]
+    if class_grade:
+        q = q.filter(Student.class_grade == str(class_grade))
+    if section:
+        q = q.filter(Student.section == section)
+    if status:
+        q = q.filter(Student.status == status)
+
+    students = q.all()
+    if search:
+        students = [
+            s for s in students
+            if search in f"{s.first_name} {s.last_name}".lower()
+            or search in (s.student_id or "").lower()
+            or search in (s.admission_no or "").lower()
+        ]
+    students.sort(key=lambda s: (s.roll_no if s.roll_no is not None else 9999,
+                                 (s.first_name or "").lower()))
+    return jsonify([s.to_dict() for s in students]), 200
+
+
+@api.route("/admin/students/sections", methods=["GET"])
+@role_required("admin", "principal", "teacher")
+def student_section_strengths():
+    """Section strengths for a grade (drives the balancing UI)."""
+    org_id = current_org_id()
+    class_grade = request.args.get("class_grade") or request.args.get("class")
+    if not class_grade:
+        return jsonify({"error": "class_grade is required"}), 400
+    strengths = section_strengths(org_id, class_grade)
+    return jsonify({
+        "class_grade": str(class_grade),
+        "sections": sections_for_grade(org_id, class_grade),
+        "strengths": strengths,
+        "capacity": DEFAULT_SECTION_CAPACITY,
+        "buffer": DEFAULT_ADMISSION_BUFFER,
+    }), 200
+
+
+@api.route("/admin/students", methods=["POST"])
+@role_required("admin", "principal", "teacher")
+def create_student():
+    """Add a student. Auto-generates roll & admission numbers and (optionally)
+    auto-places the student into the lowest-strength section of the class."""
+    try:
+        org_id = current_org_id()
+        data = request.get_json() or {}
+
+        first, last = _split_name(data)
+        if not first:
+            return jsonify({"error": "Student name is required"}), 400
+        class_grade = str(data.get("class_grade") or "").strip()
+        if not class_grade:
+            return jsonify({"error": "Class is required"}), 400
+
+        # Section: explicit, the class teacher's own, or auto-balanced.
+        section = (data.get("section") or "").strip()
+        over_capacity = False
+        ct_scope = _class_teacher_scope()
+        if ct_scope:
+            # Class teachers may only add into their own class+section.
+            if class_grade != ct_scope[0]:
+                return jsonify({"error": "You can only add students to your own class"}), 403
+            section = ct_scope[1]
+        elif not section:
+            section, over_capacity = choose_section(
+                org_id, class_grade,
+                capacity=int(data.get("capacity") or DEFAULT_SECTION_CAPACITY),
+                buffer=int(data.get("buffer") or DEFAULT_ADMISSION_BUFFER),
+            )
+
+        if not _can_manage_scope(class_grade, section):
+            return jsonify({"error": "Not allowed to manage this class/section"}), 403
+
+        student = Student(
+            organization_id=org_id,
+            student_id=next_student_code(),
+            admission_no=next_admission_no(),
+            first_name=first,
+            last_name=last,
+            email=(data.get("email") or None),
+            father_name=(data.get("father_name") or None),
+            mother_name=(data.get("mother_name") or None),
+            contact_number=(data.get("phone") or data.get("contact_number") or None),
+            gender=(data.get("gender") or None),
+            date_of_birth=_parse_date(data.get("date_of_birth")),
+            class_grade=class_grade,
+            section=section,
+            admission_date=_parse_date(data.get("joining_date")) or date.today(),
+            status=(data.get("status") or "Active"),
+        )
+        db.session.add(student)
+        db.session.flush()  # assign id before resequencing
+        resequence_rolls(org_id, class_grade, section)
+        db.session.commit()
+
+        result = student.to_dict()
+        result["auto_section"] = not (data.get("section") or ct_scope)
+        result["over_capacity"] = over_capacity
+        return jsonify(result), 201
+    except Exception as e:
+        db.session.rollback()
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/students/<int:student_id>", methods=["PUT"])
+@role_required("admin", "principal", "teacher")
+def update_student(student_id):
+    """Edit a student. Name/status/section changes trigger roll re-sequencing.
+
+    A section or class change here behaves like a transfer (both old and new
+    sections are renumbered); class teachers can't move a student out of scope.
+    """
+    try:
+        org_id = current_org_id()
+        student = owned_or_404(Student, student_id)
+        if not _can_manage_scope(student.class_grade, student.section):
+            return jsonify({"error": "Not allowed to manage this student"}), 403
+
+        data = request.get_json() or {}
+        old_grade, old_section = student.class_grade, student.section
+
+        if "first_name" in data or "last_name" in data or "full_name" in data:
+            first, last = _split_name({
+                "first_name": data.get("first_name", student.first_name),
+                "last_name": data.get("last_name", student.last_name),
+                "full_name": data.get("full_name"),
+            })
+            if first:
+                student.first_name = first
+                student.last_name = last
+        if "email" in data: student.email = data["email"] or None
+        if "father_name" in data: student.father_name = data["father_name"] or None
+        if "mother_name" in data: student.mother_name = data["mother_name"] or None
+        if "phone" in data: student.contact_number = data["phone"] or None
+        if "contact_number" in data: student.contact_number = data["contact_number"] or None
+        if "gender" in data: student.gender = data["gender"] or None
+        if "date_of_birth" in data: student.date_of_birth = _parse_date(data["date_of_birth"])
+        if "joining_date" in data:
+            student.admission_date = _parse_date(data["joining_date"]) or student.admission_date
+        if "status" in data: student.status = data["status"] or "Active"
+
+        # Section / class moves (admin & principal only).
+        new_grade = str(data.get("class_grade", student.class_grade))
+        new_section = data.get("section", student.section)
+        if (new_grade, new_section) != (old_grade, old_section):
+            if not _is_admin_or_principal():
+                return jsonify({"error": "Only admin/principal can move a student between sections"}), 403
+            if not _can_manage_scope(new_grade, new_section):
+                return jsonify({"error": "Not allowed to manage the destination class/section"}), 403
+            student.class_grade = new_grade
+            student.section = new_section
+
+        student.updated_at = datetime.utcnow()
+        db.session.flush()
+        # Renumber affected sections (old + new) so rolls stay alphabetical/contiguous.
+        resequence_rolls(org_id, old_grade, old_section)
+        if (student.class_grade, student.section) != (old_grade, old_section):
+            resequence_rolls(org_id, student.class_grade, student.section)
+        db.session.commit()
+        return jsonify(student.to_dict()), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/students/<int:student_id>", methods=["DELETE"])
+@role_required("admin", "principal", "teacher")
+def delete_student(student_id):
+    """Delete a student and renumber the rolls of their old section."""
+    try:
+        org_id = current_org_id()
+        student = owned_or_404(Student, student_id)
+        if not _can_manage_scope(student.class_grade, student.section):
+            return jsonify({"error": "Not allowed to manage this student"}), 403
+        grade, section = student.class_grade, student.section
+        db.session.delete(student)
+        db.session.flush()
+        resequence_rolls(org_id, grade, section)
+        db.session.commit()
+        return jsonify({"message": "Student deleted"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/students/<int:student_id>/transfer", methods=["POST"])
+@role_required("admin", "principal")
+def transfer_student(student_id):
+    """Move a student to a different section (and optionally grade).
+
+    Renumbers both the source and destination sections. Admin/principal only.
+    """
+    try:
+        org_id = current_org_id()
+        student = owned_or_404(Student, student_id)
+        data = request.get_json() or {}
+        dest_section = (data.get("section") or "").strip()
+        dest_grade = str(data.get("class_grade") or student.class_grade)
+        if not dest_section:
+            return jsonify({"error": "Destination section is required"}), 400
+
+        old_grade, old_section = student.class_grade, student.section
+        if (dest_grade, dest_section) == (old_grade, old_section):
+            return jsonify({"error": "Student is already in that section"}), 400
+
+        student.class_grade = dest_grade
+        student.section = dest_section
+        student.updated_at = datetime.utcnow()
+        db.session.flush()
+        resequence_rolls(org_id, old_grade, old_section)
+        resequence_rolls(org_id, dest_grade, dest_section)
+        db.session.commit()
+        return jsonify(student.to_dict()), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/students/resequence-rolls", methods=["POST"])
+@role_required("admin", "principal", "teacher")
+def resequence_section_rolls():
+    """Force a fresh alphabetical roll numbering for one section."""
+    try:
+        org_id = current_org_id()
+        data = request.get_json() or {}
+        class_grade = str(data.get("class_grade") or "")
+        section = (data.get("section") or "").strip()
+        if not class_grade or not section:
+            return jsonify({"error": "class_grade and section are required"}), 400
+        if not _can_manage_scope(class_grade, section):
+            return jsonify({"error": "Not allowed to manage this class/section"}), 403
+        count = resequence_rolls(org_id, class_grade, section)
+        db.session.commit()
+        return jsonify({"message": f"Renumbered {count} students", "count": count}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
 
 # ============================================================================
 # ADMIN ENDPOINTS - Batch Management

@@ -11,6 +11,10 @@ export interface User {
   teacher_id?: number;
   assigned_batches?: number[];
   subjects?: number[];
+  is_class_teacher?: boolean;
+  class_teacher_batch_id?: number | null;
+  class_teacher_grade?: string;
+  class_teacher_section?: string;
 }
 
 interface AuthState {
