@@ -2256,6 +2256,63 @@ def setup_rooms():
         return jsonify({"error": str(e)}), 500
 
 
+@api.route("/admin/rooms/exchange", methods=["POST"])
+@role_required("admin")
+def exchange_rooms():
+    """Swap the fixed home classrooms of two sections.
+
+    Body: { "batch_a": <id>, "batch_b": <id> }. Capacity follows the room, so it
+    is swapped too. Returns warnings when a section would no longer fit its new
+    room's capacity (the swap is still applied — the admin decides)."""
+    try:
+        from student_service import section_strengths
+        data = request.get_json() or {}
+        a_id = _parse_int(data.get("batch_a"))
+        b_id = _parse_int(data.get("batch_b"))
+        if not a_id or not b_id or a_id == b_id:
+            return jsonify({"error": "Pick two different sections to exchange"}), 400
+
+        a = owned_or_404(Batch, a_id)
+        b = owned_or_404(Batch, b_id)
+
+        ra, rb = a.room_id, b.room_id
+        if not ra and not rb:
+            return jsonify({"error": "Neither section has a home room to exchange"}), 400
+
+        # Swap the rooms; capacity travels with the room.
+        a.room_id, b.room_id = rb, ra
+        room_for_a = Classroom.query.get(rb) if rb else None
+        room_for_b = Classroom.query.get(ra) if ra else None
+        a.capacity = room_for_a.capacity if room_for_a else None
+        b.capacity = room_for_b.capacity if room_for_b else None
+        if room_for_a:
+            room_for_a.assigned_class = f"{a.grade}-{a.section}"
+        if room_for_b:
+            room_for_b.assigned_class = f"{b.grade}-{b.section}"
+
+        db.session.commit()
+
+        warnings = []
+        for batch, room in ((a, room_for_a), (b, room_for_b)):
+            if not room:
+                continue
+            strength = section_strengths(batch.organization_id, batch.grade).get(batch.section, 0)
+            if strength > (room.capacity or 0):
+                warnings.append(
+                    f"{batch.grade}-{batch.section} has {strength} students but "
+                    f"{room.room_name} holds {room.capacity}."
+                )
+
+        return jsonify({
+            "message": "Rooms exchanged",
+            "batches": [a.to_dict(), b.to_dict()],
+            "warnings": warnings,
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
 @api.route("/admin/rooms/assign-home", methods=["POST"])
 @role_required("admin")
 def assign_home_rooms():

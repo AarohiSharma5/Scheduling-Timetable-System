@@ -11,6 +11,14 @@ interface Room {
   assigned_class: string | null;
 }
 
+interface BatchLite {
+  id: number;
+  grade: string;
+  section: string;
+  room_id: number | null;
+  capacity: number | null;
+}
+
 const ROOM_TYPES: { value: string; label: string }[] = [
   { value: "regular", label: "Regular classroom" },
   { value: "lab", label: "Laboratory" },
@@ -45,6 +53,7 @@ const emptyForm = {
 
 export default function RoomManagement() {
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [batches, setBatches] = useState<BatchLite[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
@@ -52,6 +61,8 @@ export default function RoomManagement() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState(emptyForm);
+  const [exA, setExA] = useState<number | "">("");
+  const [exB, setExB] = useState<number | "">("");
 
   useEffect(() => {
     load();
@@ -60,13 +71,36 @@ export default function RoomManagement() {
   const load = async () => {
     try {
       setLoading(true);
-      const res = await api.admin.rooms.list();
+      const [res, bRes] = await Promise.all([
+        api.admin.rooms.list(),
+        api.admin.batches.list().catch(() => []),
+      ]);
       setRooms(res || []);
+      setBatches(bRes || []);
     } catch (err) {
       setError("Failed to load rooms");
       console.error(err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const exchangeRooms = async () => {
+    if (!exA || !exB || exA === exB) return;
+    setBusy(true);
+    setError("");
+    setInfo("");
+    try {
+      const res = await api.admin.rooms.exchange(Number(exA), Number(exB));
+      await load();
+      const warn = (res.warnings || []).length ? ` ⚠️ ${res.warnings.join(" ")}` : "";
+      setInfo(`Home rooms exchanged.${warn}`);
+      setExA("");
+      setExB("");
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Failed to exchange rooms");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -222,6 +256,53 @@ export default function RoomManagement() {
           </button>
         </div>
       </div>
+
+      {/* Exchange home rooms between two sections */}
+      {(() => {
+        const withRoom = batches
+          .filter((b) => b.room_id)
+          .sort((x, y) => `${x.grade}-${x.section}`.localeCompare(`${y.grade}-${y.section}`, undefined, { numeric: true }));
+        const roomLabel = (b: BatchLite) => {
+          const r = rooms.find((x) => x.id === b.room_id);
+          return r ? `${r.room_id} (${r.room_name})` : `#${b.room_id}`;
+        };
+        const opt = (b: BatchLite) => `${b.grade}-${b.section} — ${roomLabel(b)}`;
+        if (withRoom.length < 2) return null;
+        return (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 space-y-3">
+            <h3 className="font-semibold text-slate-900">🔁 Exchange home rooms</h3>
+            <p className="text-sm text-slate-600">
+              Two sections can swap their fixed classrooms (capacity travels with the room). Handy when
+              classes want to trade rooms — e.g. move a senior class downstairs.
+            </p>
+            <div className="flex flex-wrap items-end gap-3">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Section A</label>
+                <select value={exA} onChange={(e) => setExA(e.target.value ? Number(e.target.value) : "")} className="border rounded px-3 py-2 w-72">
+                  <option value="">Select section…</option>
+                  {withRoom.map((b) => <option key={b.id} value={b.id} disabled={b.id === exB}>{opt(b)}</option>)}
+                </select>
+              </div>
+              <span className="pb-2 text-slate-500 font-semibold">⇄</span>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Section B</label>
+                <select value={exB} onChange={(e) => setExB(e.target.value ? Number(e.target.value) : "")} className="border rounded px-3 py-2 w-72">
+                  <option value="">Select section…</option>
+                  {withRoom.map((b) => <option key={b.id} value={b.id} disabled={b.id === exA}>{opt(b)}</option>)}
+                </select>
+              </div>
+              <button
+                type="button"
+                onClick={exchangeRooms}
+                disabled={!exA || !exB || exA === exB || busy}
+                className="bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg"
+              >
+                {busy ? "Swapping…" : "Swap rooms"}
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Summary chips */}
       {rooms.length > 0 && (

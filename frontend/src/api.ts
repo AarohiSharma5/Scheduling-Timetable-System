@@ -207,6 +207,11 @@ export const api = {
         const { data } = await axiosInstance.post("/admin/rooms/assign-home", {});
         return data;
       },
+      // Swap the home classrooms of two sections.
+      exchange: async (batch_a: number, batch_b: number) => {
+        const { data } = await axiosInstance.post("/admin/rooms/exchange", { batch_a, batch_b });
+        return data;
+      },
     },
 
     // Subjects
