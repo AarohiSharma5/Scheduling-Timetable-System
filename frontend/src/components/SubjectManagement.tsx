@@ -7,6 +7,7 @@ interface Subject {
   periods_per_week: number;
   max_periods_per_day: number;
   requires_double: boolean;
+  subject_type?: string;
 }
 
 export default function SubjectManagement() {
@@ -21,6 +22,7 @@ export default function SubjectManagement() {
     periods_per_week: 3,
     max_periods_per_day: 1,
     requires_double: false,
+    subject_type: "core",
   });
 
   useEffect(() => {
@@ -73,6 +75,7 @@ export default function SubjectManagement() {
       periods_per_week: subject.periods_per_week,
       max_periods_per_day: subject.max_periods_per_day ?? 1,
       requires_double: subject.requires_double ?? false,
+      subject_type: subject.subject_type ?? "core",
     });
     setEditingId(subject.id);
     setShowForm(true);
@@ -84,6 +87,7 @@ export default function SubjectManagement() {
       periods_per_week: 3,
       max_periods_per_day: 1,
       requires_double: false,
+      subject_type: "core",
     });
     setEditingId(null);
     setShowForm(false);
@@ -146,6 +150,21 @@ export default function SubjectManagement() {
               />
               Lab / double period (schedule as consecutive pairs)
             </label>
+            <div>
+              <label className="block text-sm font-medium mb-1">Subject type</label>
+              <select
+                value={formData.subject_type}
+                onChange={(e) => setFormData({ ...formData, subject_type: e.target.value })}
+                className="border rounded px-3 py-2 w-full"
+              >
+                <option value="core">Core (whole section takes it)</option>
+                <option value="elective">Elective (student-chosen, parallel block)</option>
+                <option value="language">Language (student-chosen, parallel block)</option>
+              </select>
+              <p className="text-xs text-slate-500 mt-1">
+                Elective &amp; language subjects form cross-section teaching groups that run in one parallel block.
+              </p>
+            </div>
           </div>
 
           <div className="flex gap-2">

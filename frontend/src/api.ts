@@ -214,6 +214,38 @@ export const api = {
       },
     },
 
+    // Senior-school streams (Science/Commerce/Humanities per grade)
+    streams: {
+      list: async () => (await axiosInstance.get("/admin/streams")).data,
+      create: async (s: any) => (await axiosInstance.post("/admin/streams", s)).data,
+      update: async (id: number, u: any) => (await axiosInstance.put(`/admin/streams/${id}`, u)).data,
+      delete: async (id: number) => { await axiosInstance.delete(`/admin/streams/${id}`); },
+    },
+
+    // Subject combinations within a stream (PCM/PCB/...)
+    combinations: {
+      list: async () => (await axiosInstance.get("/admin/subject-combinations")).data,
+      create: async (c: any) => (await axiosInstance.post("/admin/subject-combinations", c)).data,
+      update: async (id: number, u: any) => (await axiosInstance.put(`/admin/subject-combinations/${id}`, u)).data,
+      delete: async (id: number) => { await axiosInstance.delete(`/admin/subject-combinations/${id}`); },
+    },
+
+    // Dynamic teaching groups (homeroom / elective / language)
+    teachingGroups: {
+      list: async (params: { grade?: string; group_type?: string } = {}) =>
+        (await axiosInstance.get("/admin/teaching-groups", { params })).data,
+      get: async (id: number) => (await axiosInstance.get(`/admin/teaching-groups/${id}`)).data,
+      generate: async (options: any = {}) =>
+        (await axiosInstance.post("/admin/teaching-groups/generate", options)).data,
+      create: async (g: any) => (await axiosInstance.post("/admin/teaching-groups", g)).data,
+      update: async (id: number, u: any) => (await axiosInstance.put(`/admin/teaching-groups/${id}`, u)).data,
+      delete: async (id: number) => { await axiosInstance.delete(`/admin/teaching-groups/${id}`); },
+      members: async (id: number, body: { student_id: number; action?: "add" | "remove"; from_group_id?: number }) =>
+        (await axiosInstance.post(`/admin/teaching-groups/${id}/members`, body)).data,
+      validate: async (timetable_id?: number) =>
+        (await axiosInstance.get("/admin/teaching-groups/validate", { params: timetable_id ? { timetable_id } : {} })).data,
+    },
+
     // Subjects
     subjects: {
       list: async () => {

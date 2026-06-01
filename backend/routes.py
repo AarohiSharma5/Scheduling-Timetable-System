@@ -11,7 +11,7 @@ Endpoints organized by module:
 """
 
 from flask import Blueprint, request, jsonify, abort, make_response
-from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification, Organization, PinnedSlot, TeacherPreference, Charge, Student, Classroom
+from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification, Organization, PinnedSlot, TeacherPreference, Charge, Student, Classroom, Stream, SubjectCombination, TeachingGroup, GroupMembership
 from datetime import datetime, timedelta, date
 from functools import wraps
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -696,6 +696,28 @@ def update_school_config():
             if gm is None or gm < 1:
                 return jsonify({"error": "ground_max_concurrent_batches must be at least 1"}), 400
             config.ground_max_concurrent_batches = gm
+
+        # ---- Streams / electives / group-formation settings --------------
+        if "available_streams" in data:
+            raw = data["available_streams"]
+            if not isinstance(raw, list):
+                return jsonify({"error": "available_streams must be a list"}), 400
+            config.available_streams = [str(s).strip() for s in raw if str(s).strip()]
+        if "stream_max_strength" in data:
+            raw = data["stream_max_strength"] or {}
+            if not isinstance(raw, dict):
+                return jsonify({"error": "stream_max_strength must be an object"}), 400
+            config.stream_max_strength = {str(k): _parse_int(v) for k, v in raw.items() if _parse_int(v)}
+        if "min_group_size" in data:
+            config.min_group_size = _parse_int(data["min_group_size"]) or config.min_group_size
+        if "max_group_size" in data:
+            config.max_group_size = _parse_int(data["max_group_size"]) or config.max_group_size
+        if "elective_merge_threshold" in data:
+            config.elective_merge_threshold = _parse_int(data["elective_merge_threshold"]) or config.elective_merge_threshold
+        if "language_start_grade" in data:
+            config.language_start_grade = str(data["language_start_grade"]).strip() or config.language_start_grade
+        if "allow_group_override" in data:
+            config.allow_group_override = bool(data["allow_group_override"])
 
         workload_changed = False
         if "target_contact_periods_per_week" in data:
@@ -1550,6 +1572,9 @@ def create_student():
             section=section,
             admission_date=_parse_date(data.get("joining_date") or data.get("admission_date")) or date.today(),
             status=(data.get("status") or "Active"),
+            stream=(data.get("stream") or None),
+            subject_combination=(data.get("subject_combination") or None),
+            elective_subjects=(data.get("elective_subjects") if isinstance(data.get("elective_subjects"), list) else []),
         )
         if explicit_roll:
             try:
@@ -1627,6 +1652,10 @@ def update_student(student_id):
         if "joining_date" in data or "admission_date" in data:
             student.admission_date = _parse_date(data.get("joining_date") or data.get("admission_date")) or student.admission_date
         if "status" in data: student.status = data["status"] or "Active"
+        if "stream" in data: student.stream = data["stream"] or None
+        if "subject_combination" in data: student.subject_combination = data["subject_combination"] or None
+        if "elective_subjects" in data:
+            student.elective_subjects = data["elective_subjects"] if isinstance(data["elective_subjects"], list) else []
 
         # Section / class moves (admin & principal only).
         new_grade = str(data.get("class_grade", student.class_grade))
@@ -2336,6 +2365,298 @@ def assign_home_rooms():
 
 
 # ============================================================================
+# ADMIN ENDPOINTS - Streams & Subject Combinations (senior school)
+# ============================================================================
+
+@api.route("/admin/streams", methods=["GET"])
+@role_required("admin", "principal", "teacher")
+def list_streams():
+    rows = Stream.query.filter_by(organization_id=current_org_id()).order_by(
+        Stream.grade.asc(), Stream.name.asc()).all()
+    return jsonify([s.to_dict() for s in rows]), 200
+
+
+@api.route("/admin/streams", methods=["POST"])
+@role_required("admin")
+def create_stream():
+    try:
+        data = request.get_json() or {}
+        name = (data.get("name") or "").strip()
+        grade = str(data.get("grade") or "").strip()
+        if not name or not grade:
+            return jsonify({"error": "name and grade are required"}), 400
+        s = Stream(
+            organization_id=current_org_id(), name=name, grade=grade,
+            academic_year=(data.get("academic_year") or None),
+            max_strength=_parse_int(data.get("max_strength")),
+            separate_sections=bool(data.get("separate_sections", True)),
+            active=bool(data.get("active", True)),
+        )
+        db.session.add(s)
+        db.session.commit()
+        return jsonify(s.to_dict()), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/streams/<int:stream_id>", methods=["PUT"])
+@role_required("admin")
+def update_stream(stream_id):
+    try:
+        s = owned_or_404(Stream, stream_id)
+        data = request.get_json() or {}
+        if "name" in data and data["name"]: s.name = data["name"].strip()
+        if "grade" in data and data["grade"]: s.grade = str(data["grade"]).strip()
+        if "academic_year" in data: s.academic_year = data["academic_year"] or None
+        if "max_strength" in data: s.max_strength = _parse_int(data["max_strength"])
+        if "separate_sections" in data: s.separate_sections = bool(data["separate_sections"])
+        if "active" in data: s.active = bool(data["active"])
+        db.session.commit()
+        return jsonify(s.to_dict()), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/streams/<int:stream_id>", methods=["DELETE"])
+@role_required("admin")
+def delete_stream(stream_id):
+    try:
+        s = owned_or_404(Stream, stream_id)
+        SubjectCombination.query.filter_by(stream_id=s.id).update({"stream_id": None})
+        db.session.delete(s)
+        db.session.commit()
+        return jsonify({"message": "Stream deleted"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/subject-combinations", methods=["GET"])
+@role_required("admin", "principal", "teacher")
+def list_combinations():
+    rows = SubjectCombination.query.filter_by(organization_id=current_org_id()).all()
+    return jsonify([c.to_dict() for c in rows]), 200
+
+
+@api.route("/admin/subject-combinations", methods=["POST"])
+@role_required("admin")
+def create_combination():
+    try:
+        data = request.get_json() or {}
+        name = (data.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "name is required"}), 400
+        c = SubjectCombination(
+            organization_id=current_org_id(),
+            stream_id=_parse_int(data.get("stream_id")),
+            name=name, grade=str(data.get("grade") or "").strip() or None,
+            subject_ids=(data.get("subject_ids") if isinstance(data.get("subject_ids"), list) else []),
+            active=bool(data.get("active", True)),
+        )
+        db.session.add(c)
+        db.session.commit()
+        return jsonify(c.to_dict()), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/subject-combinations/<int:comb_id>", methods=["PUT"])
+@role_required("admin")
+def update_combination(comb_id):
+    try:
+        c = owned_or_404(SubjectCombination, comb_id)
+        data = request.get_json() or {}
+        if "name" in data and data["name"]: c.name = data["name"].strip()
+        if "stream_id" in data: c.stream_id = _parse_int(data["stream_id"])
+        if "grade" in data: c.grade = str(data["grade"]).strip() or None
+        if "subject_ids" in data and isinstance(data["subject_ids"], list): c.subject_ids = data["subject_ids"]
+        if "active" in data: c.active = bool(data["active"])
+        db.session.commit()
+        return jsonify(c.to_dict()), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/subject-combinations/<int:comb_id>", methods=["DELETE"])
+@role_required("admin")
+def delete_combination(comb_id):
+    try:
+        c = owned_or_404(SubjectCombination, comb_id)
+        db.session.delete(c)
+        db.session.commit()
+        return jsonify({"message": "Combination deleted"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# ADMIN ENDPOINTS - Teaching Groups (dynamic stream/elective/language groups)
+# ============================================================================
+
+@api.route("/admin/teaching-groups", methods=["GET"])
+@role_required("admin", "principal", "teacher")
+def list_teaching_groups():
+    """List teaching groups, optionally filtered by ?grade= or ?group_type=."""
+    q = TeachingGroup.query.filter_by(organization_id=current_org_id())
+    grade = request.args.get("grade")
+    gtype = request.args.get("group_type")
+    if grade:
+        q = q.filter_by(grade=str(grade))
+    if gtype:
+        q = q.filter_by(group_type=gtype)
+    rows = q.order_by(TeachingGroup.grade.asc(), TeachingGroup.group_type.asc(),
+                      TeachingGroup.name.asc()).all()
+    return jsonify([g.to_dict() for g in rows]), 200
+
+
+@api.route("/admin/teaching-groups/generate", methods=["POST"])
+@role_required("admin")
+def generate_teaching_groups():
+    """Rebuild auto teaching groups from current student stream/elective choices.
+    Admin-locked groups are preserved."""
+    try:
+        from group_service import generate_groups
+        result = generate_groups(current_org_id(), options=request.get_json() or {})
+        db.session.commit()
+        return jsonify(result), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/teaching-groups/<int:group_id>", methods=["GET"])
+@role_required("admin", "principal", "teacher")
+def get_teaching_group(group_id):
+    g = owned_or_404(TeachingGroup, group_id)
+    return jsonify(g.to_dict(include_members=True)), 200
+
+
+@api.route("/admin/teaching-groups", methods=["POST"])
+@role_required("admin")
+def create_teaching_group():
+    """Manually create a teaching group (admin override)."""
+    try:
+        data = request.get_json() or {}
+        name = (data.get("name") or "").strip()
+        grade = str(data.get("grade") or "").strip()
+        if not name or not grade:
+            return jsonify({"error": "name and grade are required"}), 400
+        g = TeachingGroup(
+            organization_id=current_org_id(), name=name, grade=grade,
+            stream=(data.get("stream") or None), section=(data.get("section") or None),
+            group_type=(data.get("group_type") or "elective"),
+            subject_id=_parse_int(data.get("subject_id")),
+            teacher_id=_parse_int(data.get("teacher_id")),
+            room_id=_parse_int(data.get("room_id")),
+            periods_per_week=_parse_int(data.get("periods_per_week")),
+            block_key=(data.get("block_key") or None),
+            locked=bool(data.get("locked", False)),
+            auto_generated=False,
+        )
+        db.session.add(g)
+        db.session.commit()
+        return jsonify(g.to_dict()), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/teaching-groups/<int:group_id>", methods=["PUT"])
+@role_required("admin")
+def update_teaching_group(group_id):
+    """Override a group: assign teacher/room, rename, lock/unlock, set block."""
+    try:
+        g = owned_or_404(TeachingGroup, group_id)
+        data = request.get_json() or {}
+        if "name" in data and data["name"]: g.name = data["name"].strip()
+        if "teacher_id" in data: g.teacher_id = _parse_int(data["teacher_id"])
+        if "room_id" in data: g.room_id = _parse_int(data["room_id"])
+        if "periods_per_week" in data: g.periods_per_week = _parse_int(data["periods_per_week"])
+        if "block_key" in data: g.block_key = data["block_key"] or None
+        if "locked" in data: g.locked = bool(data["locked"])
+        if "subject_id" in data: g.subject_id = _parse_int(data["subject_id"])
+        db.session.commit()
+        return jsonify(g.to_dict()), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/teaching-groups/<int:group_id>", methods=["DELETE"])
+@role_required("admin")
+def delete_teaching_group(group_id):
+    try:
+        g = owned_or_404(TeachingGroup, group_id)
+        db.session.delete(g)
+        db.session.commit()
+        return jsonify({"message": "Group deleted"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/teaching-groups/<int:group_id>/members", methods=["POST"])
+@role_required("admin")
+def modify_group_members(group_id):
+    """Add or remove a student from a group (manual override).
+    Body: { "student_id": <id>, "action": "add" | "remove", "from_group_id": <id?> }."""
+    try:
+        g = owned_or_404(TeachingGroup, group_id)
+        data = request.get_json() or {}
+        student_id = _parse_int(data.get("student_id"))
+        action = (data.get("action") or "add").lower()
+        if not student_id:
+            return jsonify({"error": "student_id is required"}), 400
+        owned_or_404(Student, student_id)  # ownership check
+
+        if action == "remove":
+            GroupMembership.query.filter_by(group_id=g.id, student_id=student_id).delete()
+        else:
+            # Optionally move out of a sibling group first.
+            from_id = _parse_int(data.get("from_group_id"))
+            if from_id:
+                GroupMembership.query.filter_by(group_id=from_id, student_id=student_id).delete()
+            exists = GroupMembership.query.filter_by(group_id=g.id, student_id=student_id).first()
+            if not exists:
+                db.session.add(GroupMembership(
+                    organization_id=g.organization_id, group_id=g.id, student_id=student_id))
+        db.session.commit()
+        return jsonify(g.to_dict(include_members=True)), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/teaching-groups/validate", methods=["GET"])
+@role_required("admin", "principal")
+def validate_student_coverage():
+    """Student-level no-class-loss check against a generated timetable.
+
+    ?timetable_id= (defaults to latest). For every student verifies their core
+    subjects are scheduled, each chosen elective has a slot, and no two of their
+    slots overlap. Returns counts + a sample of issues."""
+    try:
+        from group_validation import validate_coverage
+        org_id = current_org_id()
+        tid = _parse_int(request.args.get("timetable_id"))
+        if not tid:
+            latest = Timetable.query.filter_by(organization_id=org_id).order_by(
+                Timetable.created_at.desc()).first()
+            tid = latest.id if latest else None
+        if not tid:
+            return jsonify({"error": "No timetable to validate"}), 400
+        result = validate_coverage(org_id, tid)
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
 # ADMIN ENDPOINTS - Subject Management
 # ============================================================================
 
@@ -2360,6 +2681,7 @@ def create_subject():
             max_periods_per_day=data.get("max_periods_per_day", 1),
             requires_double=data.get("requires_double", False),
             batch_ids=data.get("batch_ids", []),
+            subject_type=(data.get("subject_type") or "core"),
         )
         db.session.add(subject)
         db.session.commit()
@@ -2390,6 +2712,7 @@ def update_subject(subject_id):
         if "max_periods_per_day" in data: subject.max_periods_per_day = data["max_periods_per_day"]
         if "requires_double" in data: subject.requires_double = data["requires_double"]
         if "batch_ids" in data: subject.batch_ids = data["batch_ids"]
+        if "subject_type" in data: subject.subject_type = (data["subject_type"] or "core")
         
         subject.updated_at = datetime.utcnow()
         db.session.commit()

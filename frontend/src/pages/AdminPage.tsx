@@ -4,6 +4,7 @@ import TeacherManagement from "../components/TeacherManagement";
 import StudentManagement from "../components/StudentManagement";
 import BatchManagement from "../components/BatchManagement";
 import RoomManagement from "../components/RoomManagement";
+import TeachingGroups from "../components/TeachingGroups";
 import SubjectManagement from "../components/SubjectManagement";
 import ConfigurationForm from "../components/ConfigurationForm";
 import TimetableGenerator from "../components/TimetableGenerator";
@@ -12,7 +13,7 @@ import NotificationsCenter from "../components/NotificationsCenter";
 import PinnedSlotsManager from "../components/PinnedSlotsManager";
 import ChargeManagement from "../components/ChargeManagement";
 
-type Tab = "timetable" | "students" | "teachers" | "batches" | "rooms" | "subjects" | "charges" | "pinned" | "leaves" | "notifications" | "config";
+type Tab = "timetable" | "students" | "teachers" | "batches" | "rooms" | "groups" | "subjects" | "charges" | "pinned" | "leaves" | "notifications" | "config";
 
 const tabs: Record<Tab, { icon: string; label: string }> = {
   timetable: { icon: "📊", label: "Timetable" },
@@ -20,6 +21,7 @@ const tabs: Record<Tab, { icon: string; label: string }> = {
   teachers: { icon: "👨‍🏫", label: "Teachers" },
   batches: { icon: "📚", label: "Batches" },
   rooms: { icon: "🏫", label: "Rooms" },
+  groups: { icon: "🧩", label: "Teaching Groups" },
   subjects: { icon: "📖", label: "Subjects" },
   charges: { icon: "🏅", label: "Departments" },
   pinned: { icon: "📌", label: "Fixed Periods" },
@@ -78,6 +80,7 @@ export default function AdminPage() {
           {activeTab === "teachers" && <TeacherManagement />}
           {activeTab === "batches" && <BatchManagement />}
           {activeTab === "rooms" && <RoomManagement />}
+          {activeTab === "groups" && <TeachingGroups />}
           {activeTab === "subjects" && <SubjectManagement />}
           {activeTab === "charges" && <ChargeManagement />}
           {activeTab === "pinned" && <PinnedSlotsManager />}

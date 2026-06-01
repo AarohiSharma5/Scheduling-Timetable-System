@@ -115,6 +115,11 @@ class Subject(db.Model):
     # Lab/double subjects are scheduled as consecutive double periods.
     requires_double = db.Column(db.Boolean, nullable=False, default=False)
     batch_ids = db.Column(db.JSON, default=list)  # Which batches need this subject
+    # Classification that drives stream/elective/teaching-group logic:
+    #   "core"     -> everyone in the section takes it (homeroom group)
+    #   "elective" -> student-chosen; scheduled as a parallel block across a grade
+    #   "language" -> student-chosen language (lower grades), also a parallel block
+    subject_type = db.Column(db.String(20), nullable=False, default="core")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -126,6 +131,7 @@ class Subject(db.Model):
             "max_periods_per_day": self.max_periods_per_day,
             "requires_double": self.requires_double,
             "batch_ids": self.batch_ids or [],
+            "subject_type": self.subject_type or "core",
         }
 
 
@@ -371,6 +377,19 @@ class SchoolConfig(db.Model):
     default_room_capacity = db.Column(db.Integer, nullable=False, default=50)
     # How many batches may use the ground/playfield simultaneously (games period).
     ground_max_concurrent_batches = db.Column(db.Integer, nullable=False, default=4)
+    # ---- Streams, electives & teaching-group formation -------------------
+    # Streams offered in senior school and their per-stream max strength.
+    available_streams = db.Column(db.JSON, default=list)            # ["Science","Commerce","Humanities"]
+    stream_max_strength = db.Column(db.JSON, default=dict)          # {"Science":120,...}
+    # Group-size rules used when forming elective/language teaching groups.
+    min_group_size = db.Column(db.Integer, nullable=False, default=10)
+    max_group_size = db.Column(db.Integer, nullable=False, default=45)
+    # Elective groups with fewer students than this merge across sections.
+    elective_merge_threshold = db.Column(db.Integer, nullable=False, default=10)
+    # Lowest grade at which students start choosing a language (e.g. "6").
+    language_start_grade = db.Column(db.String(20), default="6")
+    # Whether admins may manually override auto-formed groups.
+    allow_group_override = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -395,6 +414,13 @@ class SchoolConfig(db.Model):
                                              else list(DEFAULT_SUPPORT_SUBJECTS)),
             "default_room_capacity": self.default_room_capacity or 50,
             "ground_max_concurrent_batches": self.ground_max_concurrent_batches or 4,
+            "available_streams": self.available_streams if self.available_streams else ["Science", "Commerce", "Humanities"],
+            "stream_max_strength": self.stream_max_strength or {},
+            "min_group_size": self.min_group_size or 10,
+            "max_group_size": self.max_group_size or 45,
+            "elective_merge_threshold": self.elective_merge_threshold or 10,
+            "language_start_grade": self.language_start_grade or "6",
+            "allow_group_override": self.allow_group_override if self.allow_group_override is not None else True,
         }
 
 
@@ -585,6 +611,12 @@ class Student(db.Model):
     class_grade = db.Column(db.String(20), nullable=False)  # 1, 2, 7, 11 Science, 12 Commerce
     section = db.Column(db.String(10), nullable=False)  # A, B, C, D
     roll_no = db.Column(db.Integer)  # Roll number in class
+    # Senior-school academics. stream: "Science"|"Commerce"|"Humanities".
+    # subject_combination: e.g. "PCM"|"PCB"|"PCMB"|"Commerce with Maths".
+    # elective_subjects: chosen electives/languages as a JSON list of subject names.
+    stream = db.Column(db.String(40))
+    subject_combination = db.Column(db.String(80))
+    elective_subjects = db.Column(db.JSON, default=list)
     house_id = db.Column(db.Integer, db.ForeignKey("houses.id"))  # Which house assigned
     father_name = db.Column(db.String(120))
     mother_name = db.Column(db.String(120))
@@ -621,6 +653,9 @@ class Student(db.Model):
             "blood_group": self.blood_group,
             "admission_date": self.admission_date.isoformat() if self.admission_date else None,
             "status": self.status,
+            "stream": self.stream,
+            "subject_combination": self.subject_combination,
+            "elective_subjects": self.elective_subjects or [],
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -744,4 +779,149 @@ class SubjectMaster(db.Model):
             "min_periods_per_week": self.min_periods_per_week,
             "max_periods_per_week": self.max_periods_per_week,
             "applicable_classes": self.applicable_classes or [],
+        }
+
+
+# ============================================================================
+# STREAMS, SUBJECT COMBINATIONS, ELECTIVES & TEACHING GROUPS
+# ============================================================================
+class Stream(db.Model):
+    """A senior-school stream (Science/Commerce/Humanities) offered for a grade.
+
+    max_strength caps how many students the stream takes; separate_sections says
+    whether the stream gets its own homeroom section(s) or may share a section
+    with another stream when strength is low.
+    """
+    __tablename__ = "streams"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
+    name = db.Column(db.String(40), nullable=False)          # Science / Commerce / Humanities
+    grade = db.Column(db.String(20), nullable=False)         # "11" / "12"
+    academic_year = db.Column(db.String(20))                 # "2025-26" (optional)
+    max_strength = db.Column(db.Integer)
+    separate_sections = db.Column(db.Boolean, nullable=False, default=True)
+    active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint("organization_id", "grade", "name", "academic_year",
+                            name="uq_stream_org_grade_name_year"),
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "grade": self.grade,
+            "academic_year": self.academic_year,
+            "max_strength": self.max_strength,
+            "separate_sections": self.separate_sections,
+            "active": self.active,
+        }
+
+
+class SubjectCombination(db.Model):
+    """A named bundle of subjects within a stream, e.g. Science -> PCM/PCB/PCMB."""
+    __tablename__ = "subject_combinations"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
+    stream_id = db.Column(db.Integer, db.ForeignKey("streams.id"))
+    name = db.Column(db.String(80), nullable=False)          # "PCM", "Commerce with Maths"
+    grade = db.Column(db.String(20))                         # "11"/"12" (mirrors the stream)
+    subject_ids = db.Column(db.JSON, default=list)           # core subjects in this combination
+    active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "stream_id": self.stream_id,
+            "name": self.name,
+            "grade": self.grade,
+            "subject_ids": self.subject_ids or [],
+            "active": self.active,
+        }
+
+
+class TeachingGroup(db.Model):
+    """A concrete unit the timetable actually schedules.
+
+    Instead of always scheduling whole sections, the engine can schedule
+    teaching groups: a homeroom section for core subjects, or a cross-section
+    elective/language group that gathers students who chose the same subject.
+    group_type: "homeroom" | "core" | "elective" | "language" | "combination".
+    """
+    __tablename__ = "teaching_groups"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
+    name = db.Column(db.String(160), nullable=False)         # "11 Computer Science Group"
+    grade = db.Column(db.String(20), nullable=False)
+    stream = db.Column(db.String(40))
+    section = db.Column(db.String(10))                       # set for homeroom groups
+    group_type = db.Column(db.String(20), nullable=False, default="elective")
+    subject_id = db.Column(db.Integer, db.ForeignKey("subjects.id"))
+    teacher_id = db.Column(db.Integer, db.ForeignKey("teachers.id"))
+    room_id = db.Column(db.Integer, db.ForeignKey("classrooms.id"))
+    periods_per_week = db.Column(db.Integer)
+    # Elective/language groups for the same grade that should run at the SAME
+    # time (a parallel "subject block"). Groups sharing a block_key are placed in
+    # the same period so a student can attend exactly one of them without clashes.
+    block_key = db.Column(db.String(80))
+    locked = db.Column(db.Boolean, nullable=False, default=False)   # exempt from regen
+    auto_generated = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    memberships = db.relationship("GroupMembership", backref="group",
+                                  cascade="all, delete-orphan", lazy="dynamic")
+
+    def to_dict(self, include_members=False):
+        members = self.memberships.all()
+        d = {
+            "id": self.id,
+            "name": self.name,
+            "grade": self.grade,
+            "stream": self.stream,
+            "section": self.section,
+            "group_type": self.group_type,
+            "subject_id": self.subject_id,
+            "teacher_id": self.teacher_id,
+            "room_id": self.room_id,
+            "periods_per_week": self.periods_per_week,
+            "block_key": self.block_key,
+            "locked": self.locked,
+            "auto_generated": self.auto_generated,
+            "student_count": len(members),
+        }
+        if include_members:
+            d["members"] = [
+                {"student_id": m.student_id,
+                 "name": (f"{m.student.first_name} {m.student.last_name}".strip() if m.student else None),
+                 "section": (m.student.section if m.student else None),
+                 "roll_no": (m.student.roll_no if m.student else None)}
+                for m in members
+            ]
+        return d
+
+
+class GroupMembership(db.Model):
+    """Which students belong to a teaching group."""
+    __tablename__ = "group_memberships"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
+    group_id = db.Column(db.Integer, db.ForeignKey("teaching_groups.id"), nullable=False, index=True)
+    student_id = db.Column(db.Integer, db.ForeignKey("students.id"), nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    student = db.relationship("Student")
+
+    __table_args__ = (
+        db.UniqueConstraint("group_id", "student_id", name="uq_group_membership"),
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "group_id": self.group_id,
+            "student_id": self.student_id,
         }

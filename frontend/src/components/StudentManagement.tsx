@@ -58,6 +58,9 @@ const emptyForm = {
   blood_group: "",
   joining_date: "",
   status: "Active",
+  stream: "",
+  subject_combination: "",
+  elective_subjects: [] as string[],
 };
 
 export default function StudentManagement({ scopedGrade, scopedSection }: Props) {
@@ -83,6 +86,13 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
   const [transferStudent, setTransferStudent] = useState<Student | null>(null);
   const [transferSection, setTransferSection] = useState("");
   const [showImport, setShowImport] = useState(false);
+  const [availableStreams, setAvailableStreams] = useState<string[]>(["Science", "Commerce", "Humanities"]);
+  const [electiveOptions, setElectiveOptions] = useState<{ name: string; subject_type: string }[]>([]);
+
+  // Senior school = Class 11/12 -> stream + combination; the grade may be a
+  // plain number or already carry the stream (e.g. "11 Science").
+  const isSenior = useMemo(() => /\b1[12]\b/.test(formData.class_grade || ""), [formData.class_grade]);
+  const gradeNum = parseInt((formData.class_grade || "").match(/\d+/)?.[0] || "0", 10);
 
   const flash = (kind: "ok" | "err", text: string) => {
     setMessage({ kind, text });
@@ -106,6 +116,20 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
       Array.from(new Set(batches.filter((b) => b.grade === grade).map((b) => b.section))).sort(),
     [batches]
   );
+
+  // Streams + elective/language subject options for the admission form.
+  useEffect(() => {
+    api.admin.config.get().then((c) => {
+      if (c?.available_streams?.length) setAvailableStreams(c.available_streams);
+    }).catch(() => {});
+    api.admin.subjects.list().then((subs: any[]) => {
+      setElectiveOptions(
+        (subs || [])
+          .filter((s) => s.subject_type === "elective" || s.subject_type === "language")
+          .map((s) => ({ name: s.name, subject_type: s.subject_type }))
+      );
+    }).catch(() => {});
+  }, []);
 
   // Load batches (admin/principal only — class teachers don't have access).
   useEffect(() => {
@@ -213,6 +237,9 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
       blood_group: s.blood_group || "",
       joining_date: s.admission_date ? s.admission_date.slice(0, 10) : "",
       status: s.status || "Active",
+      stream: (s as any).stream || "",
+      subject_combination: (s as any).subject_combination || "",
+      elective_subjects: Array.isArray((s as any).elective_subjects) ? (s as any).elective_subjects : [],
     });
     setEditingId(s.id);
     setShowForm(true);
@@ -242,6 +269,9 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
         class_grade: formData.class_grade,
         joining_date: formData.joining_date || null,
         status: formData.status,
+        stream: formData.stream || null,
+        subject_combination: formData.subject_combination || null,
+        elective_subjects: formData.elective_subjects || [],
       };
       // Only send section when the user picked one; blank means "auto-balance".
       if (formData.section) payload.section = formData.section;
@@ -673,6 +703,73 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
                 )}
               </div>
             </div>
+
+            {/* Stream / combination / electives — senior school + languages. */}
+            {isSenior && (
+              <div className="grid grid-cols-2 gap-3 rounded-lg bg-indigo-50 border border-indigo-100 p-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Stream</label>
+                  <select
+                    value={formData.stream}
+                    onChange={(e) => setFormData({ ...formData, stream: e.target.value })}
+                    className="w-full border rounded px-3 py-2"
+                  >
+                    <option value="">— select —</option>
+                    {availableStreams.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Subject combination</label>
+                  <input
+                    value={formData.subject_combination}
+                    onChange={(e) => setFormData({ ...formData, subject_combination: e.target.value })}
+                    className="w-full border rounded px-3 py-2"
+                    placeholder="e.g. PCM, PCB, Commerce with Maths"
+                  />
+                </div>
+              </div>
+            )}
+
+            {electiveOptions.length > 0 && (
+              <div className="rounded-lg bg-amber-50 border border-amber-100 p-3">
+                <label className="block text-xs font-semibold text-slate-600 mb-2">
+                  {gradeNum >= 11 ? "Electives" : "Language / electives"} (choose what this student takes)
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {electiveOptions
+                    .filter((o) => (gradeNum >= 11 ? true : o.subject_type === "language" || true))
+                    .map((o) => {
+                      const checked = formData.elective_subjects.includes(o.name);
+                      return (
+                        <label
+                          key={o.name}
+                          className={`cursor-pointer text-sm px-3 py-1 rounded-full border ${
+                            checked ? "bg-amber-500 text-white border-amber-500" : "bg-white text-slate-600 border-slate-300"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            className="hidden"
+                            checked={checked}
+                            onChange={(e) =>
+                              setFormData({
+                                ...formData,
+                                elective_subjects: e.target.checked
+                                  ? [...formData.elective_subjects, o.name]
+                                  : formData.elective_subjects.filter((n) => n !== o.name),
+                              })
+                            }
+                          />
+                          {o.name}
+                          <span className="ml-1 opacity-60 text-[10px]">{o.subject_type}</span>
+                        </label>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-3 gap-3">
               <div>

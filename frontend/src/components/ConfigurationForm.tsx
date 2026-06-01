@@ -17,6 +17,12 @@ interface SchoolConfig {
   pre_primary_support_subjects: string[];
   default_room_capacity: number;
   ground_max_concurrent_batches: number;
+  available_streams: string[];
+  min_group_size: number;
+  max_group_size: number;
+  elective_merge_threshold: number;
+  language_start_grade: string;
+  allow_group_override: boolean;
 }
 
 const toMinutes = (t: string): number => {
@@ -47,6 +53,12 @@ export default function ConfigurationForm() {
     pre_primary_support_subjects: ["Art", "Music", "Dance", "PE"] as string[],
     default_room_capacity: 50,
     ground_max_concurrent_batches: 4,
+    available_streams: ["Science", "Commerce", "Humanities"] as string[],
+    min_group_size: 10,
+    max_group_size: 45,
+    elective_merge_threshold: 10,
+    language_start_grade: "6",
+    allow_group_override: true,
   });
 
   // Number of periods is derived from the school hours, not typed in — this is
@@ -395,6 +407,84 @@ export default function ConfigurationForm() {
               <p className="text-xs text-slate-500 mt-1">
                 The scheduler won't put more than this many classes on the ground in the same period.
               </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Streams, electives & teaching groups */}
+        <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4">
+          <h3 className="font-semibold text-slate-900 mb-1">🧩 Streams, electives &amp; groups</h3>
+          <p className="text-sm text-slate-600 mb-3">
+            Controls how senior streams are offered and how elective / language teaching groups are
+            formed. After changing these, rebuild groups under the <strong>Teaching Groups</strong> tab.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Streams offered (Class 11 &amp; 12)
+              </label>
+              <input
+                type="text"
+                value={(formData.available_streams || []).join(", ")}
+                onChange={(e) =>
+                  setFormData({
+                    ...formData,
+                    available_streams: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
+                  })
+                }
+                className="border rounded px-3 py-2 w-full"
+                placeholder="Science, Commerce, Humanities"
+              />
+              <p className="text-xs text-slate-500 mt-1">Comma-separated. Shown in the student admission form.</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Minimum group size</label>
+              <input
+                type="number" min="1"
+                value={formData.min_group_size}
+                onChange={(e) => setFormData({ ...formData, min_group_size: Number(e.target.value) })}
+                className="border rounded px-3 py-2 w-full"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Maximum group size (split above)</label>
+              <input
+                type="number" min="1"
+                value={formData.max_group_size}
+                onChange={(e) => setFormData({ ...formData, max_group_size: Number(e.target.value) })}
+                className="border rounded px-3 py-2 w-full"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Elective merge threshold</label>
+              <input
+                type="number" min="1"
+                value={formData.elective_merge_threshold}
+                onChange={(e) => setFormData({ ...formData, elective_merge_threshold: Number(e.target.value) })}
+                className="border rounded px-3 py-2 w-full"
+              />
+              <p className="text-xs text-slate-500 mt-1">Groups smaller than this are flagged to merge.</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Language choice starts at grade</label>
+              <input
+                type="text"
+                value={formData.language_start_grade}
+                onChange={(e) => setFormData({ ...formData, language_start_grade: e.target.value })}
+                className="border rounded px-3 py-2 w-full"
+                placeholder="6"
+              />
+            </div>
+            <div className="md:col-span-2 flex items-center gap-2">
+              <input
+                id="allow_group_override"
+                type="checkbox"
+                checked={formData.allow_group_override}
+                onChange={(e) => setFormData({ ...formData, allow_group_override: e.target.checked })}
+              />
+              <label htmlFor="allow_group_override" className="text-sm text-slate-700">
+                Allow admins to manually override auto-formed groups (move students, lock, reassign)
+              </label>
             </div>
           </div>
         </div>

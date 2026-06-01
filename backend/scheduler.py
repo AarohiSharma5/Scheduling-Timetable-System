@@ -11,9 +11,10 @@ Constraints:
 6. School Hours: Only during configured working hours
 """
 
+from collections import defaultdict
 from datetime import time
 from typing import Dict, List, Tuple, Optional, Set
-from models import db, Teacher, Batch, Subject, SchoolConfig, Timetable, TimetableSlot, PinnedSlot, TeacherPreference
+from models import db, Teacher, Batch, Subject, SchoolConfig, Timetable, TimetableSlot, PinnedSlot, TeacherPreference, TeachingGroup, Classroom
 
 # ---------------------------------------------------------------------------
 # Soft-preference / workload scoring weights. Higher = more desirable slot.
@@ -167,6 +168,11 @@ class SchedulingEngine:
             # Room/facility awareness (home rooms + special rooms + ground limit).
             # No-op when the org has no rooms configured (backward compatible).
             self._setup_rooms(batches, subjects, config)
+
+            # Reserve parallel elective/language blocks (teaching groups). This
+            # marks the block periods busy for the grade's sections + teachers so
+            # core scheduling works around them. No-op when no groups exist.
+            self._setup_elective_blocks(batches)
 
             # Step 6: Generate the (batch, subject) requirements.
             requirements = self._calculate_requirements(batches, subjects, teachers)
@@ -494,6 +500,99 @@ class SchedulingEngine:
                 self.room_busy[(day, period, name)] = batch_id
                 return name
         return self.batch_home_room.get(batch_id)
+
+    def _setup_elective_blocks(self, batches):
+        """Reserve parallel elective/language blocks from TeachingGroups.
+
+        For each grade with elective/language groups, picks a set of period
+        slots (one block meets ``max periods_per_week`` of its groups), reserves
+        them across every section of the grade (so core subjects avoid them) and
+        marks each group's teacher busy there. The concrete group slots are saved
+        later from ``self.elective_plan``. No-op when no such groups exist, so
+        ordinary generation is unchanged.
+        """
+        self.elective_plan = []          # [{day, period, teacher_id, subject_id, room, group}]
+        self.elective_reserved = {}      # grade -> [(day, period)]
+        self.has_elective_blocks = False
+
+        org_id = self.organization_id
+        gq = TeachingGroup.query.filter(TeachingGroup.group_type.in_(("elective", "language")))
+        if org_id is not None:
+            gq = gq.filter_by(organization_id=org_id)
+        groups = gq.all()
+        if not groups:
+            return
+        self.has_elective_blocks = True
+
+        rq = Classroom.query
+        if org_id is not None:
+            rq = rq.filter_by(organization_id=org_id)
+        room_by_id = {r.id: r for r in rq.all()}
+
+        groups_by_grade = defaultdict(list)
+        for g in groups:
+            groups_by_grade[g.grade].append(g)
+        sections_by_grade = defaultdict(list)
+        for b in batches:
+            sections_by_grade[b.grade].append(b)
+
+        for grade, ggroups in groups_by_grade.items():
+            need = max((g.periods_per_week or 0) for g in ggroups)
+            if need <= 0:
+                continue
+            sbatches = sections_by_grade.get(grade, [])
+            daylens = [self.batch_periods.get(b.id) for b in sbatches if self.batch_periods.get(b.id)]
+            max_period = min(daylens) if daylens else max((p for (_, p) in self.available), default=0)
+
+            # Pick block slots from the latest periods downward, spread across
+            # days, so electives sit late in the day and never clash within a grade.
+            day_list = self.days_in_order or []
+            cursor = {d: max([p for p in self.slots_by_day.get(d, []) if p <= max_period] or [0])
+                      for d in day_list}
+            reserved = []
+            guard = 0
+            while len(reserved) < need and guard < need * (len(day_list) + 1) + 50:
+                guard += 1
+                progressed = False
+                for d in day_list:
+                    if len(reserved) >= need:
+                        break
+                    p = cursor.get(d, 0)
+                    if p > 0 and (d, p) in self.available and (d, p) not in reserved:
+                        reserved.append((d, p))
+                        cursor[d] = p - 1
+                        progressed = True
+                    elif p > 0:
+                        cursor[d] = p - 1
+                        progressed = True
+                if not progressed:
+                    break
+
+            self.elective_reserved[grade] = reserved
+            for (d, p) in reserved:
+                for b in sbatches:
+                    self.occupied.add((d, p, b.id))
+
+            for g in ggroups:
+                gneed = g.periods_per_week or need
+                room = room_by_id.get(g.room_id)
+                room_label = room.room_name if room else None
+                for (d, p) in reserved[:gneed]:
+                    if g.teacher_id:
+                        if (g.teacher_id, d, p) in self.teacher_busy:
+                            self.warnings.append(f"Elective '{g.name}': teacher already busy on {d} P{p}")
+                        else:
+                            self.teacher_busy.add((g.teacher_id, d, p))
+                    self.elective_plan.append({
+                        "day": d, "period": p, "teacher_id": g.teacher_id,
+                        "subject_id": g.subject_id, "room": room_label, "group": g.name,
+                    })
+
+            if len(reserved) < need:
+                self.warnings.append(
+                    f"Grade {grade}: reserved only {len(reserved)}/{need} elective periods "
+                    f"(school day too short for the block)."
+                )
 
     def _calculate_requirements(self, batches, subjects, teachers) -> List[Requirement]:
         """Build one Requirement per (batch, subject) the batch needs."""
@@ -877,6 +976,20 @@ class SchedulingEngine:
                 room=self.slot_room.get((slot.day, slot.period_num, batch_id)),
             )
             db.session.add(timetable_slot)
+
+        # Parallel elective/language block slots (cross-section teaching groups).
+        # Stored with batch_id=None and the elective subject/teacher/room.
+        for e in getattr(self, "elective_plan", []):
+            db.session.add(TimetableSlot(
+                organization_id=self.organization_id,
+                timetable_id=timetable_id,
+                day=e["day"],
+                period_number=e["period"],
+                batch_id=None,
+                teacher_id=e.get("teacher_id"),
+                subject_id=e.get("subject_id"),
+                room=e.get("room"),
+            ))
 
         # Persist explicit LUNCH slots so the break is visible in grids/PDFs
         # (only for classes whose day is long enough to reach the lunch period).
