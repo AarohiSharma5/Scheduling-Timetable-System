@@ -23,6 +23,22 @@ interface SchoolConfig {
   elective_merge_threshold: number;
   language_start_grade: string;
   allow_group_override: boolean;
+  generation_mode: "global" | "class_first";
+  class_teacher_first_period: boolean;
+  zero_period_enabled: boolean;
+  zero_period_start: string;
+  zero_period_duration: number;
+  zero_period_in_hours: boolean;
+  zero_period_in_workload: boolean;
+  zero_period_grades: string[];
+  assembly_mode: "disabled" | "daily" | "day_wise" | "grade_wise";
+  assembly_duration: number;
+  assembly_period: number;
+  assembly_grades: string[];
+  assembly_schedule: Record<string, string[]>;
+  has_short_break: boolean;
+  short_break_after_period: number | null;
+  short_break_duration: number;
 }
 
 const toMinutes = (t: string): number => {
@@ -59,6 +75,22 @@ export default function ConfigurationForm() {
     elective_merge_threshold: 10,
     language_start_grade: "6",
     allow_group_override: true,
+    generation_mode: "global" as "global" | "class_first",
+    class_teacher_first_period: false,
+    zero_period_enabled: false,
+    zero_period_start: "07:30",
+    zero_period_duration: 30,
+    zero_period_in_hours: false,
+    zero_period_in_workload: false,
+    zero_period_grades: [] as string[],
+    assembly_mode: "disabled" as "disabled" | "daily" | "day_wise" | "grade_wise",
+    assembly_duration: 20,
+    assembly_period: 1,
+    assembly_grades: [] as string[],
+    assembly_schedule: {} as Record<string, string[]>,
+    has_short_break: false,
+    short_break_after_period: null as number | null,
+    short_break_duration: 10,
   });
 
   // Number of periods is derived from the school hours, not typed in — this is
@@ -487,6 +519,154 @@ export default function ConfigurationForm() {
               </label>
             </div>
           </div>
+        </div>
+
+        {/* Generation mode + class-teacher-first */}
+        <div className="border-t pt-6">
+          <h3 className="font-semibold text-slate-900 mb-1">⚙️ Timetable generation</h3>
+          <p className="text-xs text-slate-500 mb-3">
+            How the engine builds the grid. Both modes always run global conflict
+            checks (teacher / room / lab) — class-first just completes one class at a time.
+          </p>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Generation mode</label>
+              <select
+                value={formData.generation_mode}
+                onChange={(e) => setFormData({ ...formData, generation_mode: e.target.value as any })}
+                className="border rounded px-3 py-2 w-full"
+              >
+                <option value="global">Global first (default)</option>
+                <option value="class_first">Class-wise first + conflict resolution</option>
+              </select>
+            </div>
+            <div className="flex items-end">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={formData.class_teacher_first_period}
+                  onChange={(e) => setFormData({ ...formData, class_teacher_first_period: e.target.checked })}
+                />
+                <span className="text-sm text-slate-700">Prefer class teacher for the first period (soft)</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        {/* Zero period */}
+        <div className="border-t pt-6">
+          <h3 className="font-semibold text-slate-900 mb-1">🕖 Zero period</h3>
+          <label className="flex items-center gap-2 mb-3">
+            <input
+              type="checkbox"
+              checked={formData.zero_period_enabled}
+              onChange={(e) => setFormData({ ...formData, zero_period_enabled: e.target.checked })}
+            />
+            <span className="text-sm text-slate-700">Enable an optional period before regular classes (attendance / remedial)</span>
+          </label>
+          {formData.zero_period_enabled && (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Start time</label>
+                <input type="time" value={formData.zero_period_start}
+                  onChange={(e) => setFormData({ ...formData, zero_period_start: e.target.value })}
+                  className="border rounded px-3 py-2 w-full" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Duration (min)</label>
+                <input type="number" min={5} value={formData.zero_period_duration}
+                  onChange={(e) => setFormData({ ...formData, zero_period_duration: Number(e.target.value) })}
+                  className="border rounded px-3 py-2 w-full" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Applies to grades (comma-separated, blank = all)</label>
+                <input type="text" value={formData.zero_period_grades.join(", ")}
+                  onChange={(e) => setFormData({ ...formData, zero_period_grades: e.target.value.split(",").map((g) => g.trim()).filter(Boolean) })}
+                  placeholder="11, 12" className="border rounded px-3 py-2 w-full" />
+              </div>
+              <div className="flex flex-col justify-end gap-1">
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={formData.zero_period_in_hours}
+                    onChange={(e) => setFormData({ ...formData, zero_period_in_hours: e.target.checked })} />
+                  <span className="text-sm text-slate-700">Counted in school hours</span>
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={formData.zero_period_in_workload}
+                    onChange={(e) => setFormData({ ...formData, zero_period_in_workload: e.target.checked })} />
+                  <span className="text-sm text-slate-700">Counted in teacher workload</span>
+                </label>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Assembly */}
+        <div className="border-t pt-6">
+          <h3 className="font-semibold text-slate-900 mb-1">📣 Assembly</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Mode</label>
+              <select
+                value={formData.assembly_mode}
+                onChange={(e) => setFormData({ ...formData, assembly_mode: e.target.value as any })}
+                className="border rounded px-3 py-2 w-full"
+              >
+                <option value="disabled">Disabled</option>
+                <option value="daily">Daily (all students)</option>
+                <option value="day_wise">Day-wise (different grades per day)</option>
+                <option value="grade_wise">Grade-wise (specific grades, every day)</option>
+              </select>
+            </div>
+            {formData.assembly_mode !== "disabled" && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Occupies period #</label>
+                  <input type="number" min={1} value={formData.assembly_period}
+                    onChange={(e) => setFormData({ ...formData, assembly_period: Number(e.target.value) })}
+                    className="border rounded px-3 py-2 w-full" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Duration (min)</label>
+                  <input type="number" min={5} value={formData.assembly_duration}
+                    onChange={(e) => setFormData({ ...formData, assembly_duration: Number(e.target.value) })}
+                    className="border rounded px-3 py-2 w-full" />
+                </div>
+              </>
+            )}
+          </div>
+          {formData.assembly_mode === "grade_wise" && (
+            <div className="mt-3">
+              <label className="block text-sm font-medium text-slate-700 mb-1">Grades with assembly (comma-separated)</label>
+              <input type="text" value={formData.assembly_grades.join(", ")}
+                onChange={(e) => setFormData({ ...formData, assembly_grades: e.target.value.split(",").map((g) => g.trim()).filter(Boolean) })}
+                placeholder="6, 7, 8" className="border rounded px-3 py-2 w-full" />
+            </div>
+          )}
+          {formData.assembly_mode === "day_wise" && (
+            <div className="mt-3 space-y-2">
+              <p className="text-xs text-slate-500">Which grades attend assembly on each day (comma-separated grades; blank = none).</p>
+              {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].slice(0, formData.working_days).map((day) => (
+                <div key={day} className="flex items-center gap-2">
+                  <span className="w-24 text-sm text-slate-700">{day}</span>
+                  <input type="text"
+                    value={(formData.assembly_schedule[day] || []).join(", ")}
+                    onChange={(e) => setFormData({
+                      ...formData,
+                      assembly_schedule: {
+                        ...formData.assembly_schedule,
+                        [day]: e.target.value.split(",").map((g) => g.trim()).filter(Boolean),
+                      },
+                    })}
+                    placeholder="6, 7, 8" className="border rounded px-3 py-2 flex-1" />
+                </div>
+              ))}
+            </div>
+          )}
+          {formData.assembly_mode !== "disabled" && (
+            <p className="text-xs text-amber-600 mt-2">
+              The assembly slot is blocked for affected classes, reducing their instructional periods by one for those days.
+            </p>
+          )}
         </div>
 
         {/* Summary */}

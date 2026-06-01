@@ -102,6 +102,17 @@ def build_layout(config, count=None):
     lunch_idx = lunch_period_index(config, full_n)
 
     rows = []
+    # Optional zero period (period 0) shown before the regular day.
+    if getattr(config, "zero_period_enabled", False):
+        zs = _to_min(getattr(config, "zero_period_start", None), max(0, start - 30))
+        zd = getattr(config, "zero_period_duration", None) or 30
+        rows.append({
+            "number": 0,
+            "start": _fmt(zs),
+            "end": _fmt(zs + zd),
+            "is_lunch": False,
+            "is_zero": True,
+        })
     for i in range(1, n + 1):
         s = start + (i - 1) * dur
         rows.append({

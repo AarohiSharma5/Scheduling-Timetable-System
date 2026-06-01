@@ -246,6 +246,17 @@ export const api = {
         (await axiosInstance.get("/admin/teaching-groups/validate", { params: timetable_id ? { timetable_id } : {} })).data,
     },
 
+    // Per-class subject frequency / priority configuration
+    classSubjectConfig: {
+      list: async (grade?: string) =>
+        (await axiosInstance.get("/admin/class-subject-config", { params: grade ? { grade } : {} })).data,
+      save: async (grade: string, items: any[]) =>
+        (await axiosInstance.post("/admin/class-subject-config", { grade, items })).data,
+      delete: async (id: number) => { await axiosInstance.delete(`/admin/class-subject-config/${id}`); },
+      validatePlanning: async (timetable_id?: number) =>
+        (await axiosInstance.get("/admin/timetable-planning/validate", { params: timetable_id ? { timetable_id } : {} })).data,
+    },
+
     // Subjects
     subjects: {
       list: async () => {

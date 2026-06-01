@@ -390,6 +390,29 @@ class SchoolConfig(db.Model):
     language_start_grade = db.Column(db.String(20), default="6")
     # Whether admins may manually override auto-formed groups.
     allow_group_override = db.Column(db.Boolean, nullable=False, default=True)
+    # ---- Generation mode, period structure, zero period & assembly --------
+    # "global"     -> place all (class,subject) requirements together (default).
+    # "class_first"-> complete one class at a time, then global conflict checks.
+    generation_mode = db.Column(db.String(20), nullable=False, default="global")
+    # Soft rule: try to give the class teacher the first period of their section.
+    class_teacher_first_period = db.Column(db.Boolean, nullable=False, default=False)
+    # Optional zero period before regular classes.
+    zero_period_enabled = db.Column(db.Boolean, nullable=False, default=False)
+    zero_period_start = db.Column(db.String(10), default="07:30")
+    zero_period_duration = db.Column(db.Integer, default=30)
+    zero_period_in_hours = db.Column(db.Boolean, nullable=False, default=False)
+    zero_period_in_workload = db.Column(db.Boolean, nullable=False, default=False)
+    zero_period_grades = db.Column(db.JSON, default=list)   # [] = all grades
+    # Assembly: "disabled" | "daily" | "day_wise" | "grade_wise".
+    assembly_mode = db.Column(db.String(20), nullable=False, default="disabled")
+    assembly_duration = db.Column(db.Integer, default=20)
+    assembly_period = db.Column(db.Integer, default=1)      # which period slot it occupies
+    assembly_grades = db.Column(db.JSON, default=list)      # grade_wise: which grades
+    assembly_schedule = db.Column(db.JSON, default=dict)    # day_wise: {"Monday": ["6","7","8"]}
+    # Optional short break (mid-morning), separate from lunch.
+    has_short_break = db.Column(db.Boolean, nullable=False, default=False)
+    short_break_after_period = db.Column(db.Integer)
+    short_break_duration = db.Column(db.Integer, default=10)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -421,6 +444,22 @@ class SchoolConfig(db.Model):
             "elective_merge_threshold": self.elective_merge_threshold or 10,
             "language_start_grade": self.language_start_grade or "6",
             "allow_group_override": self.allow_group_override if self.allow_group_override is not None else True,
+            "generation_mode": self.generation_mode or "global",
+            "class_teacher_first_period": bool(self.class_teacher_first_period),
+            "zero_period_enabled": bool(self.zero_period_enabled),
+            "zero_period_start": self.zero_period_start or "07:30",
+            "zero_period_duration": self.zero_period_duration or 30,
+            "zero_period_in_hours": bool(self.zero_period_in_hours),
+            "zero_period_in_workload": bool(self.zero_period_in_workload),
+            "zero_period_grades": self.zero_period_grades or [],
+            "assembly_mode": self.assembly_mode or "disabled",
+            "assembly_duration": self.assembly_duration or 20,
+            "assembly_period": self.assembly_period or 1,
+            "assembly_grades": self.assembly_grades or [],
+            "assembly_schedule": self.assembly_schedule or {},
+            "has_short_break": bool(self.has_short_break),
+            "short_break_after_period": self.short_break_after_period,
+            "short_break_duration": self.short_break_duration or 10,
         }
 
 
@@ -924,4 +963,53 @@ class GroupMembership(db.Model):
             "id": self.id,
             "group_id": self.group_id,
             "student_id": self.student_id,
+        }
+
+
+# ============================================================================
+# CLASS SUBJECT CONFIG - per-class subject frequency / spread / priority
+# ============================================================================
+class ClassSubjectConfig(db.Model):
+    """Per-grade override of how a subject should be scheduled for that class.
+
+    When present, these take precedence over the org-wide Subject defaults so a
+    school can say "Class 6 English = 6/week, high priority, max 1/day, no
+    consecutive" independently of other grades. One row per (org, grade, subject).
+    """
+    __tablename__ = "class_subject_configs"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
+    grade = db.Column(db.String(20), nullable=False)
+    subject_id = db.Column(db.Integer, db.ForeignKey("subjects.id"), nullable=False)
+    periods_per_week = db.Column(db.Integer, nullable=False, default=1)
+    min_periods = db.Column(db.Integer)
+    max_periods = db.Column(db.Integer)
+    max_per_day = db.Column(db.Integer, nullable=False, default=1)
+    allow_consecutive = db.Column(db.Boolean, nullable=False, default=False)
+    allow_daily = db.Column(db.Boolean, nullable=False, default=True)
+    # "high" | "medium" | "low" — high subjects are nudged to earlier periods.
+    priority = db.Column(db.String(10), nullable=False, default="medium")
+    # "even" | "early" | "spread" — advisory spread hint across the week.
+    preferred_spread = db.Column(db.String(20), default="even")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint("organization_id", "grade", "subject_id",
+                            name="uq_class_subject_cfg"),
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "grade": self.grade,
+            "subject_id": self.subject_id,
+            "periods_per_week": self.periods_per_week,
+            "min_periods": self.min_periods,
+            "max_periods": self.max_periods,
+            "max_per_day": self.max_per_day,
+            "allow_consecutive": bool(self.allow_consecutive),
+            "allow_daily": bool(self.allow_daily),
+            "priority": self.priority or "medium",
+            "preferred_spread": self.preferred_spread or "even",
         }

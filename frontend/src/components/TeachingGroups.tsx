@@ -54,8 +54,10 @@ export default function TeachingGroups() {
   const [validation, setValidation] = useState<any | null>(null);
   const [typeFilter, setTypeFilter] = useState<string>("all");
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const teacherName = (id: number | null) => teachers.find((t) => t.id === id)?.name || "—";
   const subjectName = (id: number | null) => subjects.find((s) => s.id === id)?.name || "—";
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const roomName = (id: number | null) => rooms.find((r) => r.id === id)?.room_name || "—";
 
   const loadAll = async () => {

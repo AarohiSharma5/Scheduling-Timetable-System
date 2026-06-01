@@ -31,6 +31,8 @@ P_OVER_SOFT_DAY = -15        # exceeding the soft per-day workload target
 P_OVER_SOFT_WEEK = -10       # exceeding the soft per-week workload target
 W_LIGHTER_DAY = -2           # per period already taught that day (spreads load)
 DEFAULT_SOFT_PERIODS_DAY = 6 # fallback soft daily cap when teacher sets none
+W_PRIORITY_EARLY = 4         # scale: high-priority subjects nudged to early periods
+W_CLASS_TEACHER_FIRST = 14   # class teacher taking their section's first period
 
 # ============================================================================
 # DATA STRUCTURES FOR SCHEDULING
@@ -169,10 +171,18 @@ class SchedulingEngine:
             # No-op when the org has no rooms configured (backward compatible).
             self._setup_rooms(batches, subjects, config)
 
+            # Per-class subject configuration (frequency/priority/spread) +
+            # generation mode + class-teacher-first preference. No-op defaults.
+            self._setup_class_planning(batches, subjects, teachers, config)
+
             # Reserve parallel elective/language blocks (teaching groups). This
             # marks the block periods busy for the grade's sections + teachers so
             # core scheduling works around them. No-op when no groups exist.
             self._setup_elective_blocks(batches)
+
+            # Block assembly + zero-period slots for affected classes so regular
+            # subjects schedule around them. No-op when both are disabled.
+            self._setup_special_blocks(batches, config)
 
             # Step 6: Generate the (batch, subject) requirements.
             requirements = self._calculate_requirements(batches, subjects, teachers)
@@ -273,8 +283,8 @@ class SchedulingEngine:
         slots = []
         for day in days:
             for row in build_layout(config):
-                if row["is_lunch"]:
-                    continue
+                if row["is_lunch"] or row.get("is_zero"):
+                    continue  # zero period is reserved, never used for subjects
                 slots.append(Period(day, row["number"]))
         return slots
     
@@ -505,6 +515,106 @@ class SchedulingEngine:
                 return name
         return self.batch_home_room.get(batch_id)
 
+    def _setup_class_planning(self, batches, subjects, teachers, config):
+        """Load per-class subject config, generation mode and class-teacher-first.
+
+        Defaults keep current behavior: with no ClassSubjectConfig rows and the
+        default flags, effective subject params equal the org-wide Subject values.
+        """
+        from models import ClassSubjectConfig
+
+        self.batch_grade = {b.id: b.grade for b in batches}
+        self.class_teacher_of_batch = {}
+        for t in teachers:
+            bid = getattr(t, "class_teacher_batch_id", None)
+            if bid:
+                self.class_teacher_of_batch.setdefault(bid, t.id)
+
+        self.gen_mode = (getattr(config, "generation_mode", "global") or "global").lower()
+        self.ct_first = bool(getattr(config, "class_teacher_first_period", False))
+
+        # (grade, subject_id) -> ClassSubjectConfig dict.
+        self.cls_cfg = {}
+        q = ClassSubjectConfig.query
+        if self.organization_id is not None:
+            q = q.filter_by(organization_id=self.organization_id)
+        for c in q.all():
+            self.cls_cfg[(str(c.grade), c.subject_id)] = c
+
+    def _ccfg(self, batch_id, subject_id):
+        grade = str(self.batch_grade.get(batch_id, ""))
+        return self.cls_cfg.get((grade, subject_id)) if getattr(self, "cls_cfg", None) else None
+
+    def _eff_periods(self, batch_id, subject_id):
+        c = self._ccfg(batch_id, subject_id)
+        if c and c.periods_per_week:
+            return c.periods_per_week
+        return self.subject_periods.get(subject_id, 1)
+
+    def _eff_max_day(self, batch_id, subject_id):
+        c = self._ccfg(batch_id, subject_id)
+        if c and c.max_per_day:
+            return c.max_per_day
+        return self.subject_max_per_day.get(subject_id, 1)
+
+    def _eff_double(self, batch_id, subject_id):
+        base = self.subject_double.get(subject_id, False)
+        c = self._ccfg(batch_id, subject_id)
+        if c is not None:
+            # A class that forbids consecutive periods can't run a double block.
+            return base and bool(c.allow_consecutive)
+        return base
+
+    def _eff_priority(self, batch_id, subject_id):
+        c = self._ccfg(batch_id, subject_id)
+        return (c.priority if c else "medium") or "medium"
+
+    def _setup_special_blocks(self, batches, config):
+        """Reserve assembly and zero-period slots for the affected classes."""
+        self.assembly_plan = []   # [(day, period, batch_id)]
+        self.zero_plan = []       # [(batch_id, teacher_id)]
+        from period_utils import working_days
+
+        days = working_days(config)
+        grades_of_batches = {}
+        for b in batches:
+            grades_of_batches.setdefault(str(b.grade), []).append(b)
+
+        # ---- Assembly --------------------------------------------------------
+        mode = (getattr(config, "assembly_mode", "disabled") or "disabled").lower()
+        period = int(getattr(config, "assembly_period", 1) or 1)
+        if mode != "disabled":
+            def affected(day):
+                if mode == "daily":
+                    return [b for b in batches]
+                if mode == "grade_wise":
+                    want = {str(g) for g in (getattr(config, "assembly_grades", None) or [])}
+                    return [b for b in batches if str(b.grade) in want]
+                if mode == "day_wise":
+                    sched = getattr(config, "assembly_schedule", None) or {}
+                    want = {str(g) for g in (sched.get(day) or [])}
+                    return [b for b in batches if str(b.grade) in want]
+                return []
+            for day in days:
+                for b in affected(day):
+                    limit = self.batch_periods.get(b.id)
+                    if limit is not None and period > limit:
+                        continue
+                    if (day, period, b.id) in self.occupied:
+                        continue
+                    self.occupied.add((day, period, b.id))
+                    self.assembly_plan.append((day, period, b.id))
+
+        # ---- Zero period -----------------------------------------------------
+        if getattr(config, "zero_period_enabled", False):
+            want = {str(g) for g in (getattr(config, "zero_period_grades", None) or [])}
+            in_workload = bool(getattr(config, "zero_period_in_workload", False))
+            for b in batches:
+                if want and str(b.grade) not in want:
+                    continue
+                tid = self.class_teacher_of_batch.get(b.id)
+                self.zero_plan.append((b.id, tid, in_workload))
+
     def _setup_elective_blocks(self, batches):
         """Reserve parallel elective/language blocks from TeachingGroups.
 
@@ -622,13 +732,14 @@ class SchedulingEngine:
                 # The homeroom teacher takes every non-specialist subject so the
                 # children stay with one adult for most of the (short) day.
                 if homeroom_id and not self.is_support_subject.get(subject_id, False):
-                    homeroom_extra[homeroom_id] = homeroom_extra.get(homeroom_id, 0) + subject.periods_per_week
+                    eff = self._eff_periods(batch.id, subject_id)
+                    homeroom_extra[homeroom_id] = homeroom_extra.get(homeroom_id, 0) + eff
                     requirements.append(Requirement(
                         teacher_id=homeroom_id,
                         subject_id=subject_id,
                         batch_id=batch.id,
-                        periods=subject.periods_per_week,
-                        is_double=self.subject_double.get(subject_id, False),
+                        periods=eff,
+                        is_double=self._eff_double(batch.id, subject_id),
                         is_homeroom=True,
                     ))
                     continue
@@ -642,13 +753,14 @@ class SchedulingEngine:
                 # available: let the homeroom teacher cover it rather than drop it.
                 if not eligible_teachers:
                     if homeroom_id:
-                        homeroom_extra[homeroom_id] = homeroom_extra.get(homeroom_id, 0) + subject.periods_per_week
+                        eff = self._eff_periods(batch.id, subject_id)
+                        homeroom_extra[homeroom_id] = homeroom_extra.get(homeroom_id, 0) + eff
                         requirements.append(Requirement(
                             teacher_id=homeroom_id,
                             subject_id=subject_id,
                             batch_id=batch.id,
-                            periods=subject.periods_per_week,
-                            is_double=self.subject_double.get(subject_id, False),
+                            periods=eff,
+                            is_double=self._eff_double(batch.id, subject_id),
                             is_homeroom=True,
                         ))
                     else:
@@ -679,8 +791,8 @@ class SchedulingEngine:
                     teacher_id=eligible_teachers[0].id,
                     subject_id=subject_id,
                     batch_id=batch.id,
-                    periods=subject.periods_per_week,
-                    is_double=self.subject_double.get(subject_id, False),
+                    periods=self._eff_periods(batch.id, subject_id),
+                    is_double=self._eff_double(batch.id, subject_id),
                 ))
 
         # Add the homeroom class's periods as headroom ON TOP of the teacher's
@@ -690,7 +802,22 @@ class SchedulingEngine:
             self.teacher_max[tid] = self.teacher_max.get(tid, 24) + extra
 
         # Homeroom (dedicated pre-primary) first, then doubles, then by subject.
-        requirements.sort(key=lambda r: (not r.is_homeroom, not r.is_double, r.subject_id))
+        # In class-first mode, group every requirement of a class together so the
+        # engine completes one section before moving to the next; global conflict
+        # checks still apply to every placement either way.
+        def _ct_own(r):
+            # When the class-teacher-first rule is on, the class teacher's own
+            # subject for their section is placed earliest so period 1 is still
+            # free for it (it carries the period-1 scoring bonus).
+            return (getattr(self, "ct_first", False)
+                    and self.class_teacher_of_batch.get(r.batch_id) == r.teacher_id)
+
+        if getattr(self, "gen_mode", "global") == "class_first":
+            requirements.sort(key=lambda r: (r.batch_id, not r.is_homeroom,
+                                             not _ct_own(r), not r.is_double, r.subject_id))
+        else:
+            requirements.sort(key=lambda r: (not r.is_homeroom, not _ct_own(r),
+                                             not r.is_double, r.subject_id))
         return requirements
 
     # ========================================================================
@@ -718,13 +845,13 @@ class SchedulingEngine:
         # Teacher weekly max.
         if self.teacher_load.get(teacher_id, 0) >= self.teacher_max.get(teacher_id, 24):
             return False
-        # Subject weekly quota for this batch.
-        if self.batch_schedule[batch_id].get(subject_id, 0) >= self.subject_periods.get(subject_id, 1):
+        # Subject weekly quota for this batch (per-class config override aware).
+        if self.batch_schedule[batch_id].get(subject_id, 0) >= self._eff_periods(batch_id, subject_id):
             return False
         # Subject spacing: not too many of this subject in one day for the batch.
         if check_spacing:
             seen = self.batch_day_subject.get((batch_id, day, subject_id), 0)
-            if seen >= self.subject_max_per_day.get(subject_id, 1):
+            if seen >= self._eff_max_day(batch_id, subject_id):
                 return False
         # Room/facility availability (special rooms + ground concurrency).
         if not self._room_available(subject_id, day, period):
@@ -811,6 +938,22 @@ class SchedulingEngine:
 
         # Even distribution: prefer days where this teacher is so far lighter.
         score += W_LIGHTER_DAY * day_load
+
+        # --- Class subject priority: high-priority subjects to early periods ---
+        priority = self._eff_priority(batch_id, subject_id) if hasattr(self, "cls_cfg") else "medium"
+        if priority in ("high", "low"):
+            n = max(self.school_periods, 1)
+            # earliness in [0..1]: 1.0 for period 1, ~0 for the last period.
+            earliness = (n - period) / float(max(n - 1, 1))
+            if priority == "high":
+                score += W_PRIORITY_EARLY * earliness
+            else:  # low priority: gently prefer later slots
+                score += W_PRIORITY_EARLY * (1.0 - earliness) * 0.5
+
+        # --- Class-teacher-first-period soft preference ---
+        if getattr(self, "ct_first", False) and period == 1:
+            if self.class_teacher_of_batch.get(batch_id) == teacher_id:
+                score += W_CLASS_TEACHER_FIRST
         return score
 
     def _best_slot(self, req):
@@ -978,6 +1121,17 @@ class SchedulingEngine:
             db.session.flush()
         return s
 
+    def _special_subject(self, name):
+        """Get-or-create a labelled activity subject (Assembly / Zero Period)."""
+        s = Subject.query.filter_by(organization_id=self.organization_id, name=name).first()
+        if not s:
+            s = Subject(organization_id=self.organization_id, name=name,
+                        periods_per_week=0, max_periods_per_day=8, requires_double=False,
+                        subject_type="activity", batch_ids=[])
+            db.session.add(s)
+            db.session.flush()
+        return s
+
     def _pick_supervisor(self, teachers, day, period, batch):
         """A teacher free at (day, period) to supervise a filler period.
 
@@ -1025,6 +1179,38 @@ class SchedulingEngine:
                         self.timetable[(Period(d, p), b.id)] = (None, block_subj.id, b.id)
                         self.slot_room[(d, p, b.id)] = home
                         filled += 1
+
+        # 1b) Assembly markers (slots were reserved in _setup_special_blocks).
+        if getattr(self, "assembly_plan", None):
+            asm = self._special_subject("Assembly")
+            batch_by_id = {b.id: b for b in batches}
+            for (d, p, bid) in self.assembly_plan:
+                b = batch_by_id.get(bid)
+                home = self.batch_home_room.get(bid) if (rooms_on and b) else None
+                self.timetable[(Period(d, p), bid)] = (None, asm.id, bid)
+                self.slot_room[(d, p, bid)] = home
+                filled += 1
+
+        # 1c) Zero period (period 0) for the configured grades, taken by the
+        #     class teacher when available. Counted in workload only if asked.
+        if getattr(self, "zero_plan", None):
+            zsub = self._special_subject("Zero Period")
+            batch_by_id = {b.id: b for b in batches}
+            for (bid, tid, in_workload) in self.zero_plan:
+                b = batch_by_id.get(bid)
+                home = self.batch_home_room.get(bid) if (rooms_on and b) else None
+                for day in days:
+                    if (Period(day, 0), bid) in self.timetable:
+                        continue
+                    sup = tid if (tid and (tid, day, 0) not in self.teacher_busy) else \
+                          self._pick_supervisor(teachers, day, 0, b) if b else None
+                    self.timetable[(Period(day, 0), bid)] = (sup, zsub.id, bid)
+                    self.slot_room[(day, 0, bid)] = home
+                    if sup is not None:
+                        self.teacher_busy.add((sup, day, 0))
+                        if in_workload:
+                            self.teacher_load[sup] = self.teacher_load.get(sup, 0) + 1
+                    filled += 1
 
         # 2) Genuine gaps -> supervised activity in the section's home room.
         for bi, b in enumerate(batches):

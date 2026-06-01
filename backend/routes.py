@@ -11,7 +11,7 @@ Endpoints organized by module:
 """
 
 from flask import Blueprint, request, jsonify, abort, make_response
-from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification, Organization, PinnedSlot, TeacherPreference, Charge, Student, Classroom, Stream, SubjectCombination, TeachingGroup, GroupMembership
+from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification, Organization, PinnedSlot, TeacherPreference, Charge, Student, Classroom, Stream, SubjectCombination, TeachingGroup, GroupMembership, ClassSubjectConfig
 from datetime import datetime, timedelta, date
 from functools import wraps
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -718,6 +718,59 @@ def update_school_config():
             config.language_start_grade = str(data["language_start_grade"]).strip() or config.language_start_grade
         if "allow_group_override" in data:
             config.allow_group_override = bool(data["allow_group_override"])
+
+        # ---- Generation mode / zero period / assembly / class-teacher-first --
+        if "generation_mode" in data:
+            gm = str(data["generation_mode"]).strip().lower()
+            if gm not in ("global", "class_first"):
+                return jsonify({"error": "generation_mode must be 'global' or 'class_first'"}), 400
+            config.generation_mode = gm
+        if "class_teacher_first_period" in data:
+            config.class_teacher_first_period = bool(data["class_teacher_first_period"])
+
+        if "zero_period_enabled" in data:
+            config.zero_period_enabled = bool(data["zero_period_enabled"])
+        if "zero_period_start" in data:
+            config.zero_period_start = str(data["zero_period_start"]).strip() or config.zero_period_start
+        if "zero_period_duration" in data:
+            config.zero_period_duration = _parse_int(data["zero_period_duration"]) or config.zero_period_duration
+        if "zero_period_in_hours" in data:
+            config.zero_period_in_hours = bool(data["zero_period_in_hours"])
+        if "zero_period_in_workload" in data:
+            config.zero_period_in_workload = bool(data["zero_period_in_workload"])
+        if "zero_period_grades" in data:
+            raw = data["zero_period_grades"] or []
+            if not isinstance(raw, list):
+                return jsonify({"error": "zero_period_grades must be a list"}), 400
+            config.zero_period_grades = [str(g).strip() for g in raw if str(g).strip()]
+
+        if "assembly_mode" in data:
+            am = str(data["assembly_mode"]).strip().lower()
+            if am not in ("disabled", "daily", "day_wise", "grade_wise"):
+                return jsonify({"error": "assembly_mode invalid"}), 400
+            config.assembly_mode = am
+        if "assembly_duration" in data:
+            config.assembly_duration = _parse_int(data["assembly_duration"]) or config.assembly_duration
+        if "assembly_period" in data:
+            config.assembly_period = _parse_int(data["assembly_period"]) or config.assembly_period
+        if "assembly_grades" in data:
+            raw = data["assembly_grades"] or []
+            if not isinstance(raw, list):
+                return jsonify({"error": "assembly_grades must be a list"}), 400
+            config.assembly_grades = [str(g).strip() for g in raw if str(g).strip()]
+        if "assembly_schedule" in data:
+            raw = data["assembly_schedule"] or {}
+            if not isinstance(raw, dict):
+                return jsonify({"error": "assembly_schedule must be an object"}), 400
+            config.assembly_schedule = {str(k): [str(g).strip() for g in (v or [])]
+                                        for k, v in raw.items()}
+
+        if "has_short_break" in data:
+            config.has_short_break = bool(data["has_short_break"])
+        if "short_break_after_period" in data:
+            config.short_break_after_period = _parse_int(data["short_break_after_period"])
+        if "short_break_duration" in data:
+            config.short_break_duration = _parse_int(data["short_break_duration"]) or config.short_break_duration
 
         workload_changed = False
         if "target_contact_periods_per_week" in data:
@@ -2652,6 +2705,119 @@ def validate_student_coverage():
             return jsonify({"error": "No timetable to validate"}), 400
         result = validate_coverage(org_id, tid)
         return jsonify(result), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# ADMIN ENDPOINTS - Class-wise subject configuration
+# ============================================================================
+
+@api.route("/admin/class-subject-config", methods=["GET"])
+@role_required("admin", "principal")
+def get_class_subject_config():
+    """Per-class subject config. ?grade= filters to one grade.
+
+    Returns existing rows plus, for the requested grade, the list of subjects
+    assigned to that grade's batches so the UI can show every subject (even
+    those not yet configured, which fall back to the org-wide Subject default).
+    """
+    org_id = current_org_id()
+    grade = request.args.get("grade")
+    q = ClassSubjectConfig.query.filter_by(organization_id=org_id)
+    if grade:
+        q = q.filter_by(grade=str(grade))
+    rows = [c.to_dict() for c in q.all()]
+
+    grades = sorted({str(b.grade) for b in Batch.query.filter_by(organization_id=org_id).all()})
+    subjects_for_grade = []
+    if grade:
+        bids = {b.id for b in Batch.query.filter_by(organization_id=org_id, grade=str(grade)).all()}
+        seen = set()
+        for s in Subject.query.filter_by(organization_id=org_id).all():
+            if set(s.batch_ids or []) & bids and s.id not in seen:
+                seen.add(s.id)
+                subjects_for_grade.append({
+                    "subject_id": s.id, "name": s.name,
+                    "periods_per_week": s.periods_per_week,
+                    "max_periods_per_day": getattr(s, "max_periods_per_day", 1),
+                    "subject_type": getattr(s, "subject_type", "core"),
+                })
+    return jsonify({"configs": rows, "grades": grades,
+                    "subjects_for_grade": subjects_for_grade}), 200
+
+
+@api.route("/admin/class-subject-config", methods=["POST"])
+@role_required("admin")
+def save_class_subject_config():
+    """Bulk upsert per-class subject config rows.
+
+    Body: {"grade": "6", "items": [{subject_id, periods_per_week, min_periods,
+    max_periods, max_per_day, allow_consecutive, allow_daily, priority,
+    preferred_spread}, ...]}. Rows are matched on (grade, subject_id)."""
+    org_id = current_org_id()
+    data = request.get_json() or {}
+    grade = str(data.get("grade") or "").strip()
+    items = data.get("items")
+    if not grade or not isinstance(items, list):
+        return jsonify({"error": "grade and items[] are required"}), 400
+
+    saved = 0
+    for it in items:
+        sid = _parse_int(it.get("subject_id"))
+        if not sid:
+            continue
+        row = ClassSubjectConfig.query.filter_by(
+            organization_id=org_id, grade=grade, subject_id=sid).first()
+        if not row:
+            row = ClassSubjectConfig(organization_id=org_id, grade=grade, subject_id=sid)
+            db.session.add(row)
+        ppw = _parse_int(it.get("periods_per_week"))
+        if ppw is not None:
+            row.periods_per_week = max(0, ppw)
+        row.min_periods = _parse_int(it.get("min_periods"))
+        row.max_periods = _parse_int(it.get("max_periods"))
+        mpd = _parse_int(it.get("max_per_day"))
+        row.max_per_day = mpd if mpd and mpd > 0 else 1
+        row.allow_consecutive = bool(it.get("allow_consecutive", False))
+        row.allow_daily = bool(it.get("allow_daily", True))
+        pr = str(it.get("priority") or "medium").lower()
+        row.priority = pr if pr in ("high", "medium", "low") else "medium"
+        row.preferred_spread = str(it.get("preferred_spread") or "even")
+        saved += 1
+    db.session.commit()
+    return jsonify({"saved": saved}), 200
+
+
+@api.route("/admin/class-subject-config/<int:config_id>", methods=["DELETE"])
+@role_required("admin")
+def delete_class_subject_config(config_id):
+    """Delete one per-class subject config (reverts that subject to defaults)."""
+    org_id = current_org_id()
+    row = ClassSubjectConfig.query.filter_by(id=config_id, organization_id=org_id).first()
+    if not row:
+        return jsonify({"error": "Not found"}), 404
+    db.session.delete(row)
+    db.session.commit()
+    return jsonify({"message": "Deleted"}), 200
+
+
+@api.route("/admin/timetable-planning/validate", methods=["GET"])
+@role_required("admin", "principal")
+def validate_timetable_planning():
+    """Class-wise planning checks: subject weekly counts, assembly, zero period,
+    teacher double-booking and class-teacher-first. ?timetable_id= (else latest)."""
+    try:
+        from planning_validation import validate_planning
+        org_id = current_org_id()
+        tid = _parse_int(request.args.get("timetable_id"))
+        if not tid:
+            latest = Timetable.query.filter_by(organization_id=org_id).order_by(
+                Timetable.created_at.desc()).first()
+            tid = latest.id if latest else None
+        if not tid:
+            return jsonify({"error": "No timetable to validate"}), 400
+        return jsonify(validate_planning(org_id, tid)), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
