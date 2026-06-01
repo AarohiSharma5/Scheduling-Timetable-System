@@ -188,6 +188,10 @@ class SchedulingEngine:
             if self.conflicts:
                 self.warnings.append("Scheduling completed with conflicts")
 
+            # Step 7b: Pack every remaining in-day slot with a supervised
+            # activity so students are never left with a free/unattended period.
+            self._fill_gaps(batches, teachers, config)
+
             # Step 8: Save to database
             self._save_timetable(timetable_id, config)
 
@@ -938,6 +942,116 @@ class SchedulingEngine:
                 f"subject {req.subject_id} for batch {req.batch_id}"
             )
     
+    # ========================================================================
+    # GAP FILLING - no student left with a free/unattended period
+    # ========================================================================
+
+    def _activity_subjects(self):
+        """Get-or-create the supervised filler subjects used to pack free slots.
+
+        Marked subject_type='activity' so they're never auto-required, offered as
+        electives, or counted as compulsory — they only fill otherwise-empty slots.
+        """
+        names = ["Library", "Self-Study", "Sports & Games", "Art & Craft", "Remedial / Doubt-Clearing"]
+        out = []
+        for n in names:
+            s = Subject.query.filter_by(organization_id=self.organization_id, name=n).first()
+            if not s:
+                s = Subject(organization_id=self.organization_id, name=n, periods_per_week=0,
+                            max_periods_per_day=8, requires_double=False,
+                            subject_type="activity", batch_ids=[])
+                db.session.add(s)
+                db.session.flush()
+            elif s.subject_type != "activity":
+                s.subject_type = "activity"
+            out.append(s)
+        return out
+
+    def _block_subject(self):
+        s = Subject.query.filter_by(organization_id=self.organization_id,
+                                    name="Language / Elective Block").first()
+        if not s:
+            s = Subject(organization_id=self.organization_id, name="Language / Elective Block",
+                        periods_per_week=0, max_periods_per_day=8, requires_double=False,
+                        subject_type="activity", batch_ids=[])
+            db.session.add(s)
+            db.session.flush()
+        return s
+
+    def _pick_supervisor(self, teachers, day, period, batch):
+        """A teacher free at (day, period) to supervise a filler period.
+
+        Preference: the section's own class teacher, then non-teaching staff
+        (librarians/substitutes), then the least-loaded free teacher. Supervision
+        marks the teacher busy (no double-booking) but does not count toward their
+        teaching load. Returns None only if absolutely everyone is occupied.
+        """
+        free = [
+            t for t in teachers
+            if (t.id, day, period) not in self.teacher_busy
+            and (day, period) not in self.teacher_unavail.get(t.id, ())
+        ]
+        if not free:
+            return None
+        free.sort(key=lambda t: (
+            0 if t.class_teacher_batch_id == batch.id else 1,
+            0 if not t.takes_classes else 1,
+            self.teacher_load.get(t.id, 0),
+        ))
+        return free[0].id
+
+    def _fill_gaps(self, batches, teachers, config):
+        """Fill every empty in-day slot (except lunch) so no class is left free."""
+        from period_utils import working_days
+        days = working_days(config)
+        fillers = self._activity_subjects()
+        rooms_on = getattr(self, "rooms_enabled", False)
+        filled = 0
+
+        # 1) Section markers for reserved elective/language block periods, so the
+        #    class grid shows the block instead of a blank (students are in their
+        #    chosen group then).
+        batches_by_grade = {}
+        for b in batches:
+            batches_by_grade.setdefault(b.grade, []).append(b)
+        if getattr(self, "elective_reserved", None):
+            block_subj = self._block_subject()
+            for grade, slots in self.elective_reserved.items():
+                for b in batches_by_grade.get(grade, []):
+                    home = self.batch_home_room.get(b.id) if rooms_on else None
+                    for (d, p) in slots:
+                        if (Period(d, p), b.id) in self.timetable:
+                            continue
+                        self.timetable[(Period(d, p), b.id)] = (None, block_subj.id, b.id)
+                        self.slot_room[(d, p, b.id)] = home
+                        filled += 1
+
+        # 2) Genuine gaps -> supervised activity in the section's home room.
+        for bi, b in enumerate(batches):
+            day_len = self.batch_periods.get(b.id)
+            if not day_len:
+                continue
+            home = self.batch_home_room.get(b.id) if rooms_on else None
+            for di, day in enumerate(days):
+                for p in range(1, day_len + 1):
+                    if self.lunch_enabled and self.lunch_idx and p == self.lunch_idx:
+                        continue
+                    if (day, p, b.id) in self.occupied:
+                        continue
+                    f = fillers[(bi + di + p) % len(fillers)]
+                    tid = self._pick_supervisor(teachers, day, p, b)
+                    self.timetable[(Period(day, p), b.id)] = (tid, f.id, b.id)
+                    self.occupied.add((day, p, b.id))
+                    if tid is not None:
+                        self.teacher_busy.add((tid, day, p))
+                    self.slot_room[(day, p, b.id)] = home
+                    filled += 1
+
+        if filled:
+            self.warnings.append(
+                f"Packed {filled} free periods with supervised activities so no class is left unattended."
+            )
+
     # ========================================================================
     # DATABASE SAVING
     # ========================================================================

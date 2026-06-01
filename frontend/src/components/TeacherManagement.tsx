@@ -383,8 +383,8 @@ export default function TeacherManagement() {
           {!showForm && (
             <button onClick={() => setShowForm(true)} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
               + Add Teacher
-            </button>
-          )}
+          </button>
+        )}
         </div>
       </div>
 
@@ -427,7 +427,7 @@ export default function TeacherManagement() {
             </div>
             <input type="text" placeholder="Designation (e.g. Coordinator, PGT)" value={formData.designation} onChange={(e) => setFormData({ ...formData, designation: e.target.value })} className="border rounded px-3 py-2" />
             <input type="text" placeholder="Qualification (e.g. M.Sc, B.Ed)" value={formData.qualification} onChange={(e) => setFormData({ ...formData, qualification: e.target.value })} className="border rounded px-3 py-2" />
-          </div>
+            </div>
 
           {/* Subjects (profile labels) + experience */}
           <div className="grid grid-cols-2 gap-4">
@@ -557,10 +557,10 @@ export default function TeacherManagement() {
               </div>
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-3">
-              <label className="flex items-center">
+            <label className="flex items-center">
                 <input type="checkbox" checked={formData.is_class_teacher} onChange={(e) => setFormData({ ...formData, is_class_teacher: e.target.checked, class_teacher_batch_id: e.target.checked ? formData.class_teacher_batch_id : "" })} className="mr-2" />
-                Class Teacher
-              </label>
+              Class Teacher
+            </label>
               {formData.is_class_teacher && (
                 <select
                   value={formData.class_teacher_batch_id}
@@ -599,7 +599,7 @@ export default function TeacherManagement() {
             <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded">{editingId ? "Update" : "Create"}</button>
             <button type="button" onClick={resetForm} className="bg-gray-400 hover:bg-gray-500 text-white px-4 py-2 rounded">Cancel</button>
           </div>
-          </form>
+        </form>
         </div>
       )}
 
@@ -693,8 +693,8 @@ export default function TeacherManagement() {
                       <button onClick={() => setPrefTeacher(teacher)} className="bg-white hover:bg-purple-50 text-purple-700 border border-purple-300 text-sm font-medium px-3 py-1.5 rounded">Preferences</button>
                       <button onClick={() => handleDelete(teacher.id)} className="bg-red-600 hover:bg-red-700 text-white text-sm font-medium px-3 py-1.5 rounded">Delete</button>
                     </div>
-                  </td>
-                </tr>
+                </td>
+              </tr>
               );
             })}
           </tbody>

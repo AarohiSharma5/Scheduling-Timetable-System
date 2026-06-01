@@ -485,16 +485,16 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
                 );
               })}
           </div>
-        </div>
-      )}
+          </div>
+        )}
 
       {/* Table */}
       <div className="bg-white rounded-lg shadow-md overflow-hidden">
         <div className="px-4 py-3 border-b bg-slate-50 text-sm text-slate-600">
           {loading ? "Loading…" : `${students.length} student(s) · ${activeCount} active`}
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+      </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
             <thead className="bg-slate-100">
               <tr>
                 <th className="px-3 py-2 text-left font-semibold">Roll</th>
@@ -530,7 +530,7 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
                     {!scoped && (
                       <td className="px-3 py-2 whitespace-nowrap">
                         {s.class_grade}-{s.section}
-                      </td>
+                    </td>
                     )}
                     <td className="px-3 py-2 text-slate-600">{s.gender || "—"}</td>
                     <td className="px-3 py-2 text-xs whitespace-nowrap">{s.date_of_birth ? s.date_of_birth.slice(0, 10) : "—"}</td>
@@ -582,9 +582,9 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
                   </tr>
                 ))
               )}
-            </tbody>
-          </table>
-        </div>
+              </tbody>
+            </table>
+          </div>
       </div>
 
       {/* Add / Edit modal */}
@@ -867,7 +867,7 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
                   className="w-full border rounded px-3 py-2"
                 />
               </div>
-            </div>
+          </div>
 
             {!editingId && (
               <p className="text-xs text-slate-500">
@@ -890,7 +890,7 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
               </button>
             </div>
           </form>
-        </div>
+          </div>
       )}
 
       {/* Bulk import wizard */}
@@ -950,7 +950,7 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
               >
                 Cancel
               </button>
-            </div>
+          </div>
           </div>
         </div>
       )}
