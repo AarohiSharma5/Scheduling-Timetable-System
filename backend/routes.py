@@ -40,6 +40,7 @@ from student_service import (
     sections_for_grade,
     student_code_allocator,
     admission_no_allocator,
+    section_capacities,
     DEFAULT_SECTION_CAPACITY,
     DEFAULT_ADMISSION_BUFFER,
 )
@@ -1473,11 +1474,15 @@ def student_section_strengths():
     if not class_grade:
         return jsonify({"error": "class_grade is required"}), 400
     strengths = section_strengths(org_id, class_grade)
+    caps, default = section_capacities(org_id, class_grade)
     return jsonify({
         "class_grade": str(class_grade),
         "sections": sections_for_grade(org_id, class_grade),
         "strengths": strengths,
-        "capacity": DEFAULT_SECTION_CAPACITY,
+        # Per-section capacity (from the batch override / home room / org default).
+        "capacities": caps,
+        # Org-wide default for any section without its own capacity.
+        "capacity": default,
         "buffer": DEFAULT_ADMISSION_BUFFER,
     }), 200
 

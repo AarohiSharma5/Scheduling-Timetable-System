@@ -65,7 +65,9 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
   const [students, setStudents] = useState<Student[]>([]);
   const [batches, setBatches] = useState<Batch[]>([]);
   const [strengths, setStrengths] = useState<Record<string, number>>({});
-  const [capacity, setCapacity] = useState(45);
+  const [capacity, setCapacity] = useState(50);
+  const [capacities, setCapacities] = useState<Record<string, number>>({});
+  const capOf = (section: string) => capacities[section] ?? capacity;
 
   const [selectedClass, setSelectedClass] = useState(scopedGrade || "");
   const [selectedSection, setSelectedSection] = useState(scopedSection || "");
@@ -157,9 +159,11 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
     try {
       const data = await api.admin.students.sections(grade);
       setStrengths(data.strengths || {});
+      setCapacities(data.capacities || {});
       if (data.capacity) setCapacity(data.capacity);
     } catch {
       setStrengths({});
+      setCapacities({});
     }
   }, [scoped, scopedGrade, selectedClass]);
 
@@ -430,14 +434,15 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
             {Object.entries(strengths)
               .sort(([a], [b]) => a.localeCompare(b))
               .map(([sec, count]) => {
-                const pct = Math.min(100, Math.round((count / capacity) * 100));
-                const full = count >= capacity;
+                const cap = capOf(sec);
+                const pct = Math.min(100, Math.round((count / cap) * 100));
+                const full = count >= cap;
                 return (
                   <div key={sec} className="w-32">
                     <div className="flex justify-between text-xs mb-1">
                       <span className="font-medium text-slate-700">Sec {sec}</span>
                       <span className={full ? "text-red-600 font-semibold" : "text-slate-500"}>
-                        {count}/{capacity}
+                        {count}/{cap}
                       </span>
                     </div>
                     <div className="h-2 bg-slate-100 rounded">
@@ -830,7 +835,7 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
                 .filter((s) => s !== transferStudent.section)
                 .map((s) => (
                   <option key={s} value={s}>
-                    Section {s} ({strengths[s] ?? 0}/{capacity})
+                    Section {s} ({strengths[s] ?? 0}/{capOf(s)})
                   </option>
                 ))}
             </select>
