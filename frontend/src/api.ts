@@ -176,6 +176,39 @@ export const api = {
       },
     },
 
+    // Rooms / facilities
+    rooms: {
+      list: async () => {
+        const { data } = await axiosInstance.get("/admin/rooms");
+        return data;
+      },
+      create: async (room: any) => {
+        const { data } = await axiosInstance.post("/admin/rooms", room);
+        return data;
+      },
+      update: async (id: number, updates: any) => {
+        const { data } = await axiosInstance.put(`/admin/rooms/${id}`, updates);
+        return data;
+      },
+      delete: async (id: number) => {
+        await axiosInstance.delete(`/admin/rooms/${id}`);
+      },
+      autoGenerate: async (options: any = {}) => {
+        const { data } = await axiosInstance.post("/admin/rooms/auto-generate", options);
+        return data;
+      },
+      // One-shot: add sections to fit capacity, generate rooms across floors,
+      // assign home rooms, and redistribute students within the limit.
+      setup: async (options: any = {}) => {
+        const { data } = await axiosInstance.post("/admin/rooms/setup", options);
+        return data;
+      },
+      assignHome: async () => {
+        const { data } = await axiosInstance.post("/admin/rooms/assign-home", {});
+        return data;
+      },
+    },
+
     // Subjects
     subjects: {
       list: async () => {

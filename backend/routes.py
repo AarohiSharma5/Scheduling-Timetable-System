@@ -11,7 +11,7 @@ Endpoints organized by module:
 """
 
 from flask import Blueprint, request, jsonify, abort, make_response
-from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification, Organization, PinnedSlot, TeacherPreference, Charge, Student
+from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification, Organization, PinnedSlot, TeacherPreference, Charge, Student, Classroom
 from datetime import datetime, timedelta, date
 from functools import wraps
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -684,6 +684,17 @@ def update_school_config():
             if not isinstance(raw, list):
                 return jsonify({"error": "pre_primary_support_subjects must be a list"}), 400
             config.pre_primary_support_subjects = [str(s).strip() for s in raw if str(s).strip()]
+
+        if "default_room_capacity" in data:
+            cap = _parse_int(data["default_room_capacity"])
+            if not cap or cap <= 0:
+                return jsonify({"error": "default_room_capacity must be a positive integer"}), 400
+            config.default_room_capacity = cap
+        if "ground_max_concurrent_batches" in data:
+            gm = _parse_int(data["ground_max_concurrent_batches"])
+            if gm is None or gm < 1:
+                return jsonify({"error": "ground_max_concurrent_batches must be at least 1"}), 400
+            config.ground_max_concurrent_batches = gm
 
         workload_changed = False
         if "target_contact_periods_per_week" in data:
@@ -1499,7 +1510,7 @@ def create_student():
         elif not section:
             section, over_capacity = choose_section(
                 org_id, class_grade,
-                capacity=int(data.get("capacity") or DEFAULT_SECTION_CAPACITY),
+                capacity=_parse_int(data.get("capacity")),
                 buffer=int(data.get("buffer") or DEFAULT_ADMISSION_BUFFER),
             )
 
@@ -2040,6 +2051,8 @@ def create_batch():
             student_count=data.get("student_count", 0),
             periods_per_day=data.get("periods_per_day") or None,
             homeroom_teacher_id=data.get("homeroom_teacher_id") or None,
+            room_id=data.get("room_id") or None,
+            capacity=_parse_int(data.get("capacity")),
             subject_ids=data.get("subject_ids", []),
         )
         db.session.add(batch)
@@ -2071,6 +2084,8 @@ def update_batch(batch_id):
         if "student_count" in data: batch.student_count = data["student_count"]
         if "periods_per_day" in data: batch.periods_per_day = data["periods_per_day"] or None
         if "homeroom_teacher_id" in data: batch.homeroom_teacher_id = data["homeroom_teacher_id"] or None
+        if "room_id" in data: batch.room_id = data["room_id"] or None
+        if "capacity" in data: batch.capacity = _parse_int(data["capacity"])
         if "subject_ids" in data: batch.subject_ids = data["subject_ids"]
         
         batch.updated_at = datetime.utcnow()
@@ -2090,6 +2105,169 @@ def delete_batch(batch_id):
         db.session.delete(batch)
         db.session.commit()
         return jsonify({"message": "Batch deleted"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# ADMIN ENDPOINTS - Rooms / Facilities
+# ============================================================================
+
+@api.route("/admin/rooms", methods=["GET"])
+@role_required("admin", "principal")
+def list_rooms():
+    """All rooms for the caller's organization, ordered by floor then code."""
+    rooms = (
+        Classroom.query.filter_by(organization_id=current_org_id())
+        .order_by(Classroom.floor.asc().nullsfirst(), Classroom.room_id.asc())
+        .all()
+    )
+    return jsonify([r.to_dict() for r in rooms]), 200
+
+
+def _room_capacity_default(org_id):
+    cfg = SchoolConfig.query.filter_by(organization_id=org_id).first()
+    return (cfg.default_room_capacity if cfg and cfg.default_room_capacity else 50)
+
+
+@api.route("/admin/rooms", methods=["POST"])
+@role_required("admin")
+def create_room():
+    """Create a room. room_id (code) must be unique within the organization."""
+    try:
+        from room_utils import ALL_ROOM_TYPES
+        data = request.get_json() or {}
+        org_id = current_org_id()
+        code = (data.get("room_id") or "").strip()
+        name = (data.get("room_name") or "").strip()
+        if not code or not name:
+            return jsonify({"error": "room_id (code) and room_name are required"}), 400
+        room_type = (data.get("room_type") or "regular").strip().lower()
+        if room_type not in ALL_ROOM_TYPES:
+            return jsonify({"error": f"room_type must be one of {ALL_ROOM_TYPES}"}), 400
+        if Classroom.query.filter_by(organization_id=org_id, room_id=code).first():
+            return jsonify({"error": f"A room with code '{code}' already exists"}), 409
+        cap = _parse_int(data.get("capacity")) or _room_capacity_default(org_id)
+        room = Classroom(
+            organization_id=org_id,
+            room_id=code,
+            room_name=name,
+            capacity=cap,
+            room_type=room_type,
+            floor=_parse_int(data.get("floor")),
+            facilities=data.get("facilities") or [],
+        )
+        db.session.add(room)
+        db.session.commit()
+        return jsonify(room.to_dict()), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/rooms/<int:room_id>", methods=["PUT"])
+@role_required("admin")
+def update_room(room_id):
+    """Update a room."""
+    try:
+        from room_utils import ALL_ROOM_TYPES
+        room = owned_or_404(Classroom, room_id)
+        data = request.get_json() or {}
+        if "room_id" in data and data["room_id"]:
+            new_code = data["room_id"].strip()
+            clash = Classroom.query.filter(
+                Classroom.organization_id == room.organization_id,
+                Classroom.room_id == new_code,
+                Classroom.id != room.id,
+            ).first()
+            if clash:
+                return jsonify({"error": f"A room with code '{new_code}' already exists"}), 409
+            room.room_id = new_code
+        if "room_name" in data and data["room_name"]: room.room_name = data["room_name"].strip()
+        if "room_type" in data:
+            rt = (data["room_type"] or "regular").strip().lower()
+            if rt not in ALL_ROOM_TYPES:
+                return jsonify({"error": f"room_type must be one of {ALL_ROOM_TYPES}"}), 400
+            room.room_type = rt
+        if "capacity" in data: room.capacity = _parse_int(data["capacity"]) or room.capacity
+        if "floor" in data: room.floor = _parse_int(data["floor"])
+        if "facilities" in data: room.facilities = data["facilities"] or []
+        db.session.commit()
+        return jsonify(room.to_dict()), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/rooms/<int:room_id>", methods=["DELETE"])
+@role_required("admin")
+def delete_room(room_id):
+    """Delete a room (and detach any batch that used it as a home classroom)."""
+    try:
+        room = owned_or_404(Classroom, room_id)
+        Batch.query.filter_by(room_id=room.id).update({"room_id": None})
+        db.session.delete(room)
+        db.session.commit()
+        return jsonify({"message": "Room deleted"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/rooms/auto-generate", methods=["POST"])
+@role_required("admin")
+def auto_generate_rooms():
+    """Generate a default room inventory across floors for the organization.
+
+    Body (optional): { regular_rooms, regular_capacity, floors,
+                       special: [{room_type, room_name, capacity}], replace }
+    With no body it lays out a sensible default: enough regular classrooms to
+    cover every section plus the standard set of special rooms + a ground.
+    """
+    try:
+        from room_service import generate_default_rooms
+        data = request.get_json() or {}
+        org_id = current_org_id()
+        created = generate_default_rooms(org_id, options=data)
+        db.session.commit()
+        return jsonify({"created": created,
+                        "rooms": [r.to_dict() for r in
+                                  Classroom.query.filter_by(organization_id=org_id).all()]}), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/rooms/setup", methods=["POST"])
+@role_required("admin")
+def setup_rooms():
+    """One-shot capacity setup: add sections to fit students at the configured
+    capacity, (re)generate the room inventory across floors, assign each section
+    a fixed home room, and redistribute students so none exceeds the limit."""
+    try:
+        from room_service import setup_capacity
+        org_id = current_org_id()
+        result = setup_capacity(org_id, options=request.get_json() or {})
+        db.session.commit()
+        return jsonify(result), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/rooms/assign-home", methods=["POST"])
+@role_required("admin")
+def assign_home_rooms():
+    """Give every regular (non-pre-primary handled too) batch a fixed home room
+    and set each section's capacity from its room, then redistribute students so
+    no section exceeds capacity."""
+    try:
+        from room_service import assign_home_rooms_to_batches
+        org_id = current_org_id()
+        result = assign_home_rooms_to_batches(org_id)
+        db.session.commit()
+        return jsonify(result), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500

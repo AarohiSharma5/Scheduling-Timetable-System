@@ -8,12 +8,23 @@ interface Batch {
   student_count: number;
   periods_per_day: number | null;
   homeroom_teacher_id: number | null;
+  room_id: number | null;
+  capacity: number | null;
 }
 
 interface TeacherLite {
   id: number;
   name: string;
   teacher_code?: string;
+}
+
+interface RoomLite {
+  id: number;
+  room_id: string;
+  room_name: string;
+  room_type: string;
+  capacity: number;
+  floor: number | null;
 }
 
 // Mirror of backend period_utils.is_pre_primary so the homeroom selector only
@@ -30,6 +41,7 @@ const isPrePrimary = (grade: string): boolean => {
 export default function BatchManagement() {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [teachers, setTeachers] = useState<TeacherLite[]>([]);
+  const [rooms, setRooms] = useState<RoomLite[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showForm, setShowForm] = useState(false);
@@ -41,6 +53,8 @@ export default function BatchManagement() {
     student_count: 30,
     periods_per_day: "" as number | "",
     homeroom_teacher_id: "" as number | "",
+    room_id: "" as number | "",
+    capacity: "" as number | "",
   });
 
   // "Set day length by grade" controls.
@@ -87,12 +101,14 @@ export default function BatchManagement() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [res, teacherRes] = await Promise.all([
+      const [res, teacherRes, roomRes] = await Promise.all([
         api.admin.batches.list(),
         api.admin.teachers.list().catch(() => []),
+        api.admin.rooms.list().catch(() => []),
       ]);
       setBatches(res || []);
       setTeachers((teacherRes || []).map((t: any) => ({ id: t.id, name: t.name, teacher_code: t.teacher_code })));
+      setRooms(roomRes || []);
     } catch (err) {
       setError("Failed to load batches");
       console.error(err);
@@ -135,6 +151,8 @@ export default function BatchManagement() {
       student_count: batch.student_count,
       periods_per_day: batch.periods_per_day ?? "",
       homeroom_teacher_id: batch.homeroom_teacher_id ?? "",
+      room_id: batch.room_id ?? "",
+      capacity: batch.capacity ?? "",
     });
     setEditingId(batch.id);
     setShowForm(true);
@@ -147,6 +165,8 @@ export default function BatchManagement() {
       student_count: 30,
       periods_per_day: "",
       homeroom_teacher_id: "",
+      room_id: "",
+      capacity: "",
     });
     setEditingId(null);
     setShowForm(false);
@@ -239,6 +259,49 @@ export default function BatchManagement() {
             </div>
           )}
 
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Home classroom (fixed)</label>
+              <select
+                value={formData.room_id}
+                onChange={(e) => {
+                  const id = e.target.value ? Number(e.target.value) : "";
+                  const room = rooms.find((r) => r.id === id);
+                  setFormData({
+                    ...formData,
+                    room_id: id,
+                    // Default the section capacity to the chosen room's capacity.
+                    capacity: room && formData.capacity === "" ? room.capacity : formData.capacity,
+                  });
+                }}
+                className="border rounded px-3 py-2 w-full"
+              >
+                <option value="">Not assigned</option>
+                {rooms
+                  .filter((r) => r.room_type === "regular")
+                  .map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.room_id} — {r.room_name} (cap {r.capacity})
+                    </option>
+                  ))}
+              </select>
+              <p className="text-xs text-slate-500 mt-1">Students stay here for regular subjects; teachers come to them.</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Section capacity</label>
+              <input
+                type="number"
+                placeholder="blank = room / school default"
+                value={formData.capacity}
+                onChange={(e) => setFormData({ ...formData, capacity: e.target.value ? Number(e.target.value) : "" })}
+                className="border rounded px-3 py-2 w-full"
+                min="1"
+                max="200"
+              />
+              <p className="text-xs text-slate-500 mt-1">Max students in this section. Distribution never exceeds it.</p>
+            </div>
+          </div>
+
           <div className="flex gap-2">
             <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded">
               {editingId ? "Update" : "Create"}
@@ -303,6 +366,8 @@ export default function BatchManagement() {
               <th className="px-4 py-2 text-left">Section</th>
               <th className="px-4 py-2 text-left">Students</th>
               <th className="px-4 py-2 text-left">Periods/Day</th>
+              <th className="px-4 py-2 text-left">Home room</th>
+              <th className="px-4 py-2 text-left">Capacity</th>
               <th className="px-4 py-2 text-left">Homeroom</th>
               <th className="px-4 py-2 text-left">Actions</th>
             </tr>
@@ -314,6 +379,15 @@ export default function BatchManagement() {
                 <td className="px-4 py-2">{batch.section}</td>
                 <td className="px-4 py-2">{batch.student_count}</td>
                 <td className="px-4 py-2">{batch.periods_per_day ?? <span className="text-slate-400">full day</span>}</td>
+                <td className="px-4 py-2">
+                  {batch.room_id
+                    ? (() => {
+                        const r = rooms.find((x) => x.id === batch.room_id);
+                        return r ? `${r.room_id} — ${r.room_name}` : `#${batch.room_id}`;
+                      })()
+                    : <span className="text-slate-400">unassigned</span>}
+                </td>
+                <td className="px-4 py-2">{batch.capacity ?? <span className="text-slate-400">default</span>}</td>
                 <td className="px-4 py-2">
                   {isPrePrimary(batch.grade)
                     ? (batch.homeroom_teacher_id

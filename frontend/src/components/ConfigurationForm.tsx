@@ -15,6 +15,8 @@ interface SchoolConfig {
   class_teacher_hours_per_week: number;
   pre_primary_mode: "single" | "specialist";
   pre_primary_support_subjects: string[];
+  default_room_capacity: number;
+  ground_max_concurrent_batches: number;
 }
 
 const toMinutes = (t: string): number => {
@@ -43,6 +45,8 @@ export default function ConfigurationForm() {
     class_teacher_hours_per_week: 5,
     pre_primary_mode: "single" as "single" | "specialist",
     pre_primary_support_subjects: ["Art", "Music", "Dance", "PE"] as string[],
+    default_room_capacity: 50,
+    ground_max_concurrent_batches: 4,
   });
 
   // Number of periods is derived from the school hours, not typed in — this is
@@ -349,6 +353,50 @@ export default function ConfigurationForm() {
               </p>
             </div>
           )}
+        </div>
+
+        {/* Rooms & class size */}
+        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
+          <h3 className="font-semibold text-slate-900 mb-1">🏫 Rooms &amp; class size</h3>
+          <p className="text-sm text-slate-600 mb-3">
+            These drive how students are distributed across sections and how the ground is shared.
+            Manage the actual room inventory (classrooms, labs, art/music/dance rooms, library, ground)
+            under the <strong>Rooms</strong> tab.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Max students per class (default room capacity)
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="200"
+                value={formData.default_room_capacity}
+                onChange={(e) => setFormData({ ...formData, default_room_capacity: Number(e.target.value) })}
+                className="border rounded px-3 py-2 w-full"
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                Used when a room/section has no explicit capacity. No section is filled beyond its limit.
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Batches allowed on the ground at once (games period)
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="20"
+                value={formData.ground_max_concurrent_batches}
+                onChange={(e) => setFormData({ ...formData, ground_max_concurrent_batches: Number(e.target.value) })}
+                className="border rounded px-3 py-2 w-full"
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                The scheduler won't put more than this many classes on the ground in the same period.
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* Summary */}

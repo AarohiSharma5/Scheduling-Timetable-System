@@ -164,6 +164,10 @@ class SchedulingEngine:
             # Step 5: Build per-teacher/subject constraint caches.
             self._setup_caches(teachers, subjects)
 
+            # Room/facility awareness (home rooms + special rooms + ground limit).
+            # No-op when the org has no rooms configured (backward compatible).
+            self._setup_rooms(batches, subjects, config)
+
             # Step 6: Generate the (batch, subject) requirements.
             requirements = self._calculate_requirements(batches, subjects, teachers)
             if not requirements:
@@ -407,6 +411,90 @@ class SchedulingEngine:
                     f"teacher set; scheduling it with subject specialists instead"
                 )
 
+    def _setup_rooms(self, batches, subjects, config):
+        """Build room pools: fixed home room per batch + shared special rooms.
+
+        Students sit in their section's fixed home room for regular subjects;
+        co-curricular / lab subjects send the batch to a shared special room of
+        the matching type (art/music/dance/lab/library/activity) and PE/games to
+        the ground (capped at ground_max_concurrent_batches simultaneous batches).
+        """
+        from room_utils import required_room_type
+        from models import Classroom
+
+        rooms_q = Classroom.query
+        if self.organization_id is not None:
+            rooms_q = rooms_q.filter_by(organization_id=self.organization_id)
+        rooms = rooms_q.all()
+
+        self.rooms_enabled = bool(rooms)
+        self.slot_room = {}                 # (day, period, batch_id) -> room label
+        self.room_busy = {}                 # (day, period, room_name) -> batch_id
+        self.ground_count = {}              # (day, period) -> batches on ground
+        self.ground_limit = getattr(config, "ground_max_concurrent_batches", 4) or 4
+        self.ground_name = None
+        self.batch_home_room = {}
+        self.special_rooms = {}             # room_type -> [room_name, ...]
+        self.subject_room_type = {}         # subject_id -> special type or None
+
+        if not self.rooms_enabled:
+            return
+
+        room_by_id = {r.id: r for r in rooms}
+        for b in batches:
+            r = room_by_id.get(getattr(b, "room_id", None))
+            self.batch_home_room[b.id] = r.room_name if r else None
+
+        for r in rooms:
+            if r.room_type == "regular":
+                continue
+            if r.room_type == "ground":
+                self.ground_name = self.ground_name or r.room_name
+                continue
+            self.special_rooms.setdefault(r.room_type, []).append(r.room_name)
+
+        for s in subjects:
+            rt = required_room_type(s.name, bool(getattr(s, "requires_double", False)))
+            if rt == "ground":
+                self.subject_room_type[s.id] = "ground" if self.ground_name else None
+            elif rt and self.special_rooms.get(rt):
+                self.subject_room_type[s.id] = rt
+            else:
+                # No matching special room exists -> taught in the home classroom.
+                self.subject_room_type[s.id] = None
+
+    def _room_available(self, subject_id, day, period) -> bool:
+        """Whether a suitable room exists for this subject at (day, period)."""
+        if not getattr(self, "rooms_enabled", False):
+            return True
+        rt = self.subject_room_type.get(subject_id)
+        if not rt:
+            return True  # home classroom: always available to its own batch
+        if rt == "ground":
+            return self.ground_count.get((day, period), 0) < self.ground_limit
+        pool = self.special_rooms.get(rt, [])
+        if not pool:
+            return True
+        used = sum(1 for name in pool if (day, period, name) in self.room_busy)
+        return used < len(pool)
+
+    def _reserve_room(self, subject_id, batch_id, day, period):
+        """Reserve and return the room label for a committed placement."""
+        rt = self.subject_room_type.get(subject_id)
+        if not rt:
+            return self.batch_home_room.get(batch_id)
+        if rt == "ground":
+            n = self.ground_count.get((day, period), 0) + 1
+            self.ground_count[(day, period)] = n
+            # Distinct numbered labels so the (shared) ground isn't flagged as a
+            # room double-booking by the manual-edit conflict checker.
+            return f"{self.ground_name} #{n}" if self.ground_name else self.batch_home_room.get(batch_id)
+        for name in self.special_rooms.get(rt, []):
+            if (day, period, name) not in self.room_busy:
+                self.room_busy[(day, period, name)] = batch_id
+                return name
+        return self.batch_home_room.get(batch_id)
+
     def _calculate_requirements(self, batches, subjects, teachers) -> List[Requirement]:
         """Build one Requirement per (batch, subject) the batch needs."""
         subject_by_id = {s.id: s for s in subjects}
@@ -535,6 +623,9 @@ class SchedulingEngine:
             seen = self.batch_day_subject.get((batch_id, day, subject_id), 0)
             if seen >= self.subject_max_per_day.get(subject_id, 1):
                 return False
+        # Room/facility availability (special rooms + ground concurrency).
+        if not self._room_available(subject_id, day, period):
+            return False
         return True
 
     def _commit(self, teacher_id, subject_id, batch_id, day, period):
@@ -548,6 +639,9 @@ class SchedulingEngine:
         self.batch_schedule[batch_id][subject_id] = self.batch_schedule[batch_id].get(subject_id, 0) + 1
         key = (batch_id, day, subject_id)
         self.batch_day_subject[key] = self.batch_day_subject.get(key, 0) + 1
+        # Reserve the room this placement uses (home room or a special room).
+        if getattr(self, "rooms_enabled", False):
+            self.slot_room[(day, period, batch_id)] = self._reserve_room(subject_id, batch_id, day, period)
 
     # ========================================================================
     # SOFT-PREFERENCE / WORKLOAD SCORING
@@ -779,7 +873,8 @@ class SchedulingEngine:
                 period_number=slot.period_num,
                 batch_id=batch_id,
                 teacher_id=teacher_id,
-                subject_id=subject_id
+                subject_id=subject_id,
+                room=self.slot_room.get((slot.day, slot.period_num, batch_id)),
             )
             db.session.add(timetable_slot)
 

@@ -76,6 +76,12 @@ class Batch(db.Model):
     # (and the org is in single-teacher mode) this teacher takes most subjects for
     # the class; null falls back to the class teacher of this batch.
     homeroom_teacher_id = db.Column(db.Integer, db.ForeignKey("teachers.id"))
+    # Fixed "home" classroom this section sits in for regular subjects. Students
+    # only leave it for co-curricular subjects (art/music/dance/PE/lab/library).
+    room_id = db.Column(db.Integer, db.ForeignKey("classrooms.id"))
+    # Effective seat capacity for this section. Null = fall back to the home
+    # room's capacity, else the org default. Student distribution respects it.
+    capacity = db.Column(db.Integer)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -88,6 +94,8 @@ class Batch(db.Model):
             "subject_ids": self.subject_ids or [],
             "periods_per_day": self.periods_per_day,
             "homeroom_teacher_id": self.homeroom_teacher_id,
+            "room_id": self.room_id,
+            "capacity": self.capacity,
             "display_name": f"Grade {self.grade} - Section {self.section}",
         }
 
@@ -358,6 +366,11 @@ class SchoolConfig(db.Model):
     pre_primary_mode = db.Column(db.String(20), nullable=False, default="single")
     # Subjects that always go to a specialist teacher even in single-teacher mode.
     pre_primary_support_subjects = db.Column(db.JSON, default=list)
+    # Default number of students a classroom/section can hold (editable per room
+    # and per batch). Student section-distribution never exceeds the effective cap.
+    default_room_capacity = db.Column(db.Integer, nullable=False, default=50)
+    # How many batches may use the ground/playfield simultaneously (games period).
+    ground_max_concurrent_batches = db.Column(db.Integer, nullable=False, default=4)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -380,6 +393,8 @@ class SchoolConfig(db.Model):
             "pre_primary_support_subjects": (self.pre_primary_support_subjects
                                              if self.pre_primary_support_subjects
                                              else list(DEFAULT_SUPPORT_SUBJECTS)),
+            "default_room_capacity": self.default_room_capacity or 50,
+            "ground_max_concurrent_batches": self.ground_max_concurrent_batches or 4,
         }
 
 
@@ -616,15 +631,23 @@ class Student(db.Model):
 class Classroom(db.Model):
     __tablename__ = "classrooms"
     id = db.Column(db.Integer, primary_key=True)
-    room_id = db.Column(db.String(50), unique=True, nullable=False)  # R101, R201, etc.
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
+    room_id = db.Column(db.String(50), nullable=False)  # Per-org code: G01, 101, LAB1, GROUND
     room_name = db.Column(db.String(120), nullable=False)  # "Classroom 5A", "Physics Lab"
     capacity = db.Column(db.Integer, nullable=False)  # Max students
-    room_type = db.Column(db.String(100), nullable=False)  # Classroom, Lab, Library, Hall, Activity
+    # Canonical type: "regular", "lab", "library", "art", "music", "dance",
+    # "indoor_games", "ground", "hall", "activity". Special types are the ones
+    # students travel to for co-curricular periods.
+    room_type = db.Column(db.String(100), nullable=False, default="regular")
     assigned_class = db.Column(db.String(20))  # Which class uses this as primary room (e.g., "5A")
     facilities = db.Column(db.JSON, default=list)  # ["Projector", "AC", "Smart Board"]
-    floor = db.Column(db.Integer)  # Ground floor, 1st floor, etc.
+    floor = db.Column(db.Integer)  # 0 = ground floor, 1 = first floor, etc.
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
+
+    __table_args__ = (
+        db.UniqueConstraint("organization_id", "room_id", name="uq_classroom_org_code"),
+    )
+
     def to_dict(self):
         return {
             "id": self.id,

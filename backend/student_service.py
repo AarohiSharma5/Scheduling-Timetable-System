@@ -16,7 +16,7 @@ import re
 from collections import defaultdict
 from datetime import date
 
-from models import db, Student, Batch
+from models import db, Student, Batch, Classroom, SchoolConfig
 
 # How many students a single section can hold before it's considered "full".
 DEFAULT_SECTION_CAPACITY = 45
@@ -191,30 +191,113 @@ def section_strengths(org_id, class_grade, active_only=True):
     return out
 
 
-def choose_section(org_id, class_grade, capacity=DEFAULT_SECTION_CAPACITY,
+def org_default_capacity(org_id):
+    """The organization's default per-room/section capacity (config, else 45)."""
+    cfg = SchoolConfig.query.filter_by(organization_id=org_id).first()
+    if cfg and cfg.default_room_capacity:
+        return cfg.default_room_capacity
+    return DEFAULT_SECTION_CAPACITY
+
+
+def section_capacities(org_id, class_grade):
+    """Per-section seat capacity for a grade: batch override → home-room → default.
+
+    Returns ``(caps_dict, default_capacity)``.
+    """
+    default = org_default_capacity(org_id)
+    caps = {}
+    for b in Batch.query.filter_by(organization_id=org_id, grade=str(class_grade)).all():
+        if b.capacity:
+            cap = b.capacity
+        elif b.room_id:
+            room = Classroom.query.get(b.room_id)
+            cap = (room.capacity if room and room.capacity else default)
+        else:
+            cap = default
+        caps[b.section] = cap
+    return caps, default
+
+
+def choose_section(org_id, class_grade, capacity=None,
                    buffer=DEFAULT_ADMISSION_BUFFER):
-    """Pick the section a new student should join.
+    """Pick the section a new student should join (capacity-aware).
 
     Strategy (matches the spec example 9A=41, 9B=42, 9C=40 -> new joins 9C):
       * prefer the section with the *lowest* current strength,
       * only among sections still under (capacity - buffer),
-      * fall back to the global lowest-strength section (flagged over-capacity)
-        if every section is already full.
+      * never choose a section already at its hard capacity unless EVERY section
+        is full (in which case ``over_capacity`` is returned True).
 
-    Returns ``(section_label, over_capacity)``. If no sections are configured
-    yet, defaults to "A".
+    Capacity is per-section (from the batch override / home room / org default).
+    Passing an explicit ``capacity`` forces a uniform cap for every section.
+    Returns ``(section_label, over_capacity)``; defaults to "A" when no sections.
     """
     strengths = section_strengths(org_id, class_grade)
     if not strengths:
         return "A", False
 
-    soft_cap = max(0, capacity - buffer)
-    under = {sec: n for sec, n in strengths.items() if n < soft_cap}
-    pool = under or strengths
-    over_capacity = not under
+    caps, default = section_capacities(org_id, class_grade)
+
+    def cap_of(sec):
+        if capacity is not None:
+            return capacity
+        return caps.get(sec, default)
+
+    under_hard = {s: n for s, n in strengths.items() if n < cap_of(s)}
+    under_soft = {s: n for s, n in strengths.items() if n < max(0, cap_of(s) - buffer)}
+    pool = under_soft or under_hard or strengths
+    over_capacity = not under_hard
     # Lowest strength wins; ties broken alphabetically for stable, predictable output.
     section = min(sorted(pool.keys()), key=lambda sec: pool[sec])
     return section, over_capacity
+
+
+def distribute_grade(org_id, class_grade):
+    """Rebalance a grade's active students across its sections within capacity.
+
+    Moves the minimum number of (alphabetically-last) students out of any
+    over-capacity section into the section with the most free space, then
+    resequences roll numbers everywhere. Returns a summary including any
+    unavoidable overflow (total students > total seats). Does not commit.
+    """
+    caps, default = section_capacities(org_id, class_grade)
+    if not caps:
+        return {"moved": 0, "overflow": 0, "sections": {}}
+
+    by_sec = {sec: [] for sec in caps}
+    for stu in Student.query.filter_by(organization_id=org_id, class_grade=str(class_grade)).all():
+        if (stu.status or "").strip().lower() not in ACTIVE_STATUSES:
+            continue
+        by_sec.setdefault(stu.section, [])
+        caps.setdefault(stu.section, default)
+        by_sec[stu.section].append(stu)
+    for sec in by_sec:
+        by_sec[sec].sort(key=_student_name_key)
+
+    moved = 0
+    guard = 0
+    while guard < 100000:
+        guard += 1
+        over = [s for s in by_sec if len(by_sec[s]) > caps.get(s, default)]
+        if not over:
+            break
+        src = max(over, key=lambda s: len(by_sec[s]) - caps.get(s, default))
+        dest = max(by_sec.keys(), key=lambda s: caps.get(s, default) - len(by_sec[s]))
+        if caps.get(dest, default) - len(by_sec[dest]) <= 0:
+            break  # every section full -> unavoidable overflow
+        stu = by_sec[src].pop()  # alphabetically last leaves first
+        stu.section = dest
+        stu.class_grade = str(class_grade)
+        by_sec[dest].append(stu)
+        by_sec[dest].sort(key=_student_name_key)
+        moved += 1
+
+    for sec in list(by_sec.keys()):
+        resequence_rolls(org_id, class_grade, sec)
+
+    overflow = sum(max(0, len(by_sec[s]) - caps.get(s, default)) for s in by_sec)
+    return {"moved": moved, "overflow": overflow,
+            "sections": {s: len(by_sec[s]) for s in by_sec}}
 
 
 def fill_missing_rolls(org_id, class_grade, section):
