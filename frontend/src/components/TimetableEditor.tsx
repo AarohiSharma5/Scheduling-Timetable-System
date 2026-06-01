@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 
-interface PeriodRow { number: number; start: string; end: string; is_lunch: boolean; }
+interface PeriodRow { number: number; start: string; end: string; is_lunch: boolean; is_short_break?: boolean; }
 interface BatchInfo { id: number; grade: string; section: string; display_name?: string; periods_per_day?: number | null; subject_ids?: number[]; }
 interface SubjectInfo { id: number; name: string; }
 interface TeacherInfo { id: number; name: string; teacher_code?: string | null; subject_ids?: number[]; assigned_batch_ids?: number[]; unavailable_slots?: { day: string; period: number }[]; }
 
-interface Cell { subject_id: number | null; teacher_id: number | null; room: string | null; is_lunch: boolean; is_pinned: boolean; }
+interface Cell { subject_id: number | null; teacher_id: number | null; room: string | null; is_lunch: boolean; is_short_break?: boolean; is_pinned: boolean; }
 type Grid = Record<string, Cell>;
 
 interface Conflict { type: string; severity: "hard" | "soft"; message: string; day?: string; period?: number; batch_id?: number; batch_ids?: number[]; teacher_id?: number; }
@@ -71,6 +71,7 @@ export default function TimetableEditor({
             teacher_id: s.teacher_id ?? null,
             room: s.room ?? null,
             is_lunch: !!s.is_lunch,
+            is_short_break: !!s.is_short_break,
             is_pinned: !!s.is_pinned,
           };
         }
@@ -179,7 +180,7 @@ export default function TimetableEditor({
     const srcKey = cellKey(selectedBatch, dragFrom.day, dragFrom.period);
     const src = grid[srcKey];
     for (const p of batchPeriodRows) {
-      if (p.is_lunch) continue;
+      if (p.is_lunch || p.is_short_break) continue;
       for (const day of days) {
         if (day === dragFrom.day && p.number === dragFrom.period) continue;
         const tgtKey = cellKey(selectedBatch, day, p.number);
@@ -357,7 +358,7 @@ export default function TimetableEditor({
   const subClassPeriods = useMemo(() => {
     if (selectedBatch == null || !subDay) return [] as number[];
     return batchPeriodRows
-      .filter((p) => !p.is_lunch)
+      .filter((p) => !p.is_lunch && !p.is_short_break)
       .map((p) => p.number)
       .filter((n) => {
         const c = grid[cellKey(selectedBatch, subDay, n)];
@@ -599,11 +600,15 @@ export default function TimetableEditor({
                   {days.map((day) => {
                     const c = getCell(day, p.number);
                     const isLunch = p.is_lunch || c?.is_lunch;
+                    const isBreak = p.is_short_break || c?.is_short_break;
                     const ckey = selectedBatch != null ? cellKey(selectedBatch, day, p.number) : "";
                     const hardConflicted = !!ckey && hardCells.has(ckey);
                     const softConflicted = !!ckey && softCells.has(ckey);
                     if (isLunch) {
                       return <td key={day} className="border px-2 py-3 text-center text-amber-700 bg-amber-50 font-medium">Lunch</td>;
+                    }
+                    if (isBreak) {
+                      return <td key={day} className="border px-2 py-3 text-center text-green-700 bg-green-50 font-medium">Break</td>;
                     }
                     const filled = c && (c.subject_id != null || c.teacher_id != null);
                     const key = cellKey(selectedBatch!, day, p.number);

@@ -158,11 +158,14 @@ class SchedulingEngine:
 
             # Per-class day length (younger grades finish earlier) + lunch info,
             # used by constraint checks and when saving the grid.
-            from period_utils import batch_period_count, lunch_period_index, has_lunch
+            from period_utils import (batch_period_count, lunch_period_index, has_lunch,
+                                       short_break_period_index, has_short_break)
             self.config = config
             self.batch_periods = {b.id: batch_period_count(b, config) for b in batches}
             self.lunch_idx = lunch_period_index(config)
             self.lunch_enabled = has_lunch(config)
+            self.short_break_idx = short_break_period_index(config)
+            self.short_break_enabled = has_short_break(config)
 
             # Step 5: Build per-teacher/subject constraint caches.
             self._setup_caches(teachers, subjects)
@@ -283,8 +286,8 @@ class SchedulingEngine:
         slots = []
         for day in days:
             for row in build_layout(config):
-                if row["is_lunch"] or row.get("is_zero"):
-                    continue  # zero period is reserved, never used for subjects
+                if row["is_lunch"] or row.get("is_zero") or row.get("is_short_break"):
+                    continue  # lunch / zero / short break are reserved, not for subjects
                 slots.append(Period(day, row["number"]))
         return slots
     
@@ -1222,6 +1225,8 @@ class SchedulingEngine:
                 for p in range(1, day_len + 1):
                     if self.lunch_enabled and self.lunch_idx and p == self.lunch_idx:
                         continue
+                    if self.short_break_enabled and self.short_break_idx and p == self.short_break_idx:
+                        continue
                     if (day, p, b.id) in self.occupied:
                         continue
                     f = fillers[(bi + di + p) % len(fillers)]
@@ -1291,20 +1296,26 @@ class SchedulingEngine:
                 room=e.get("room"),
             ))
 
-        # Persist explicit LUNCH slots so the break is visible in grids/PDFs
-        # (only for classes whose day is long enough to reach the lunch period).
-        if getattr(self, "lunch_enabled", False) and getattr(self, "lunch_idx", None):
-            from period_utils import working_days
+        # Persist explicit LUNCH + SHORT-BREAK slots so the breaks are visible in
+        # grids/PDFs (only for classes whose day reaches that period).
+        from period_utils import working_days
+        for break_idx, is_lunch, is_short in (
+            (getattr(self, "lunch_idx", None) if getattr(self, "lunch_enabled", False) else None, True, False),
+            (getattr(self, "short_break_idx", None) if getattr(self, "short_break_enabled", False) else None, False, True),
+        ):
+            if not break_idx:
+                continue
             for day in working_days(config):
                 for batch_id, limit in self.batch_periods.items():
-                    if limit is not None and self.lunch_idx <= limit:
+                    if limit is not None and break_idx <= limit:
                         db.session.add(TimetableSlot(
                             organization_id=self.organization_id,
                             timetable_id=timetable_id,
                             day=day,
-                            period_number=self.lunch_idx,
+                            period_number=break_idx,
                             batch_id=batch_id,
-                            is_lunch=True,
+                            is_lunch=is_lunch,
+                            is_short_break=is_short,
                         ))
 
         db.session.commit()

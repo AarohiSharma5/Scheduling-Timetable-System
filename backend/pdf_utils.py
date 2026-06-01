@@ -174,6 +174,8 @@ class TimetablePDFExporter:
                 slot = slot_map.get((day, period_num))
                 if row_def["is_lunch"] or (slot and slot.is_lunch):
                     row.append("LUNCH")
+                elif row_def.get("is_short_break") or (slot and getattr(slot, "is_short_break", False)):
+                    row.append("BREAK")
                 elif slot and slot.teacher_id:
                     subject = self._subject_by_id.get(slot.subject_id)
                     teacher = self._teacher_by_id.get(slot.teacher_id)
@@ -245,6 +247,8 @@ class TimetablePDFExporter:
                 slot = slot_map.get((day, period_num))
                 if row_def["is_lunch"] or (slot and slot.is_lunch):
                     row.append("LUNCH")
+                elif row_def.get("is_short_break") or (slot and getattr(slot, "is_short_break", False)):
+                    row.append("BREAK")
                 elif slot and slot.batch_id and not slot.is_lunch:
                     subject = self._subject_by_id.get(slot.subject_id)
                     batch = self._batch_by_id.get(slot.batch_id)

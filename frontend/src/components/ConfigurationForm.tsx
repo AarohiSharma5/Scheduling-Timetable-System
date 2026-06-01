@@ -37,8 +37,8 @@ interface SchoolConfig {
   assembly_grades: string[];
   assembly_schedule: Record<string, string[]>;
   has_short_break: boolean;
-  short_break_after_period: number | null;
-  short_break_duration: number;
+  short_break_start: string;
+  short_break_end: string;
 }
 
 const toMinutes = (t: string): number => {
@@ -89,8 +89,8 @@ export default function ConfigurationForm() {
     assembly_grades: [] as string[],
     assembly_schedule: {} as Record<string, string[]>,
     has_short_break: false,
-    short_break_after_period: null as number | null,
-    short_break_duration: 10,
+    short_break_start: "10:30",
+    short_break_end: "10:45",
   });
 
   // Number of periods is derived from the school hours, not typed in — this is
@@ -208,6 +208,48 @@ export default function ConfigurationForm() {
                 />
               </div>
             </div>
+          )}
+        </div>
+
+        {/* Short break (fruit break) */}
+        <div>
+          <h3 className="text-lg font-semibold text-slate-900 mb-4">Short Break (fruit / recess)</h3>
+          <label className="flex items-center gap-2 mb-4">
+            <input
+              type="checkbox"
+              checked={formData.has_short_break}
+              onChange={(e) => setFormData({ ...formData, has_short_break: e.target.checked })}
+            />
+            <span className="text-sm text-slate-700">
+              Reserve a short mid-morning break (separate from lunch)
+            </span>
+          </label>
+          {formData.has_short_break && (
+            <>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Break Start</label>
+                  <input
+                    type="time"
+                    value={formData.short_break_start}
+                    onChange={(e) => setFormData({ ...formData, short_break_start: e.target.value })}
+                    className="border rounded px-3 py-2 w-full"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Break End</label>
+                  <input
+                    type="time"
+                    value={formData.short_break_end}
+                    onChange={(e) => setFormData({ ...formData, short_break_end: e.target.value })}
+                    className="border rounded px-3 py-2 w-full"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-slate-500 mt-2">
+                The break occupies the period that contains its start time (it can't overlap lunch).
+              </p>
+            </>
           )}
         </div>
 
@@ -679,6 +721,10 @@ export default function ConfigurationForm() {
             <li>
               🍽️ <strong>Lunch Break:</strong>{" "}
               {formData.has_lunch_break ? `${formData.lunch_start} - ${formData.lunch_end}` : "None (compact day)"}
+            </li>
+            <li>
+              🍎 <strong>Short Break:</strong>{" "}
+              {formData.has_short_break ? `${formData.short_break_start} - ${formData.short_break_end}` : "None"}
             </li>
             <li>
               📆 <strong>Working Days:</strong> {formData.working_days} days/week

@@ -767,10 +767,10 @@ def update_school_config():
 
         if "has_short_break" in data:
             config.has_short_break = bool(data["has_short_break"])
-        if "short_break_after_period" in data:
-            config.short_break_after_period = _parse_int(data["short_break_after_period"])
-        if "short_break_duration" in data:
-            config.short_break_duration = _parse_int(data["short_break_duration"]) or config.short_break_duration
+        if "short_break_start" in data:
+            config.short_break_start = str(data["short_break_start"]).strip() or config.short_break_start
+        if "short_break_end" in data:
+            config.short_break_end = str(data["short_break_end"]).strip() or config.short_break_end
 
         workload_changed = False
         if "target_contact_periods_per_week" in data:

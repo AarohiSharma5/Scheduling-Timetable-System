@@ -409,10 +409,11 @@ class SchoolConfig(db.Model):
     assembly_period = db.Column(db.Integer, default=1)      # which period slot it occupies
     assembly_grades = db.Column(db.JSON, default=list)      # grade_wise: which grades
     assembly_schedule = db.Column(db.JSON, default=dict)    # day_wise: {"Monday": ["6","7","8"]}
-    # Optional short break (mid-morning), separate from lunch.
+    # Optional short break (fruit/recess break), separate from lunch. Modeled
+    # exactly like lunch: a start/end time that reserves one period slot.
     has_short_break = db.Column(db.Boolean, nullable=False, default=False)
-    short_break_after_period = db.Column(db.Integer)
-    short_break_duration = db.Column(db.Integer, default=10)
+    short_break_start = db.Column(db.String(10), default="10:30")
+    short_break_end = db.Column(db.String(10), default="10:45")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -458,8 +459,8 @@ class SchoolConfig(db.Model):
             "assembly_grades": self.assembly_grades or [],
             "assembly_schedule": self.assembly_schedule or {},
             "has_short_break": bool(self.has_short_break),
-            "short_break_after_period": self.short_break_after_period,
-            "short_break_duration": self.short_break_duration or 10,
+            "short_break_start": self.short_break_start or "10:30",
+            "short_break_end": self.short_break_end or "10:45",
         }
 
 
@@ -477,6 +478,7 @@ class TimetableSlot(db.Model):
     teacher_id = db.Column(db.Integer, db.ForeignKey("teachers.id"))
     subject_id = db.Column(db.Integer, db.ForeignKey("subjects.id"))
     is_lunch = db.Column(db.Boolean, default=False)
+    is_short_break = db.Column(db.Boolean, default=False)
     # Optional free-text room/lab label. Used for room double-booking checks
     # ("lab conflict") during manual editing.
     room = db.Column(db.String(120))
@@ -494,6 +496,7 @@ class TimetableSlot(db.Model):
             "teacher_id": self.teacher_id,
             "subject_id": self.subject_id,
             "is_lunch": self.is_lunch,
+            "is_short_break": bool(self.is_short_break),
             "room": self.room,
             "is_pinned": bool(self.is_pinned),
         }

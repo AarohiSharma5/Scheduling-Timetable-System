@@ -70,6 +70,10 @@ def has_lunch(config):
     return bool(getattr(config, "has_lunch_break", True))
 
 
+def has_short_break(config):
+    return bool(getattr(config, "has_short_break", False))
+
+
 def lunch_period_index(config, n=None):
     """1-based index of the period reserved for lunch, or None.
 
@@ -88,6 +92,29 @@ def lunch_period_index(config, n=None):
     return idx
 
 
+def short_break_period_index(config, n=None):
+    """1-based index of the period reserved for the short (fruit) break, or None.
+
+    Mirrors lunch: derived from the break's start time. Returns None when the
+    break is disabled, falls outside the day, or would collide with lunch.
+    """
+    if not has_short_break(config):
+        return None
+    if n is None:
+        n = school_periods_per_day(config)
+    dur = config.period_duration or 45
+    start = _to_min(config.start_time, 8 * 60)
+    sb_start = _to_min(getattr(config, "short_break_start", None), -1)
+    if sb_start < 0:
+        return None
+    idx = ((sb_start - start) // dur) + 1
+    if idx < 1 or idx > n:
+        return None
+    if idx == lunch_period_index(config, n):
+        return None  # never overlap lunch
+    return idx
+
+
 def build_layout(config, count=None):
     """Return per-day period rows: {number, start, end, is_lunch}.
 
@@ -100,6 +127,7 @@ def build_layout(config, count=None):
     dur = config.period_duration or 45
     start = _to_min(config.start_time, 8 * 60)
     lunch_idx = lunch_period_index(config, full_n)
+    short_idx = short_break_period_index(config, full_n)
 
     rows = []
     # Optional zero period (period 0) shown before the regular day.
@@ -120,6 +148,7 @@ def build_layout(config, count=None):
             "start": _fmt(s),
             "end": _fmt(s + dur),
             "is_lunch": (i == lunch_idx),
+            "is_short_break": (i == short_idx),
         })
     return rows
 

@@ -49,7 +49,7 @@ def validate_planning(org_id, timetable_id):
     has_zero = defaultdict(bool)                      # batch_id -> any period 0 slot
     assembly_slots = 0
     for sl in slots:
-        if sl.is_lunch:
+        if sl.is_lunch or getattr(sl, "is_short_break", False):
             continue
         if sl.batch_id and sl.subject_id:
             counts[sl.batch_id][sl.subject_id] += 1

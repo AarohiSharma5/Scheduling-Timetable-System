@@ -39,7 +39,7 @@ def validate_coverage(org_id, timetable_id):
     # Elective group slots (batch_id NULL): subject_id -> {(day, period)}
     elective_scheduled = defaultdict(set)
     for sl in slots:
-        if sl.is_lunch:
+        if sl.is_lunch or getattr(sl, "is_short_break", False):
             continue
         if sl.batch_id and sl.batch_id in batch_grade_section:
             key = batch_grade_section[sl.batch_id]
