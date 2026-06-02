@@ -3351,7 +3351,8 @@ def mark_teacher_absent(teacher_id):
         owned_or_404(Teacher, teacher_id)
 
         result = LeaveService.mark_teacher_absent(
-            teacher_id, absent_date, approved_by=request.user.get("user_id")
+            teacher_id, absent_date, approved_by=request.user.get("user_id"),
+            substitute_teacher_id=data.get("substitute_teacher_id"),
         )
         
         if result["success"]:
@@ -3404,6 +3405,91 @@ def get_substitute_options(leave_request_id):
         
         return jsonify(unique_subs), 200
     
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/substitute-availability", methods=["GET"])
+@token_required
+@role_required(["admin", "principal"])
+def substitute_availability():
+    """Return every teacher in the org with an availability status relative to
+    the absent teacher's periods on a given date.
+
+    Query params: absent_teacher_id (int), date (ISO, optional -> defaults today).
+    Status values: 'free', 'unavailable_marked' (free but flagged the slot
+    unavailable), 'busy' (already has a class then / on leave).
+    """
+    try:
+        from models import TimetableSlot, LeaveRequest
+
+        absent_id = request.args.get("absent_teacher_id", type=int)
+        date_str = request.args.get("date")
+        if date_str:
+            target_date = datetime.fromisoformat(date_str).date()
+        else:
+            target_date = datetime.utcnow().date()
+        day_name = target_date.strftime("%A")
+
+        org_id = current_org_id()
+
+        # Periods the absent teacher must be covered for that day.
+        busy_periods = set()
+        if absent_id:
+            busy_periods = {
+                s.period_number
+                for s in TimetableSlot.query.filter_by(teacher_id=absent_id, day=day_name).all()
+            }
+
+        teachers = Teacher.query.filter(
+            Teacher.organization_id == org_id,
+            Teacher.id != absent_id,
+        ).all()
+
+        rank = {"free": 0, "unavailable_marked": 1, "busy": 2}
+        results = []
+        for t in teachers:
+            # On approved leave that day?
+            on_leave = LeaveRequest.query.filter_by(
+                teacher_id=t.id, leave_date=target_date, status="approved"
+            ).first() is not None
+
+            # Has a class during the periods that need covering?
+            conflict_periods = []
+            if busy_periods:
+                conflict_periods = [
+                    s.period_number
+                    for s in TimetableSlot.query.filter(
+                        TimetableSlot.teacher_id == t.id,
+                        TimetableSlot.day == day_name,
+                        TimetableSlot.period_number.in_(list(busy_periods)),
+                    ).all()
+                ]
+
+            # Did they flag any of those periods unavailable?
+            marked = []
+            for u in (t.unavailable_slots or []):
+                if u.get("day") == day_name and (not busy_periods or u.get("period") in busy_periods):
+                    marked.append(u.get("period"))
+
+            if on_leave or conflict_periods:
+                status = "busy"
+            elif marked:
+                status = "unavailable_marked"
+            else:
+                status = "free"
+
+            results.append({
+                "id": t.id,
+                "name": t.name,
+                "status": status,
+                "conflict_periods": sorted(set(conflict_periods)),
+                "on_leave": on_leave,
+            })
+
+        results.sort(key=lambda r: (rank[r["status"]], r["name"]))
+        return jsonify(results), 200
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

@@ -25,6 +25,23 @@ interface TeacherLite {
   name: string;
 }
 
+type AvailStatus = "free" | "unavailable_marked" | "busy";
+
+interface AvailTeacher {
+  id: number;
+  name: string;
+  status: AvailStatus;
+  conflict_periods: number[];
+  on_leave: boolean;
+}
+
+// 🟢 free · 🟡 free but flagged the slot unavailable · 🔴 already has a class
+const statusSymbol = (s: AvailStatus) =>
+  s === "free" ? "🟢" : s === "unavailable_marked" ? "🟡" : "🔴";
+const statusText = (s: AvailStatus) =>
+  s === "free" ? "free" : s === "unavailable_marked" ? "free · marked unavailable" : "has a class";
+const availLabel = (t: AvailTeacher) => `${statusSymbol(t.status)} ${t.name} — ${statusText(t.status)}`;
+
 export default function LeaveManagement() {
   const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
   const [teachers, setTeachers] = useState<TeacherLite[]>([]);
@@ -35,12 +52,32 @@ export default function LeaveManagement() {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [message, setMessage] = useState("");
   const [absentTeacher, setAbsentTeacher] = useState<string>("");
+  const [absentSub, setAbsentSub] = useState<string>("");
   const [manualSub, setManualSub] = useState<string>("");
+  // Availability lists keyed for the two flows.
+  const [absentAvail, setAbsentAvail] = useState<AvailTeacher[]>([]);
+  const [leaveAvail, setLeaveAvail] = useState<AvailTeacher[]>([]);
 
   useEffect(() => {
     fetchLeaves();
     api.get("/admin/teachers").then((r) => setTeachers(r.data || [])).catch(() => {});
   }, []);
+
+  // Load substitute availability for the Emergency action whenever the absent
+  // teacher changes (status is relative to that teacher's periods today).
+  useEffect(() => {
+    setAbsentSub("");
+    if (!absentTeacher) { setAbsentAvail([]); return; }
+    const today = new Date().toISOString().split("T")[0];
+    fetchAvailability(Number(absentTeacher), today)
+      .then(setAbsentAvail)
+      .catch(() => setAbsentAvail([]));
+  }, [absentTeacher]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const fetchAvailability = async (absentId: number, date: string): Promise<AvailTeacher[]> => {
+    const r = await api.get("/substitute-availability", { params: { absent_teacher_id: absentId, date } });
+    return Array.isArray(r.data) ? r.data : [];
+  };
 
   const fetchLeaves = async () => {
     try {
@@ -98,11 +135,18 @@ export default function LeaveManagement() {
 
   const findSubstitutes = async (leaveId: number) => {
     if (expanded === leaveId) { setExpanded(null); return; }
+    const leave = leaves.find((l) => l.id === leaveId);
     try {
       setExpanded(leaveId);
       setManualSub("");
+      setLeaveAvail([]);
       setLoadingSubs(true);
       setSubstitutes([]);
+      if (leave) {
+        fetchAvailability(leave.teacher_id, leave.leave_date)
+          .then(setLeaveAvail)
+          .catch(() => setLeaveAvail([]));
+      }
       const response = await api.get(`/leaves/${leaveId}/substitute-options`);
       // Endpoint returns a plain array of substitutes.
       setSubstitutes(Array.isArray(response.data) ? response.data : (response.data?.available_substitutes || []));
@@ -120,8 +164,13 @@ export default function LeaveManagement() {
       await api.post(`/teachers/${absentTeacher}/mark-absent`, {
         date: new Date().toISOString().split("T")[0],
         reason: "Unannounced absence",
+        substitute_teacher_id: absentSub ? Number(absentSub) : null,
       });
-      setMessage("✅ Teacher marked absent. A substitute was auto-assigned where possible.");
+      setMessage(absentSub
+        ? "✅ Teacher marked absent with the selected substitute."
+        : "✅ Teacher marked absent. A substitute was auto-assigned where possible.");
+      setAbsentTeacher("");
+      setAbsentSub("");
       fetchLeaves();
     } catch (error: any) {
       setMessage(`❌ ${errMsg(error, "Could not mark the teacher absent")}`);
@@ -254,14 +303,17 @@ export default function LeaveManagement() {
                               <select
                                 value={manualSub}
                                 onChange={(e) => setManualSub(e.target.value)}
-                                className="border rounded px-3 py-2 text-sm min-w-56"
+                                className="border rounded px-3 py-2 text-sm min-w-72"
                               >
                                 <option value="">Select a teacher…</option>
-                                {teachers
-                                  .filter((t) => t.id !== leave.teacher_id)
-                                  .map((t) => (
-                                    <option key={t.id} value={t.id}>{t.name}</option>
-                                  ))}
+                                {(leaveAvail.length
+                                  ? leaveAvail
+                                  : teachers
+                                      .filter((t) => t.id !== leave.teacher_id)
+                                      .map((t) => ({ id: t.id, name: t.name, status: "free" as AvailStatus, conflict_periods: [], on_leave: false }))
+                                ).map((t) => (
+                                  <option key={t.id} value={t.id}>{availLabel(t)}</option>
+                                ))}
                               </select>
                               <button
                                 disabled={busyId === leave.id || !manualSub}
@@ -272,6 +324,7 @@ export default function LeaveManagement() {
                               </button>
                             </div>
                             <p className="text-xs text-slate-500">
+                              🟢 free · 🟡 free but flagged the slot unavailable · 🔴 already has a class.
                               The teacher must be free during the absent teacher's periods that day, otherwise approval is rejected.
                             </p>
                           </div>
@@ -289,18 +342,39 @@ export default function LeaveManagement() {
       {/* Emergency Actions */}
       <div className="bg-gradient-to-r from-red-50 to-red-100 rounded-lg p-6 border-2 border-red-200">
         <h3 className="text-xl font-bold text-red-900 mb-2">🚨 Emergency Actions</h3>
-        <p className="text-red-700 mb-4">Mark a teacher as absent today (auto-assigns a substitute where possible).</p>
-        <div className="flex flex-wrap gap-2 items-center">
-          <select
-            value={absentTeacher}
-            onChange={(e) => setAbsentTeacher(e.target.value)}
-            className="border rounded px-3 py-2 min-w-56"
-          >
-            <option value="">Select a teacher…</option>
-            {teachers.map((t) => (
-              <option key={t.id} value={t.id}>{t.name}</option>
-            ))}
-          </select>
+        <p className="text-red-700 mb-4">Mark a teacher as absent today, then auto-assign a substitute or pick one yourself.</p>
+        <div className="flex flex-wrap gap-3 items-end">
+          <div className="flex flex-col">
+            <label className="text-xs font-semibold text-red-900 mb-1">Absent teacher</label>
+            <select
+              value={absentTeacher}
+              onChange={(e) => setAbsentTeacher(e.target.value)}
+              className="border rounded px-3 py-2 min-w-56"
+            >
+              <option value="">Select a teacher…</option>
+              {teachers.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-col">
+            <label className="text-xs font-semibold text-red-900 mb-1">Substitute</label>
+            <select
+              value={absentSub}
+              onChange={(e) => setAbsentSub(e.target.value)}
+              className="border rounded px-3 py-2 min-w-72"
+            >
+              <option value="">⚙️ Auto-assign (recommended)</option>
+              {(absentAvail.length
+                ? absentAvail
+                : teachers
+                    .filter((t) => String(t.id) !== absentTeacher)
+                    .map((t) => ({ id: t.id, name: t.name, status: "free" as AvailStatus, conflict_periods: [], on_leave: false }))
+              ).map((t) => (
+                <option key={t.id} value={t.id}>{availLabel(t)}</option>
+              ))}
+            </select>
+          </div>
           <button
             onClick={markAbsent}
             className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded font-medium"
@@ -308,6 +382,9 @@ export default function LeaveManagement() {
             Mark Teacher Absent Today
           </button>
         </div>
+        <p className="text-xs text-red-700 mt-3">
+          Substitute status: 🟢 free · 🟡 free but flagged the slot unavailable · 🔴 already has a class.
+        </p>
       </div>
     </div>
   );

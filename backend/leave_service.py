@@ -276,8 +276,13 @@ class LeaveService:
         return adjustments
     
     @staticmethod
-    def mark_teacher_absent(teacher_id, date, approved_by=None):
-        """Mark a teacher as absent for a specific date (without prior leave request)"""
+    def mark_teacher_absent(teacher_id, date, approved_by=None, substitute_teacher_id=None):
+        """Mark a teacher as absent for a specific date (without prior leave request).
+
+        If ``substitute_teacher_id`` is provided it is used (after validating the
+        chosen teacher is free during the absent teacher's periods that day),
+        otherwise the best available substitute is auto-assigned.
+        """
         try:
             teacher = Teacher.query.get(teacher_id)
             # Create implicit leave request
@@ -290,14 +295,32 @@ class LeaveService:
                 status="approved",
                 approved_by=approved_by  # the admin/principal who marked it
             )
-            
+
             db.session.add(leave_request)
             db.session.commit()
-            
-            # Find and assign substitute
-            substitute = LeaveService._find_best_substitute(leave_request)
-            if substitute:
-                leave_request.substitute_teacher_id = substitute.id
+
+            # Determine the substitute: manual selection (validated) or auto.
+            chosen_sub_id = None
+            if substitute_teacher_id:
+                day_name = date.strftime('%A')
+                busy_periods = {
+                    s.period_number
+                    for s in TimetableSlot.query.filter_by(
+                        teacher_id=teacher_id, day=day_name
+                    ).all()
+                }
+                if not LeaveService._is_substitute_available(substitute_teacher_id, date, busy_periods):
+                    db.session.delete(leave_request)
+                    db.session.commit()
+                    return {"success": False, "error": "Selected substitute has conflicting classes on that day"}
+                chosen_sub_id = substitute_teacher_id
+            else:
+                substitute = LeaveService._find_best_substitute(leave_request)
+                if substitute:
+                    chosen_sub_id = substitute.id
+
+            if chosen_sub_id:
+                leave_request.substitute_teacher_id = chosen_sub_id
                 adjustments = LeaveService._adjust_timetable_for_leave(leave_request)
                 leave_request.timetable_adjustments = adjustments
                 db.session.commit()
