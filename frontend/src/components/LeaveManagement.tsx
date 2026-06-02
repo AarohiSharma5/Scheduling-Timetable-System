@@ -35,6 +35,7 @@ export default function LeaveManagement() {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [message, setMessage] = useState("");
   const [absentTeacher, setAbsentTeacher] = useState<string>("");
+  const [manualSub, setManualSub] = useState<string>("");
 
   useEffect(() => {
     fetchLeaves();
@@ -69,6 +70,7 @@ export default function LeaveManagement() {
       setMessage("✅ Leave approved" + (substituteId ? " with the selected substitute." : " (a substitute was auto-assigned if available)."));
       setExpanded(null);
       setSubstitutes([]);
+      setManualSub("");
       fetchLeaves();
     } catch (error: any) {
       setMessage(`❌ ${errMsg(error, "Could not approve the leave")}`);
@@ -98,6 +100,7 @@ export default function LeaveManagement() {
     if (expanded === leaveId) { setExpanded(null); return; }
     try {
       setExpanded(leaveId);
+      setManualSub("");
       setLoadingSubs(true);
       setSubstitutes([]);
       const response = await api.get(`/leaves/${leaveId}/substitute-options`);
@@ -215,17 +218,16 @@ export default function LeaveManagement() {
                     </tr>
                     {expanded === leave.id && (
                       <tr className="bg-blue-50/50">
-                        <td colSpan={7} className="px-4 py-3">
-                          {loadingSubs ? (
-                            <p className="text-blue-700 text-sm">⏳ Loading available substitutes…</p>
-                          ) : substitutes.length === 0 ? (
-                            <p className="text-slate-600 text-sm">
-                              No free substitutes found for that day. You can still <strong>Accept</strong> (no substitute) or <strong>Reject</strong>.
-                            </p>
-                          ) : (
-                            <div className="space-y-2">
-                              <p className="font-semibold text-blue-900 text-sm">Pick a substitute to approve with:</p>
-                              {substitutes.map((sub) => (
+                        <td colSpan={7} className="px-4 py-3 space-y-4">
+                          {/* Recommended (free + same subject) substitutes */}
+                          <div className="space-y-2">
+                            <p className="font-semibold text-blue-900 text-sm">⭐ Recommended substitutes (free that day, same subject):</p>
+                            {loadingSubs ? (
+                              <p className="text-blue-700 text-sm">⏳ Loading available substitutes…</p>
+                            ) : substitutes.length === 0 ? (
+                              <p className="text-slate-600 text-sm">No free same-subject substitutes found — use manual selection below.</p>
+                            ) : (
+                              substitutes.map((sub) => (
                                 <div key={sub.id} className="flex justify-between items-center bg-white p-2 rounded border border-blue-200">
                                   <div>
                                     <p className="font-medium text-gray-900 text-sm">{sub.name}</p>
@@ -241,9 +243,38 @@ export default function LeaveManagement() {
                                     Approve with {sub.name.split(" ")[0]}
                                   </button>
                                 </div>
-                              ))}
+                              ))
+                            )}
+                          </div>
+
+                          {/* Manual selection — any teacher */}
+                          <div className="bg-white p-3 rounded border border-slate-200 space-y-2">
+                            <p className="font-semibold text-slate-800 text-sm">✍️ Or manually assign any teacher:</p>
+                            <div className="flex flex-wrap gap-2 items-center">
+                              <select
+                                value={manualSub}
+                                onChange={(e) => setManualSub(e.target.value)}
+                                className="border rounded px-3 py-2 text-sm min-w-56"
+                              >
+                                <option value="">Select a teacher…</option>
+                                {teachers
+                                  .filter((t) => t.id !== leave.teacher_id)
+                                  .map((t) => (
+                                    <option key={t.id} value={t.id}>{t.name}</option>
+                                  ))}
+                              </select>
+                              <button
+                                disabled={busyId === leave.id || !manualSub}
+                                onClick={() => approve(leave.id, Number(manualSub))}
+                                className="bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white px-4 py-2 rounded text-sm font-medium"
+                              >
+                                Approve with selected
+                              </button>
                             </div>
-                          )}
+                            <p className="text-xs text-slate-500">
+                              The teacher must be free during the absent teacher's periods that day, otherwise approval is rejected.
+                            </p>
+                          </div>
                         </td>
                       </tr>
                     )}
