@@ -568,15 +568,20 @@ class LeaveRequest(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     def to_dict(self):
+        teacher = Teacher.query.get(self.teacher_id) if self.teacher_id else None
+        sub = Teacher.query.get(self.substitute_teacher_id) if self.substitute_teacher_id else None
         return {
             "id": self.id,
+            "organization_id": self.organization_id,
             "teacher_id": self.teacher_id,
+            "teacher_name": teacher.name if teacher else None,
             "leave_date": self.leave_date.isoformat() if self.leave_date else None,
             "reason": self.reason,
             "leave_type": self.leave_type,
             "status": self.status,
             "approved_by": self.approved_by,
             "substitute_teacher_id": self.substitute_teacher_id,
+            "substitute_teacher_name": sub.name if sub else None,
             "rejection_reason": self.rejection_reason,
             "timetable_adjustments": self.timetable_adjustments or {},
             "created_at": self.created_at.isoformat() if self.created_at else None,

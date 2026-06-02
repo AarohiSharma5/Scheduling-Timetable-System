@@ -35,7 +35,7 @@ export default function PrincipalDashboardContent() {
         total_batches: 73, // From seed data
         total_subjects: 20, // From seed data
         total_houses: 4, // From seed data
-        leave_requests_pending: leaveRes.data?.filter((l: any) => l.status === "PENDING").length || 0,
+        leave_requests_pending: leaveRes.data?.filter((l: any) => (l.status || "").toLowerCase() === "pending").length || 0,
       });
     } catch (error) {
       console.error("Error loading stats:", error);
