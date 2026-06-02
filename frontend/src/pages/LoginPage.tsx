@@ -51,8 +51,14 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
     try {
-      await login(email, password);
-      navigate(`/${selectedRole}`);
+      const user = await login(email, password);
+      // Force temporary-password holders through the first-login flow before
+      // they can reach their dashboard.
+      if (user?.must_change_password) {
+        navigate("/change-password", { replace: true });
+      } else {
+        navigate(`/${selectedRole}`);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Login failed";
       setError(message);
@@ -231,6 +237,15 @@ export default function LoginPage() {
                     {loading ? "Signing in…" : "Sign In"}
                   </button>
                 </form>
+
+                <div className="mt-4 text-center">
+                  <Link
+                    to="/forgot-password"
+                    className="text-sm text-indigo-300 hover:text-indigo-200 transition"
+                  >
+                    Forgot password?
+                  </Link>
+                </div>
 
                 <div className="mt-6 p-4 bg-slate-900/50 border border-white/10 rounded-lg text-sm text-slate-300">
                   <p className="font-semibold mb-2">Demo credentials:</p>

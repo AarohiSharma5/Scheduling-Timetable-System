@@ -6,7 +6,10 @@ export interface User {
   id: number;
   name: string;
   email: string;
-  role: "admin" | "principal" | "teacher" | "student";
+  role: "admin" | "principal" | "teacher" | "student" | "coordinator";
+  must_change_password?: boolean;
+  profile_completed?: boolean;
+  phone?: string;
   batch_id?: number;
   teacher_id?: number;
   assigned_batches?: number[];
@@ -24,7 +27,7 @@ interface AuthState {
   isAuthenticated: boolean;
 
   // Actions
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<User>;
   logout: () => Promise<void>;
   setUser: (user: User | null) => void;
   setLoading: (loading: boolean) => void;
@@ -75,6 +78,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         isAuthenticated: true,
         loading: false,
       });
+      return data.user as User;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Login failed";
       set({ error: message, loading: false });

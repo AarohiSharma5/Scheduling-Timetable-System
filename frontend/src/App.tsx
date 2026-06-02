@@ -10,6 +10,10 @@ import LandingPage from "./pages/LandingPage";
 import OrgLoginPage from "./pages/OrgLoginPage";
 import OrgSignupPage from "./pages/OrgSignupPage";
 import LoginPage from "./pages/LoginPage";
+import ChangePasswordPage from "./pages/ChangePasswordPage";
+import ForgotPasswordPage from "./pages/ForgotPasswordPage";
+import ResetPasswordPage from "./pages/ResetPasswordPage";
+import AcceptInvitePage from "./pages/AcceptInvitePage";
 import AdminPage from "./pages/AdminPage";
 import PrincipalPage from "./pages/PrincipalPage";
 import TeacherPage from "./pages/TeacherPage";
@@ -40,6 +44,10 @@ const App: React.FC = () => {
         <Route path="/org-login" element={<OrgLoginPage />} />
         <Route path="/org-signup" element={<OrgSignupPage />} />
 
+        {/* Public token-link flows (no org/user session required) */}
+        <Route path="/accept-invite/:token" element={<AcceptInvitePage />} />
+        <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
+
         {/* User login — only reachable after organization login */}
         <Route
           path="/login"
@@ -47,6 +55,24 @@ const App: React.FC = () => {
             <RequireOrg>
               <LoginPage />
             </RequireOrg>
+          }
+        />
+        <Route
+          path="/forgot-password"
+          element={
+            <RequireOrg>
+              <ForgotPasswordPage />
+            </RequireOrg>
+          }
+        />
+
+        {/* First-login forced password change (needs a user session) */}
+        <Route
+          path="/change-password"
+          element={
+            <ProtectedRoute>
+              <ChangePasswordPage />
+            </ProtectedRoute>
           }
         />
 

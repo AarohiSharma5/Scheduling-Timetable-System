@@ -476,6 +476,36 @@ export const api = {
     },
   },
 
+  // First-login / password management + in-app token links
+  auth: {
+    changePassword: async (payload: {
+      current_password: string;
+      new_password: string;
+      complete_profile?: { name?: string; phone?: string };
+    }) => (await axiosInstance.post("/auth/change-password", payload)).data,
+    forgotPassword: async (email: string) =>
+      (await axiosInstance.post("/auth/forgot-password", { email })).data,
+    resetInfo: async (token: string) =>
+      (await axiosInstance.get(`/auth/reset-password/${token}`)).data,
+    resetPassword: async (token: string, new_password: string) =>
+      (await axiosInstance.post(`/auth/reset-password/${token}`, { new_password })).data,
+  },
+
+  // Admin-issued invitations (in-app token links)
+  invitations: {
+    list: async () => (await axiosInstance.get("/invitations")).data,
+    create: async (payload: { email: string; name?: string; role: string }) =>
+      (await axiosInstance.post("/invitations", payload)).data,
+    revoke: async (id: number) =>
+      (await axiosInstance.post(`/invitations/${id}/revoke`)).data,
+    info: async (token: string) =>
+      (await axiosInstance.get(`/invitations/accept/${token}`)).data,
+    accept: async (
+      token: string,
+      payload: { name?: string; password: string; phone?: string }
+    ) => (await axiosInstance.post(`/invitations/accept/${token}`, payload)).data,
+  },
+
   leaves: {
     request: async (payload: { leave_date: string; reason: string; leave_type?: string }) => {
       const { data } = await axiosInstance.post("/leaves/request", payload);

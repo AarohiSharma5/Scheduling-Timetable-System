@@ -47,6 +47,7 @@ from student_service import (
 import bulk_import
 import os
 import re
+import secrets
 
 api = Blueprint("api", __name__, url_prefix="/api")
 
@@ -130,6 +131,42 @@ _PW_RE = re.compile(r"^(?=.*[A-Za-z])(?=.*\d).{8,}$")
 
 def password_ok(pw):
     return bool(pw and _PW_RE.match(pw))
+
+
+def gen_temp_password():
+    """Random temporary password that satisfies the password policy.
+
+    Shared with the teacher/student creation + invitation flows so the admin
+    always gets a credential they can hand over for the first login.
+    """
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz"
+    digits = "23456789"
+    body = "".join(secrets.choice(alphabet) for _ in range(6))
+    tail = "".join(secrets.choice(digits) for _ in range(3))
+    return f"{body}{tail}"
+
+
+def gen_link_token():
+    """Opaque, URL-safe token for in-app invitation / password-reset links."""
+    return secrets.token_urlsafe(32)
+
+
+def next_teacher_code(org_id):
+    """Human-readable employee id in the form TCH-YYYY-NNNN, unique per org."""
+    year = datetime.utcnow().year
+    prefix = f"TCH-{year}-"
+    existing = (
+        Teacher.query.filter_by(organization_id=org_id)
+        .filter(Teacher.teacher_code.like(f"{prefix}%"))
+        .all()
+    )
+    max_seq = 0
+    for t in existing:
+        try:
+            max_seq = max(max_seq, int((t.teacher_code or "").split("-")[-1]))
+        except (ValueError, IndexError):
+            continue
+    return f"{prefix}{str(max_seq + 1).zfill(4)}"
 
 # ============================================================================
 # HEALTH CHECK
@@ -245,6 +282,33 @@ def organizations_list():
 _SIGNUP_ALLOWED_DESIGNATIONS = {"owner", "admin", "principal"}
 
 
+def _suggest_school_code(name):
+    """Generate a unique, human-friendly school code from the school name.
+
+    Format: <INITIALS><YY>-<NNN>  e.g. "Greenwood High School" -> "GHS26-417".
+    Falls back to "SCH" initials when the name has no usable letters.
+    """
+    import random
+    words = re.findall(r"[A-Za-z]+", name or "")
+    initials = "".join(w[0] for w in words[:4]).upper() or "SCH"
+    if len(initials) < 2:
+        initials = (initials + (words[0][:2].upper() if words else "SC"))[:3]
+    yy = datetime.utcnow().strftime("%y")
+    for _ in range(50):
+        code = f"{initials}{yy}-{random.randint(100, 999)}"
+        if not Organization.query.filter(db.func.lower(Organization.school_code) == code.lower()).first():
+            return code
+    # Extremely unlikely fallback: widen the random space.
+    return f"{initials}{yy}-{random.randint(1000, 99999)}"
+
+
+@api.route("/organizations/suggest-school-code", methods=["GET"])
+def suggest_school_code():
+    """Public helper for the signup form to propose a unique school code."""
+    name = request.args.get("name", "")
+    return jsonify({"school_code": _suggest_school_code(name)}), 200
+
+
 def _unique_slug(base):
     """Return a slug unique among organizations, suffixing -2, -3, ... if needed."""
     base = re.sub(r"[^a-z0-9]+", "-", (base or "").lower()).strip("-") or "school"
@@ -287,12 +351,14 @@ def organization_register():
         admin_password = admin_in.get("password") or ""
         designation = (admin_in.get("designation") or "admin").strip().lower()
 
+        # School code is auto-generated when the client doesn't supply one.
+        if not school_code:
+            school_code = _suggest_school_code(name)
+
         # --- Validation ---
         errors = {}
         if not name:
             errors["name"] = "School name is required"
-        if not school_code:
-            errors["school_code"] = "School code is required"
         if not official_email:
             errors["official_email"] = "Official email is required"
         if not admin_name:
@@ -445,6 +511,8 @@ def login():
                 "role": user.role,
                 "batch_id": user.batch_id,
                 "organization_id": org.id,
+                "must_change_password": bool(user.must_change_password),
+                "profile_completed": bool(user.profile_completed) if user.profile_completed is not None else True,
             },
             "organization": org.to_dict(),
         }), 200)
@@ -497,9 +565,343 @@ def get_current_user():
             "email": user.email,
             "role": user.role,
             "batch_id": user.batch_id,
+            "must_change_password": bool(user.must_change_password),
+            "profile_completed": bool(user.profile_completed) if user.profile_completed is not None else True,
             **additional_info,
         }), 200
     except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# FIRST-LOGIN / PASSWORD MANAGEMENT
+# ============================================================================
+
+@api.route("/auth/change-password", methods=["POST"])
+@token_required
+def change_password():
+    """Authenticated password change. Used by the forced first-login flow and
+    for any user changing their own password.
+
+    Body: { "current_password": "...", "new_password": "...",
+            "complete_profile": {optional profile fields} }
+    """
+    try:
+        user = User.query.get(request.user.get("user_id"))
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        data = request.get_json() or {}
+        current = (data.get("current_password") or "").strip()
+        new_pw = (data.get("new_password") or "").strip()
+
+        if not check_password_hash(user.password_hash or "", current):
+            return jsonify({"error": "Current password is incorrect"}), 401
+        if not password_ok(new_pw):
+            return jsonify({"error": "New password must be at least 8 characters and include a letter and a number"}), 400
+        if check_password_hash(user.password_hash or "", new_pw):
+            return jsonify({"error": "New password must be different from the current password"}), 400
+
+        user.password_hash = generate_password_hash(new_pw)
+        user.must_change_password = False
+
+        # Optional one-shot profile completion during first login.
+        profile = data.get("complete_profile") or {}
+        if profile:
+            if profile.get("name"):
+                user.name = profile["name"].strip()
+            if profile.get("phone"):
+                user.phone = profile["phone"].strip()
+            user.profile_completed = True
+
+        db.session.commit()
+        log_audit("user.password_changed", {"first_login": False},
+                  user_id=user.id, organization_id=user.organization_id)
+        return jsonify({"message": "Password updated", "user": user.to_dict()}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/auth/forgot-password", methods=["POST"])
+@limiter.limit("5 per minute")
+def forgot_password():
+    """Request a password reset. Returns an *in-app token link* (no email yet).
+
+    Body: { "email": "user@school.edu" }
+    The org must be resolved (same as login) so we don't leak cross-tenant info.
+    """
+    try:
+        org, err = _resolve_org_from_request()
+        if err:
+            return err
+        data = request.get_json() or {}
+        email = (data.get("email") or "").strip()
+
+        user = User.query.filter_by(email=email, organization_id=org.id).first()
+        # Always respond success-shaped to avoid email enumeration, but only mint
+        # a link when the user actually exists.
+        reset_link = None
+        if user:
+            token = gen_link_token()
+            # Reuse the Invitation table as a generic token store: role marks it
+            # as a reset, target_user_id points at the account.
+            inv = Invitation(
+                organization_id=org.id,
+                email=email,
+                name=user.name,
+                role="password_reset",
+                token=token,
+                status="pending",
+                expires_at=datetime.utcnow() + timedelta(hours=24),
+                target_user_id=user.id,
+            )
+            db.session.add(inv)
+            db.session.commit()
+            reset_link = f"/reset-password/{token}"
+            log_audit("user.password_reset_requested", {"email": email},
+                      user_id=user.id, organization_id=org.id)
+
+        return jsonify({
+            "message": "If the account exists, a reset link has been generated.",
+            "reset_link": reset_link,
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/auth/reset-password/<token>", methods=["GET"])
+def reset_password_info(token):
+    """Validate a reset token (for the reset page to show the target email)."""
+    inv = Invitation.query.filter_by(token=token, role="password_reset").first()
+    if not inv or inv.status != "pending":
+        return jsonify({"valid": False, "error": "This reset link is invalid or already used"}), 404
+    if inv.expires_at and inv.expires_at < datetime.utcnow():
+        inv.status = "expired"
+        db.session.commit()
+        return jsonify({"valid": False, "error": "This reset link has expired"}), 410
+    return jsonify({"valid": True, "email": inv.email}), 200
+
+
+@api.route("/auth/reset-password/<token>", methods=["POST"])
+def reset_password(token):
+    """Consume a reset token and set a new password.
+
+    Body: { "new_password": "..." }
+    """
+    try:
+        inv = Invitation.query.filter_by(token=token, role="password_reset").first()
+        if not inv or inv.status != "pending":
+            return jsonify({"error": "This reset link is invalid or already used"}), 404
+        if inv.expires_at and inv.expires_at < datetime.utcnow():
+            inv.status = "expired"
+            db.session.commit()
+            return jsonify({"error": "This reset link has expired"}), 410
+
+        data = request.get_json() or {}
+        new_pw = (data.get("new_password") or "").strip()
+        if not password_ok(new_pw):
+            return jsonify({"error": "Password must be at least 8 characters and include a letter and a number"}), 400
+
+        user = User.query.get(inv.target_user_id)
+        if not user:
+            return jsonify({"error": "Account no longer exists"}), 404
+
+        user.password_hash = generate_password_hash(new_pw)
+        user.must_change_password = False
+        inv.status = "accepted"
+        inv.accepted_at = datetime.utcnow()
+        db.session.commit()
+        log_audit("user.password_reset", {"email": user.email},
+                  user_id=user.id, organization_id=user.organization_id)
+        return jsonify({"message": "Password reset successful. You can now sign in."}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# INVITATIONS - admin-issued in-app token links for staff/students
+# ============================================================================
+
+# Roles an admin/principal is allowed to invite.
+_INVITABLE_ROLES = {"teacher", "coordinator", "principal", "student"}
+
+
+@api.route("/invitations", methods=["GET"])
+@role_required("admin", "principal")
+def list_invitations():
+    """List invitations for the current organization (newest first)."""
+    org_id = current_org_id()
+    invites = (
+        Invitation.query.filter_by(organization_id=org_id)
+        .filter(Invitation.role != "password_reset")
+        .order_by(Invitation.created_at.desc())
+        .all()
+    )
+    out = []
+    for inv in invites:
+        d = inv.to_dict()
+        d["invite_link"] = f"/accept-invite/{inv.token}" if inv.status == "pending" else None
+        out.append(d)
+    return jsonify(out), 200
+
+
+@api.route("/invitations", methods=["POST"])
+@role_required("admin", "principal")
+def create_invitation():
+    """Create an invitation and return its in-app token link.
+
+    Body: { "email": "...", "name": "...", "role": "teacher" }
+    """
+    try:
+        org_id = current_org_id()
+        data = request.get_json() or {}
+        email = (data.get("email") or "").strip().lower()
+        name = (data.get("name") or "").strip()
+        role = (data.get("role") or "teacher").strip().lower()
+
+        if not email:
+            return jsonify({"error": "Email is required"}), 400
+        if role not in _INVITABLE_ROLES:
+            return jsonify({"error": f"Cannot invite role '{role}'"}), 400
+        if User.query.filter_by(email=email).first():
+            return jsonify({"error": "A user with this email already exists"}), 409
+
+        # Reuse an existing pending invite for the same email/role if present.
+        existing = Invitation.query.filter_by(
+            organization_id=org_id, email=email, status="pending"
+        ).filter(Invitation.role != "password_reset").first()
+        if existing:
+            existing.token = gen_link_token()
+            existing.role = role
+            existing.name = name or existing.name
+            existing.expires_at = datetime.utcnow() + timedelta(days=7)
+            inv = existing
+        else:
+            inv = Invitation(
+                organization_id=org_id,
+                email=email,
+                name=name or None,
+                role=role,
+                token=gen_link_token(),
+                status="pending",
+                expires_at=datetime.utcnow() + timedelta(days=7),
+                invited_by=request.user.get("user_id"),
+            )
+            db.session.add(inv)
+        db.session.commit()
+        log_audit("invitation.create", {"email": email, "role": role},
+                  user_id=request.user.get("user_id"), organization_id=org_id)
+        result = inv.to_dict()
+        result["invite_link"] = f"/accept-invite/{inv.token}"
+        return jsonify(result), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/invitations/<int:invite_id>/revoke", methods=["POST"])
+@role_required("admin", "principal")
+def revoke_invitation(invite_id):
+    """Revoke a pending invitation."""
+    inv = Invitation.query.filter_by(id=invite_id, organization_id=current_org_id()).first()
+    if not inv:
+        return jsonify({"error": "Invitation not found"}), 404
+    if inv.status != "pending":
+        return jsonify({"error": "Only pending invitations can be revoked"}), 400
+    inv.status = "revoked"
+    db.session.commit()
+    log_audit("invitation.revoke", {"email": inv.email},
+              user_id=request.user.get("user_id"), organization_id=inv.organization_id)
+    return jsonify({"message": "Invitation revoked"}), 200
+
+
+@api.route("/invitations/accept/<token>", methods=["GET"])
+def invitation_info(token):
+    """Public: validate an invite token so the accept page can pre-fill."""
+    inv = Invitation.query.filter_by(token=token).filter(Invitation.role != "password_reset").first()
+    if not inv or inv.status != "pending":
+        return jsonify({"valid": False, "error": "This invitation is invalid or already used"}), 404
+    if inv.expires_at and inv.expires_at < datetime.utcnow():
+        inv.status = "expired"
+        db.session.commit()
+        return jsonify({"valid": False, "error": "This invitation has expired"}), 410
+    org = Organization.query.get(inv.organization_id)
+    return jsonify({
+        "valid": True,
+        "email": inv.email,
+        "name": inv.name,
+        "role": inv.role,
+        "organization": org.name if org else None,
+    }), 200
+
+
+@api.route("/invitations/accept/<token>", methods=["POST"])
+def accept_invitation(token):
+    """Public: accept an invite, provisioning the user account on first use.
+
+    Body: { "name": "...", "password": "...", "phone": "..." }
+    """
+    try:
+        inv = Invitation.query.filter_by(token=token).filter(Invitation.role != "password_reset").first()
+        if not inv or inv.status != "pending":
+            return jsonify({"error": "This invitation is invalid or already used"}), 404
+        if inv.expires_at and inv.expires_at < datetime.utcnow():
+            inv.status = "expired"
+            db.session.commit()
+            return jsonify({"error": "This invitation has expired"}), 410
+
+        data = request.get_json() or {}
+        name = (data.get("name") or inv.name or "").strip()
+        password = (data.get("password") or "").strip()
+        if not name:
+            return jsonify({"error": "Name is required"}), 400
+        if not password_ok(password):
+            return jsonify({"error": "Password must be at least 8 characters and include a letter and a number"}), 400
+        if User.query.filter_by(email=inv.email).first():
+            inv.status = "accepted"
+            db.session.commit()
+            return jsonify({"error": "An account with this email already exists. Please sign in."}), 409
+
+        user = User(
+            name=name,
+            email=inv.email,
+            role=inv.role,
+            organization_id=inv.organization_id,
+            password_hash=generate_password_hash(password),
+            phone=(data.get("phone") or None),
+            status="active",
+            must_change_password=False,
+            profile_completed=True,
+        )
+        db.session.add(user)
+        db.session.commit()
+
+        # For teachers, also create the linked Teacher record so they appear in
+        # staff lists and can be scheduled.
+        if inv.role == "teacher":
+            teacher = Teacher(
+                organization_id=inv.organization_id,
+                user_id=user.id,
+                teacher_code=next_teacher_code(inv.organization_id),
+                name=name,
+                email=inv.email,
+                phone=(data.get("phone") or None),
+                status="active",
+            )
+            db.session.add(teacher)
+
+        inv.status = "accepted"
+        inv.accepted_at = datetime.utcnow()
+        inv.target_user_id = user.id
+        db.session.commit()
+        log_audit("invitation.accept", {"email": inv.email, "role": inv.role},
+                  user_id=user.id, organization_id=inv.organization_id)
+        return jsonify({"message": "Account created. You can now sign in.", "email": inv.email}), 201
+    except Exception as e:
+        db.session.rollback()
         return jsonify({"error": str(e)}), 500
 
 
@@ -1135,10 +1537,12 @@ def create_teacher():
         if User.query.filter_by(email=email).first():
             return jsonify({"error": "A user with this email already exists"}), 409
 
-        # Use the provided password, or fall back to a sane default the admin
-        # can communicate to the teacher. Either way it is *hashed*, never the
-        # old literal "hashed_password_here" placeholder.
-        raw_password = data.get("password") or "changeme123"
+        # Use the provided password, or auto-generate a temporary one the admin
+        # hands to the teacher. Auto-generated passwords force a first-login
+        # change. Either way it is *hashed*, never stored in plain text.
+        provided_pw = data.get("password")
+        is_temp = not provided_pw
+        raw_password = provided_pw or gen_temp_password()
 
         # Create user first
         user = User(
@@ -1147,6 +1551,12 @@ def create_teacher():
             role="teacher",
             organization_id=org_id,
             password_hash=generate_password_hash(raw_password),
+            phone=(data.get("phone") or None),
+            designation=(data.get("designation") or None),
+            status="active",
+            must_change_password=is_temp,
+            profile_completed=not is_temp,
+            created_by_id=request.user.get("user_id"),
         )
         db.session.add(user)
         db.session.commit()
@@ -1155,6 +1565,7 @@ def create_teacher():
         teacher = Teacher(
             organization_id=org_id,
             user_id=user.id,
+            teacher_code=next_teacher_code(org_id),
             name=data.get("name"),
             email=data.get("email"),
             unavailable_slots=data.get("unavailable_slots", []),
@@ -1176,9 +1587,18 @@ def create_teacher():
         _apply_teaching_and_charges(teacher, data, org_id)
         db.session.add(teacher)
         db.session.commit()
-        log_audit("teacher.create", {"email": email, "teacher_id": teacher.id},
+        log_audit("teacher.create", {"email": email, "teacher_id": teacher.id, "temp_password": is_temp},
                   user_id=request.user.get("user_id"), organization_id=org_id)
-        return jsonify(teacher.to_dict()), 201
+        result = teacher.to_dict()
+        # Surface the credentials so the admin can hand them over. The temp
+        # password is only ever returned here, at creation time.
+        result["credentials"] = {
+            "email": email,
+            "temporary_password": raw_password if is_temp else None,
+            "must_change_password": is_temp,
+            "teacher_code": teacher.teacher_code,
+        }
+        return jsonify(result), 201
     except Exception as e:
         db.session.rollback()
         import traceback

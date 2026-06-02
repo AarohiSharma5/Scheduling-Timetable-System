@@ -13,8 +13,9 @@ import LeaveManagement from "../components/LeaveManagement";
 import NotificationsCenter from "../components/NotificationsCenter";
 import PinnedSlotsManager from "../components/PinnedSlotsManager";
 import ChargeManagement from "../components/ChargeManagement";
+import InvitationsPanel from "../components/InvitationsPanel";
 
-type Tab = "timetable" | "students" | "teachers" | "batches" | "rooms" | "groups" | "classperiods" | "subjects" | "charges" | "pinned" | "leaves" | "notifications" | "config";
+type Tab = "timetable" | "students" | "teachers" | "batches" | "rooms" | "groups" | "classperiods" | "subjects" | "charges" | "pinned" | "invitations" | "leaves" | "notifications" | "config";
 
 const tabs: Record<Tab, { icon: string; label: string }> = {
   timetable: { icon: "📊", label: "Timetable" },
@@ -27,6 +28,7 @@ const tabs: Record<Tab, { icon: string; label: string }> = {
   subjects: { icon: "📖", label: "Subjects" },
   charges: { icon: "🏅", label: "Departments" },
   pinned: { icon: "📌", label: "Fixed Periods" },
+  invitations: { icon: "✉️", label: "Invitations" },
   leaves: { icon: "🔁", label: "Substitutes" },
   notifications: { icon: "🔔", label: "Notifications" },
   config: { icon: "⚙️", label: "Configuration" },
@@ -87,6 +89,7 @@ export default function AdminPage() {
           {activeTab === "subjects" && <SubjectManagement />}
           {activeTab === "charges" && <ChargeManagement />}
           {activeTab === "pinned" && <PinnedSlotsManager />}
+          {activeTab === "invitations" && <InvitationsPanel />}
           {activeTab === "leaves" && <LeaveManagement mode="substitute" />}
           {activeTab === "notifications" && <NotificationsCenter />}
           {activeTab === "config" && <ConfigurationForm />}
