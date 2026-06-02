@@ -155,28 +155,33 @@ class LeaveService:
         # Only consider substitutes inside the same organization.
         org_id = teacher.organization_id
 
+        # subject_ids is a JSON column, so we can't use SQL LIKE/contains on it
+        # (Postgres rejects `json ~~ text`). Filter subject overlap in Python.
+        wanted_subjects = {str(s) for s in (teacher.subject_ids or [])}
+
         seen = set()
-        # Get all teachers who teach at least one of the same subjects
-        for subject_id in (teacher.subject_ids or []):
-            potential_subs = Teacher.query.filter(
-                Teacher.id != teacher.id,
-                Teacher.organization_id == org_id,
-                Teacher.subject_ids.contains(str(subject_id))
-            ).all()
-            
-            for sub in potential_subs:
-                if sub.id in seen:
-                    continue
-                seen.add(sub.id)
-                if LeaveService._is_substitute_available(sub.id, leave_request.leave_date, busy_periods):
-                    # Count their teaching load on that day (prefer the freest)
-                    load = TimetableSlot.query.filter_by(
-                        teacher_id=sub.id
-                    ).filter(
-                        TimetableSlot.day == day_name
-                    ).count()
-                    
-                    available_substitutes.append((sub, load))
+        candidates = Teacher.query.filter(
+            Teacher.id != teacher.id,
+            Teacher.organization_id == org_id,
+        ).all()
+
+        for sub in candidates:
+            if sub.id in seen:
+                continue
+            sub_subjects = {str(s) for s in (sub.subject_ids or [])}
+            # Must be able to teach at least one of the absent teacher's subjects.
+            if not (wanted_subjects & sub_subjects):
+                continue
+            seen.add(sub.id)
+            if LeaveService._is_substitute_available(sub.id, leave_request.leave_date, busy_periods):
+                # Count their teaching load on that day (prefer the freest)
+                load = TimetableSlot.query.filter_by(
+                    teacher_id=sub.id
+                ).filter(
+                    TimetableSlot.day == day_name
+                ).count()
+
+                available_substitutes.append((sub, load))
         
         # Return substitute with lowest load
         if available_substitutes:
