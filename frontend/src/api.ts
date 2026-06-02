@@ -397,6 +397,10 @@ export const api = {
       const { data } = await axiosInstance.get(`/timetable/batch/${batchId}`);
       return data;
     },
+    getTeacherSchedule: async (teacherId: number) => {
+      const { data } = await axiosInstance.get(`/timetable/teacher/${teacherId}`);
+      return data;
+    },
     
     // Conflict Detection & Validation
     validate: async (id: number) => {
@@ -468,6 +472,17 @@ export const api = {
   analytics: {
     get: async (planId: number) => {
       const { data } = await axiosInstance.get(`/analytics/${planId}`);
+      return data;
+    },
+  },
+
+  leaves: {
+    request: async (payload: { leave_date: string; reason: string; leave_type?: string }) => {
+      const { data } = await axiosInstance.post("/leaves/request", payload);
+      return data;
+    },
+    listMine: async () => {
+      const { data } = await axiosInstance.get("/leaves");
       return data;
     },
   },

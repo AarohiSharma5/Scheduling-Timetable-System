@@ -483,6 +483,91 @@ def get_batch_timetable(batch_id):
     }), 200
 
 
+@timetable_bp.route("/teacher/<int:teacher_id>", methods=["GET"])
+@token_required
+def get_teacher_timetable(teacher_id):
+    """A teacher's own schedule from the latest (published, else newest) timetable.
+
+    Returns the period layout, the teacher's slots organized by day, and real
+    derived stats: distinct classes taught, distinct subjects, total students
+    across those classes, and weekly teaching periods.
+    """
+    org_id = _org_id()
+    teacher = Teacher.query.filter_by(id=teacher_id, organization_id=org_id).first()
+    if not teacher:
+        return jsonify({"error": "Teacher not found"}), 404
+
+    timetable = (
+        Timetable.query.filter_by(organization_id=org_id, status="published")
+        .order_by(Timetable.published_at.desc()).first()
+    )
+    if not timetable:
+        timetable = (
+            Timetable.query.filter_by(organization_id=org_id)
+            .order_by(Timetable.id.desc()).first()
+        )
+    if not timetable:
+        return jsonify({"error": "No timetable available"}), 404
+
+    config = SchoolConfig.query.filter_by(organization_id=org_id).first()
+    layout = period_utils.build_layout(config) if config else [
+        {"number": i, "start": "", "end": "", "is_lunch": False} for i in range(1, 9)
+    ]
+    days = period_utils.working_days(config) if config else period_utils.WEEK_DAYS[:5]
+
+    slots = TimetableSlot.query.filter_by(timetable_id=timetable.id, teacher_id=teacher_id).all()
+
+    batch_cache = {}
+    def _batch(bid):
+        if bid not in batch_cache:
+            batch_cache[bid] = Batch.query.get(bid) if bid else None
+        return batch_cache[bid]
+
+    schedule = {}
+    subjects_seen = {}
+    batches_seen = {}
+    weekly = 0
+    for slot in slots:
+        if slot.is_lunch or getattr(slot, "is_short_break", False):
+            continue
+        b = _batch(slot.batch_id)
+        subject = Subject.query.get(slot.subject_id) if slot.subject_id else None
+        label = f"{b.grade}-{b.section}" if b else "—"
+        schedule.setdefault(slot.day, []).append({
+            "period": slot.period_number,
+            "subject": subject.name if subject else "—",
+            "class": label,
+            "room": slot.room,
+        })
+        weekly += 1
+        if subject:
+            subjects_seen[subject.id] = subject.name
+        if b:
+            batches_seen[b.id] = {"label": label, "students": b.student_count or 0}
+
+    for day in schedule:
+        schedule[day].sort(key=lambda x: x["period"])
+
+    total_students = sum(v["students"] for v in batches_seen.values())
+    return jsonify({
+        "teacher": {"id": teacher.id, "name": teacher.name,
+                    "is_class_teacher": bool(teacher.is_class_teacher)},
+        "schedule": schedule,
+        "periods": layout,
+        "days": days,
+        "timetable_name": timetable.name,
+        "timetable_status": timetable.status,
+        "stats": {
+            "classes": len(batches_seen),
+            "subjects": len(subjects_seen),
+            "students": total_students,
+            "weekly_periods": weekly,
+        },
+        "classes": [v["label"] for v in batches_seen.values()],
+        "subjects": [{"id": k, "name": v} for k, v in sorted(subjects_seen.items(), key=lambda kv: kv[1])],
+    }), 200
+
+
 # ============================================================================
 # MANUAL TIMETABLE EDITING (drag-and-drop grid)
 # ============================================================================
