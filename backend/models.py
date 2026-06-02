@@ -16,6 +16,23 @@ class Organization(db.Model):
     password_hash = db.Column(db.String(255), nullable=False)
     description = db.Column(db.Text)
     logo_url = db.Column(db.String(500))
+    # --- Self-service signup / profile fields (all nullable so existing
+    # seeded orgs keep working). ---
+    school_code = db.Column(db.String(60), unique=True, index=True)
+    board = db.Column(db.String(60))            # CBSE / ICSE / State / IB / etc.
+    address = db.Column(db.String(255))
+    city = db.Column(db.String(120))
+    state = db.Column(db.String(120))
+    country = db.Column(db.String(120))
+    postal_code = db.Column(db.String(20))
+    contact_number = db.Column(db.String(40))
+    official_email = db.Column(db.String(120), index=True)
+    website = db.Column(db.String(255))
+    academic_year = db.Column(db.String(20))    # e.g. "2026-2027"
+    # Onboarding wizard progress (step 0 = not started).
+    onboarding_step = db.Column(db.Integer, default=0)
+    onboarding_completed = db.Column(db.Boolean, default=False)
+    is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -26,6 +43,20 @@ class Organization(db.Model):
             "slug": self.slug,
             "description": self.description,
             "logo_url": self.logo_url,
+            "school_code": self.school_code,
+            "board": self.board,
+            "address": self.address,
+            "city": self.city,
+            "state": self.state,
+            "country": self.country,
+            "postal_code": self.postal_code,
+            "contact_number": self.contact_number,
+            "official_email": self.official_email,
+            "website": self.website,
+            "academic_year": self.academic_year,
+            "onboarding_step": self.onboarding_step or 0,
+            "onboarding_completed": bool(self.onboarding_completed),
+            "is_active": bool(self.is_active) if self.is_active is not None else True,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -39,9 +70,17 @@ class User(db.Model):
     organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
     name = db.Column(db.String(120), nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
-    role = db.Column(db.String(20), nullable=False)  # 'admin', 'principal', 'teacher', 'student'
+    role = db.Column(db.String(20), nullable=False)  # 'owner','admin','principal','coordinator','teacher','student','parent'
     password_hash = db.Column(db.String(255))  # For email/password auth
     batch_id = db.Column(db.Integer, db.ForeignKey("batches.id"))  # For students only
+    # --- Account lifecycle / first-login workflow ---
+    phone = db.Column(db.String(40))
+    designation = db.Column(db.String(80))      # Owner / Admin / Principal label at signup
+    status = db.Column(db.String(20), default="active")  # active | invited | pending
+    must_change_password = db.Column(db.Boolean, default=False)
+    profile_completed = db.Column(db.Boolean, default=True)
+    terms_accepted_at = db.Column(db.DateTime)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -53,8 +92,71 @@ class User(db.Model):
             "email": self.email,
             "role": self.role,
             "batch_id": self.batch_id,
+            "phone": self.phone,
+            "designation": self.designation,
+            "status": self.status or "active",
+            "must_change_password": bool(self.must_change_password),
+            "profile_completed": bool(self.profile_completed) if self.profile_completed is not None else True,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+# ============================================================================
+# INVITATION MODEL - Admin-issued invites for teachers/coordinators/etc.
+# ============================================================================
+class Invitation(db.Model):
+    __tablename__ = "invitations"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True, nullable=False)
+    email = db.Column(db.String(120), nullable=False, index=True)
+    name = db.Column(db.String(120))
+    role = db.Column(db.String(20), nullable=False)  # teacher / coordinator / principal / student
+    token = db.Column(db.String(120), unique=True, nullable=False, index=True)
+    status = db.Column(db.String(20), default="pending")  # pending | accepted | expired | revoked
+    expires_at = db.Column(db.DateTime)
+    invited_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    accepted_at = db.Column(db.DateTime)
+    # Optional link to the provisioned user/teacher/student record.
+    target_user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "organization_id": self.organization_id,
+            "email": self.email,
+            "name": self.name,
+            "role": self.role,
+            "status": self.status,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "accepted_at": self.accepted_at.isoformat() if self.accepted_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ============================================================================
+# AUDIT LOG MODEL - Security/event trail (per organization)
+# ============================================================================
+class AuditLog(db.Model):
+    __tablename__ = "audit_logs"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    action = db.Column(db.String(80), nullable=False, index=True)  # e.g. org.create, user.login
+    detail = db.Column(db.JSON, default=dict)
+    ip_address = db.Column(db.String(64))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "organization_id": self.organization_id,
+            "user_id": self.user_id,
+            "action": self.action,
+            "detail": self.detail or {},
+            "ip_address": self.ip_address,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
 

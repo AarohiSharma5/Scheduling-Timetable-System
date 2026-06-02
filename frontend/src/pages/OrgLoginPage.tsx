@@ -133,6 +133,13 @@ export default function OrgLoginPage() {
             Once you sign in to an organisation, you'll stay signed in to it.
             You can then log in as Admin, Principal, Teacher or Student.
           </p>
+
+          <div className="mt-4 pt-4 border-t border-slate-200 text-center text-sm text-slate-600">
+            New school?{" "}
+            <Link to="/org-signup" className="font-semibold text-indigo-600 hover:text-indigo-700">
+              Register your organisation →
+            </Link>
+          </div>
         </div>
       </main>
     </div>

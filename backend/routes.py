@@ -11,7 +11,7 @@ Endpoints organized by module:
 """
 
 from flask import Blueprint, request, jsonify, abort, make_response
-from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification, Organization, PinnedSlot, TeacherPreference, Charge, Student, Classroom, Stream, SubjectCombination, TeachingGroup, GroupMembership, ClassSubjectConfig
+from models import db, User, Batch, Subject, Teacher, SchoolConfig, Timetable, TimetableSlot, LeaveRequest, Notification, Organization, PinnedSlot, TeacherPreference, Charge, Student, Classroom, Stream, SubjectCombination, TeachingGroup, GroupMembership, ClassSubjectConfig, Invitation, AuditLog
 from datetime import datetime, timedelta, date
 from functools import wraps
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -94,6 +94,42 @@ def owned_or_404(model, obj_id):
     if obj is None:
         abort(404)
     return obj
+
+
+def _client_ip():
+    """Best-effort client IP, honoring a single proxy hop."""
+    fwd = request.headers.get("X-Forwarded-For", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.remote_addr
+
+
+def log_audit(action, detail=None, user_id=None, organization_id=None, commit=True):
+    """Append a security/event row to the audit trail.
+
+    Never raises into the caller — auditing must not break the primary action.
+    """
+    try:
+        entry = AuditLog(
+            organization_id=organization_id if organization_id is not None else current_org_id(),
+            user_id=user_id,
+            action=action,
+            detail=detail or {},
+            ip_address=_client_ip(),
+        )
+        db.session.add(entry)
+        if commit:
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
+# Password policy: >=8 chars, at least one letter and one digit.
+_PW_RE = re.compile(r"^(?=.*[A-Za-z])(?=.*\d).{8,}$")
+
+
+def password_ok(pw):
+    return bool(pw and _PW_RE.match(pw))
 
 # ============================================================================
 # HEALTH CHECK
@@ -205,6 +241,164 @@ def organizations_list():
     return jsonify([{"id": o.id, "name": o.name, "slug": o.slug, "logo_url": o.logo_url} for o in orgs]), 200
 
 
+# Only management roles may be self-provisioned at organization signup.
+_SIGNUP_ALLOWED_DESIGNATIONS = {"owner", "admin", "principal"}
+
+
+def _unique_slug(base):
+    """Return a slug unique among organizations, suffixing -2, -3, ... if needed."""
+    base = re.sub(r"[^a-z0-9]+", "-", (base or "").lower()).strip("-") or "school"
+    slug = base
+    n = 2
+    while Organization.query.filter_by(slug=slug).first():
+        slug = f"{base}-{n}"
+        n += 1
+    return slug
+
+
+@api.route("/organizations/register", methods=["POST"])
+@limiter.limit("5 per hour")
+def organization_register():
+    """Public self-service organization signup.
+
+    Creates an isolated tenant Organization plus its PRIMARY management account
+    (owner/admin/principal only — never teacher/student/parent), and seeds
+    sensible defaults (academic year + a SchoolConfig row). Returns the org and
+    a usable org session so the client can flow straight into user login.
+
+    Body:
+      organization: {name, school_code, board, address, city, state, country,
+                     postal_code, contact_number, official_email, website,
+                     password}
+      admin: {full_name, designation, email, phone, password}
+    """
+    try:
+        data = request.get_json() or {}
+        org_in = data.get("organization") or {}
+        admin_in = data.get("admin") or {}
+
+        name = (org_in.get("name") or "").strip()
+        school_code = (org_in.get("school_code") or "").strip()
+        official_email = (org_in.get("official_email") or "").strip().lower()
+        org_password = org_in.get("password") or ""
+
+        admin_name = (admin_in.get("full_name") or admin_in.get("name") or "").strip()
+        admin_email = (admin_in.get("email") or "").strip().lower()
+        admin_password = admin_in.get("password") or ""
+        designation = (admin_in.get("designation") or "admin").strip().lower()
+
+        # --- Validation ---
+        errors = {}
+        if not name:
+            errors["name"] = "School name is required"
+        if not school_code:
+            errors["school_code"] = "School code is required"
+        if not official_email:
+            errors["official_email"] = "Official email is required"
+        if not admin_name:
+            errors["full_name"] = "Your full name is required"
+        if not admin_email:
+            errors["admin_email"] = "Your email is required"
+        if designation not in _SIGNUP_ALLOWED_DESIGNATIONS:
+            errors["designation"] = "Designation must be Owner, Admin or Principal"
+        if not password_ok(org_password):
+            errors["org_password"] = "Org password must be 8+ chars with a letter and a number"
+        if not password_ok(admin_password):
+            errors["admin_password"] = "Password must be 8+ chars with a letter and a number"
+
+        if not errors:
+            if school_code and Organization.query.filter(db.func.lower(Organization.school_code) == school_code.lower()).first():
+                errors["school_code"] = "This school code is already taken"
+            if official_email and Organization.query.filter(db.func.lower(Organization.official_email) == official_email).first():
+                errors["official_email"] = "This organization email is already registered"
+            if admin_email and User.query.filter(db.func.lower(User.email) == admin_email).first():
+                errors["admin_email"] = "A user with this email already exists"
+
+        if errors:
+            return jsonify({"error": "Validation failed", "fields": errors}), 400
+
+        # --- Create tenant ---
+        slug = _unique_slug(name)
+        # Default the current academic year (April–March style: pick by month).
+        today = date.today()
+        start_year = today.year if today.month >= 4 else today.year - 1
+        org = Organization(
+            name=name,
+            slug=slug,
+            password_hash=generate_password_hash(org_password),
+            school_code=school_code,
+            board=(org_in.get("board") or "").strip() or None,
+            address=(org_in.get("address") or "").strip() or None,
+            city=(org_in.get("city") or "").strip() or None,
+            state=(org_in.get("state") or "").strip() or None,
+            country=(org_in.get("country") or "").strip() or None,
+            postal_code=(org_in.get("postal_code") or "").strip() or None,
+            contact_number=(org_in.get("contact_number") or "").strip() or None,
+            official_email=official_email,
+            website=(org_in.get("website") or "").strip() or None,
+            academic_year=f"{start_year}-{start_year + 1}",
+            onboarding_step=0,
+            onboarding_completed=False,
+            is_active=True,
+        )
+        db.session.add(org)
+        db.session.flush()  # assign org.id
+
+        # Primary management user. Owner is treated as admin for access purposes.
+        role = "admin" if designation in ("owner", "admin") else "principal"
+        primary = User(
+            organization_id=org.id,
+            name=admin_name,
+            email=admin_email,
+            role=role,
+            password_hash=generate_password_hash(admin_password),
+            phone=(admin_in.get("phone") or "").strip() or None,
+            designation=designation.capitalize(),
+            status="active",
+            must_change_password=False,
+            profile_completed=True,
+            terms_accepted_at=datetime.utcnow(),
+        )
+        db.session.add(primary)
+
+        # Initialize default settings for the tenant.
+        if not SchoolConfig.query.filter_by(organization_id=org.id).first():
+            db.session.add(SchoolConfig(organization_id=org.id))
+
+        db.session.flush()
+        log_audit("org.create", {"name": name, "school_code": school_code, "slug": slug},
+                  user_id=primary.id, organization_id=org.id, commit=False)
+        log_audit("user.create", {"email": admin_email, "role": role, "primary": True},
+                  user_id=primary.id, organization_id=org.id, commit=False)
+        db.session.commit()
+
+        # Hand back an org session so the UI can proceed to user login.
+        token = generate_org_token(org.id, org.slug)
+        resp = make_response(jsonify({
+            "organization": org.to_dict(),
+            "admin": {"email": admin_email, "role": role, "name": admin_name},
+            "message": "Organization created. You can now sign in.",
+        }), 201)
+        _set_auth_cookie(resp, ORG_COOKIE_NAME, token, ORG_TOKEN_EXPIRY_DAYS * 24 * 3600)
+        return resp
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/auth/register", methods=["POST"])
+@api.route("/auth/signup", methods=["POST"])
+def public_user_register_blocked():
+    """Public self-registration of users is disabled.
+
+    Teachers, students, parents and coordinators are provisioned only by an
+    organization admin (see /admin/teachers, /admin/students, invitations).
+    """
+    return jsonify({
+        "error": "Public user registration is disabled. Accounts are created by your organization's admin.",
+    }), 403
+
+
 # ============================================================================
 # AUTH ENDPOINTS (Step 2)
 # ============================================================================
@@ -238,6 +432,8 @@ def login():
             return jsonify({"error": "This account does not belong to the selected organization"}), 403
 
         token = generate_token(user.id, user.email, user.role, organization_id=org.id)
+        log_audit("user.login", {"email": user.email, "role": user.role},
+                  user_id=user.id, organization_id=org.id)
 
         # Token goes into an httpOnly cookie, not the response body. The client
         # learns "who am I" from the user object here and from /auth/me later.
@@ -980,6 +1176,8 @@ def create_teacher():
         _apply_teaching_and_charges(teacher, data, org_id)
         db.session.add(teacher)
         db.session.commit()
+        log_audit("teacher.create", {"email": email, "teacher_id": teacher.id},
+                  user_id=request.user.get("user_id"), organization_id=org_id)
         return jsonify(teacher.to_dict()), 201
     except Exception as e:
         db.session.rollback()
@@ -1642,6 +1840,8 @@ def create_student():
         else:
             resequence_rolls(org_id, class_grade, section)
         db.session.commit()
+        log_audit("student.create", {"student_id": student.student_id, "grade": class_grade, "section": section},
+                  user_id=request.user.get("user_id"), organization_id=org_id)
 
         result = student.to_dict()
         result["auto_section"] = not (data.get("section") or ct_scope)

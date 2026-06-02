@@ -8,6 +8,7 @@ import RequireOrg from "./components/RequireOrg";
 // Pages
 import LandingPage from "./pages/LandingPage";
 import OrgLoginPage from "./pages/OrgLoginPage";
+import OrgSignupPage from "./pages/OrgSignupPage";
 import LoginPage from "./pages/LoginPage";
 import AdminPage from "./pages/AdminPage";
 import PrincipalPage from "./pages/PrincipalPage";
@@ -37,6 +38,7 @@ const App: React.FC = () => {
         {/* Public Routes */}
         <Route path="/" element={<LandingPage />} />
         <Route path="/org-login" element={<OrgLoginPage />} />
+        <Route path="/org-signup" element={<OrgSignupPage />} />
 
         {/* User login — only reachable after organization login */}
         <Route

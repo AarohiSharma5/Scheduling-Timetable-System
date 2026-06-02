@@ -22,6 +22,7 @@ interface OrgState {
   error: string | null;
 
   loginOrg: (identifier: string, password: string) => Promise<void>;
+  registerOrg: (payload: any) => Promise<{ organization: Organization; admin: { email: string; role: string; name: string } }>;
   logoutOrg: () => Promise<void>;
   restoreOrgSession: () => void;
   refreshOrg: () => Promise<void>;
@@ -73,6 +74,32 @@ export const useOrgStore = create<OrgState>((set, get) => ({
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Organization login failed";
+      set({ error: message, loading: false });
+      throw err;
+    }
+  },
+
+  registerOrg: async (payload) => {
+    set({ loading: true, error: null });
+    try {
+      const response = await fetch(`${API_BASE}/organizations/register`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const err: any = new Error(data.error || `Signup failed (${response.status})`);
+        err.fields = data.fields;
+        throw err;
+      }
+      // The register endpoint sets the org session cookie; persist display info.
+      localStorage.setItem(ORG_INFO_KEY, JSON.stringify(data.organization));
+      set({ organization: data.organization, loading: false });
+      return data;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Signup failed";
       set({ error: message, loading: false });
       throw err;
     }
