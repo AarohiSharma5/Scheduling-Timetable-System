@@ -5,6 +5,16 @@ import { useOrgStore } from "../stores/orgStore";
 
 type Role = "admin" | "principal" | "teacher" | "student";
 
+// Map an authenticated user's real role to its dashboard route. Owner is
+// treated as admin (matches the backend role assignment at signup).
+const ROLE_ROUTES: Record<string, string> = {
+  admin: "/admin",
+  owner: "/admin",
+  principal: "/principal",
+  teacher: "/teacher",
+  student: "/student",
+};
+
 const loginOptions: Record<
   Role,
   { label: string; icon: string; color: string; description: string }
@@ -56,9 +66,17 @@ export default function LoginPage() {
       // they can reach their dashboard.
       if (user?.must_change_password) {
         navigate("/change-password", { replace: true });
-      } else {
-        navigate(`/${selectedRole}`);
+        return;
       }
+      // Route by the account's ACTUAL role (not the card the user clicked) so a
+      // mismatch doesn't get bounced back to /login by the route guard.
+      const target = ROLE_ROUTES[user?.role || ""] || "/login";
+      if (selectedRole && user?.role && selectedRole !== user.role && target !== "/login") {
+        setError(
+          `This account is a ${user.role}, not a ${loginOptions[selectedRole].label.toLowerCase()}. Taking you to your dashboard…`
+        );
+      }
+      navigate(target);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Login failed";
       setError(message);
