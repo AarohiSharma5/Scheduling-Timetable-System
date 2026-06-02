@@ -416,38 +416,70 @@ def get_batch_timetable(batch_id):
     batch = Batch.query.filter_by(id=batch_id, organization_id=org_id).first()
     if not batch:
         return jsonify({"error": "Batch not found"}), 404
-    
-    # Get latest published timetable for this org
+
+    # Prefer the latest PUBLISHED timetable; fall back to the most recent one of
+    # any status so a student/teacher can still preview a draft schedule.
     timetable = (
         Timetable.query.filter_by(organization_id=org_id, status="published")
         .order_by(Timetable.published_at.desc())
         .first()
     )
     if not timetable:
-        return jsonify({"error": "No published timetable available"}), 404
-    
-    # Get slots for this batch
+        timetable = (
+            Timetable.query.filter_by(organization_id=org_id)
+            .order_by(Timetable.id.desc())
+            .first()
+        )
+    if not timetable:
+        return jsonify({"error": "No timetable available"}), 404
+
+    config = SchoolConfig.query.filter_by(organization_id=org_id).first()
+    layout = period_utils.build_layout(config) if config else [
+        {"number": i, "start": "", "end": "", "is_lunch": False} for i in range(1, 9)
+    ]
+    days = period_utils.working_days(config) if config else period_utils.WEEK_DAYS[:5]
+
     slots = TimetableSlot.query.filter_by(timetable_id=timetable.id, batch_id=batch_id).all()
-    
-    # Organize by day
+
     schedule = {}
+    subjects_seen = {}
+    teachers_seen = {}
+    teaching_periods = 0
     for slot in slots:
-        if slot.day not in schedule:
-            schedule[slot.day] = []
-        
         teacher = Teacher.query.get(slot.teacher_id) if slot.teacher_id else None
         subject = Subject.query.get(slot.subject_id) if slot.subject_id else None
-        
-        schedule[slot.day].append({
+        schedule.setdefault(slot.day, []).append({
             "period": slot.period_number,
-            "subject": subject.name if subject else "Unknown",
-            "teacher": teacher.name if teacher else "TBD"
+            "subject": subject.name if subject else ("Lunch" if slot.is_lunch else
+                       ("Break" if getattr(slot, "is_short_break", False) else "—")),
+            "subject_id": slot.subject_id,
+            "teacher": teacher.name if teacher else None,
+            "teacher_id": slot.teacher_id,
+            "room": slot.room,
+            "is_lunch": bool(slot.is_lunch),
+            "is_short_break": bool(getattr(slot, "is_short_break", False)),
         })
-    
+        if slot.subject_id and not slot.is_lunch and not getattr(slot, "is_short_break", False):
+            teaching_periods += 1
+            if subject:
+                subjects_seen[subject.id] = subject.name
+            if teacher:
+                teachers_seen[teacher.id] = teacher.name
+
+    for day in schedule:
+        schedule[day].sort(key=lambda x: x["period"])
+
     return jsonify({
         "batch": batch.to_dict(),
         "schedule": schedule,
-        "timetable_name": timetable.name
+        "periods": layout,
+        "days": days,
+        "timetable_name": timetable.name,
+        "timetable_status": timetable.status,
+        "student_count": getattr(batch, "student_count", None),
+        "weekly_periods": teaching_periods,
+        "subjects": [{"id": k, "name": v} for k, v in sorted(subjects_seen.items(), key=lambda kv: kv[1])],
+        "teachers": [{"id": k, "name": v} for k, v in sorted(teachers_seen.items(), key=lambda kv: kv[1])],
     }), 200
 
 
