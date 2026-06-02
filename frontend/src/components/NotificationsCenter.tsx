@@ -17,6 +17,7 @@ export default function NotificationsCenter() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"all" | "unread">("all");
   const [message, setMessage] = useState("");
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   useEffect(() => {
     fetchNotifications();
@@ -216,6 +217,22 @@ export default function NotificationsCenter() {
                 </div>
               </div>
 
+              {/* Expanded details */}
+              {expandedId === notification.id && (
+                <div className="mt-3 bg-white/70 rounded-lg border border-gray-200 p-3 text-sm text-gray-700 space-y-1">
+                  <p><span className="font-semibold">Title:</span> {notification.title}</p>
+                  <p><span className="font-semibold">Details:</span> {notification.message}</p>
+                  <p>
+                    <span className="font-semibold">Type:</span>{" "}
+                    <span className="capitalize">{notification.notification_type.replace(/_/g, " ")}</span>
+                  </p>
+                  <p>
+                    <span className="font-semibold">Received:</span>{" "}
+                    {new Date(notification.created_at).toLocaleString()}
+                  </p>
+                </div>
+              )}
+
               {/* Actions */}
               <div className="mt-3 flex gap-2">
                 {!notification.is_read && (
@@ -226,14 +243,15 @@ export default function NotificationsCenter() {
                     Mark as Read
                   </button>
                 )}
-                {notification.action_url && (
-                  <a
-                    href={notification.action_url}
-                    className="bg-green-600 hover:bg-green-700 text-white text-xs font-medium px-3 py-1 rounded"
-                  >
-                    View Details
-                  </a>
-                )}
+                <button
+                  onClick={() => {
+                    setExpandedId(expandedId === notification.id ? null : notification.id);
+                    if (!notification.is_read) markAsRead(notification.id);
+                  }}
+                  className="bg-green-600 hover:bg-green-700 text-white text-xs font-medium px-3 py-1 rounded"
+                >
+                  {expandedId === notification.id ? "Hide Details" : "View Details"}
+                </button>
                 <button
                   onClick={() => deleteNotification(notification.id)}
                   className="bg-red-600 hover:bg-red-700 text-white text-xs font-medium px-3 py-1 rounded"
