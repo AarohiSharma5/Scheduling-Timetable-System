@@ -183,11 +183,26 @@ class LeaveService:
 
                 available_substitutes.append((sub, load))
         
-        # Return substitute with lowest load
+        # Return same-subject substitute with the lowest load.
         if available_substitutes:
             available_substitutes.sort(key=lambda x: x[1])
             return available_substitutes[0][0]
-        
+
+        # Fallback: no free same-subject teacher. In a real school any free
+        # teacher covers the class (supervision/cover). Pick the freest teacher
+        # in the org who is available during the required periods.
+        fallback = []
+        for sub in candidates:
+            if LeaveService._is_substitute_available(sub.id, leave_request.leave_date, busy_periods):
+                load = TimetableSlot.query.filter_by(teacher_id=sub.id).filter(
+                    TimetableSlot.day == day_name
+                ).count()
+                fallback.append((sub, load))
+
+        if fallback:
+            fallback.sort(key=lambda x: x[1])
+            return fallback[0][0]
+
         return None
     
     @staticmethod
