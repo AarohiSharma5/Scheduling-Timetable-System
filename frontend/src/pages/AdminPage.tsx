@@ -27,7 +27,7 @@ const tabs: Record<Tab, { icon: string; label: string }> = {
   subjects: { icon: "📖", label: "Subjects" },
   charges: { icon: "🏅", label: "Departments" },
   pinned: { icon: "📌", label: "Fixed Periods" },
-  leaves: { icon: "📋", label: "Leave Requests" },
+  leaves: { icon: "🔁", label: "Substitutes" },
   notifications: { icon: "🔔", label: "Notifications" },
   config: { icon: "⚙️", label: "Configuration" },
 };
@@ -87,7 +87,7 @@ export default function AdminPage() {
           {activeTab === "subjects" && <SubjectManagement />}
           {activeTab === "charges" && <ChargeManagement />}
           {activeTab === "pinned" && <PinnedSlotsManager />}
-          {activeTab === "leaves" && <LeaveManagement />}
+          {activeTab === "leaves" && <LeaveManagement mode="substitute" />}
           {activeTab === "notifications" && <NotificationsCenter />}
           {activeTab === "config" && <ConfigurationForm />}
         </div>

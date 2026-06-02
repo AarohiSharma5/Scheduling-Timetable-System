@@ -176,12 +176,18 @@ class TimetablePDFExporter:
                     row.append("LUNCH")
                 elif row_def.get("is_short_break") or (slot and getattr(slot, "is_short_break", False)):
                     row.append("BREAK")
-                elif slot and slot.teacher_id:
+                elif slot and slot.subject_id:
                     subject = self._subject_by_id.get(slot.subject_id)
-                    teacher = self._teacher_by_id.get(slot.teacher_id)
                     subject_name = subject.name if subject else "---"
-                    teacher_name = teacher.name.split()[0] if teacher else "---"
-                    row.append(f"{subject_name}\n({teacher_name})")
+                    if slot.teacher_id:
+                        teacher = self._teacher_by_id.get(slot.teacher_id)
+                        teacher_name = teacher.name.split()[0] if teacher else "---"
+                        row.append(f"{subject_name}\n({teacher_name})")
+                    else:
+                        # Elective / language block: students split into separate
+                        # groups (e.g. French / Sanskrit) taught in their own rooms,
+                        # so there is no single teacher at the class level.
+                        row.append(f"{subject_name}\n(Groups)")
                 else:
                     row.append("")
             table_data.append(row)

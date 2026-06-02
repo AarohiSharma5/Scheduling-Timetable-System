@@ -42,7 +42,14 @@ const statusText = (s: AvailStatus) =>
   s === "free" ? "free" : s === "unavailable_marked" ? "free · marked unavailable" : "has a class";
 const availLabel = (t: AvailTeacher) => `${statusSymbol(t.status)} ${t.name} — ${statusText(t.status)}`;
 
-export default function LeaveManagement() {
+interface LeaveManagementProps {
+  // "full": principal — accept/reject + mark absent + substitutes.
+  // "substitute": admin — only assign/change substitutes on approved leaves.
+  mode?: "full" | "substitute";
+}
+
+export default function LeaveManagement({ mode = "full" }: LeaveManagementProps) {
+  const canDecide = mode === "full"; // accept/reject + mark-absent gated to principal
   const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
   const [teachers, setTeachers] = useState<TeacherLite[]>([]);
   const [loading, setLoading] = useState(true);
@@ -115,6 +122,31 @@ export default function LeaveManagement() {
       setBusyId(null);
     }
   };
+
+  // Assign/change the substitute on an already-approved leave (admin flow).
+  const setSubstitute = async (leaveId: number, substituteId?: number) => {
+    try {
+      setBusyId(leaveId);
+      setMessage("⏳ Updating substitute…");
+      await api.post(`/leaves/${leaveId}/substitute`, {
+        substitute_teacher_id: substituteId ?? null,
+      });
+      setMessage(substituteId ? "✅ Substitute updated." : "✅ Substitute auto-assigned.");
+      setExpanded(null);
+      setSubstitutes([]);
+      setManualSub("");
+      fetchLeaves();
+    } catch (error: any) {
+      setMessage(`❌ ${errMsg(error, "Could not update the substitute")}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // Route an "assign substitute" action to the right backend call depending on
+  // whether the leave is still pending (approve) or already approved (set sub).
+  const assignSubstitute = (leave: LeaveRequest, substituteId?: number) =>
+    isPending(leave.status) ? approve(leave.id, substituteId) : setSubstitute(leave.id, substituteId);
 
   const reject = async (leaveId: number) => {
     const reason = window.prompt("Reason for rejecting this leave request?", "Not approved");
@@ -238,28 +270,39 @@ export default function LeaveManagement() {
                       <td className="px-4 py-2 text-slate-600">{leave.substitute_teacher_name || "—"}</td>
                       <td className="px-4 py-2">
                         {isPending(leave.status) ? (
-                          <div className="flex flex-wrap gap-2">
-                            <button
-                              disabled={busyId === leave.id}
-                              onClick={() => approve(leave.id)}
-                              className="bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white px-3 py-1 rounded text-xs font-medium"
-                            >
-                              ✓ Accept
-                            </button>
-                            <button
-                              disabled={busyId === leave.id}
-                              onClick={() => reject(leave.id)}
-                              className="bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white px-3 py-1 rounded text-xs font-medium"
-                            >
-                              ✕ Reject
-                            </button>
-                            <button
-                              onClick={() => findSubstitutes(leave.id)}
-                              className="bg-slate-200 hover:bg-slate-300 text-slate-800 px-3 py-1 rounded text-xs font-medium"
-                            >
-                              {expanded === leave.id ? "Hide" : "Choose substitute"}
-                            </button>
-                          </div>
+                          canDecide ? (
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                disabled={busyId === leave.id}
+                                onClick={() => approve(leave.id)}
+                                className="bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white px-3 py-1 rounded text-xs font-medium"
+                              >
+                                ✓ Accept
+                              </button>
+                              <button
+                                disabled={busyId === leave.id}
+                                onClick={() => reject(leave.id)}
+                                className="bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white px-3 py-1 rounded text-xs font-medium"
+                              >
+                                ✕ Reject
+                              </button>
+                              <button
+                                onClick={() => findSubstitutes(leave.id)}
+                                className="bg-slate-200 hover:bg-slate-300 text-slate-800 px-3 py-1 rounded text-xs font-medium"
+                              >
+                                {expanded === leave.id ? "Hide" : "Choose substitute"}
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-amber-600">Awaiting principal</span>
+                          )
+                        ) : leave.status.toLowerCase() === "approved" ? (
+                          <button
+                            onClick={() => findSubstitutes(leave.id)}
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded text-xs font-medium"
+                          >
+                            {expanded === leave.id ? "Hide" : (leave.substitute_teacher_name ? "Change substitute" : "Assign substitute")}
+                          </button>
                         ) : (
                           <span className="text-gray-400">—</span>
                         )}
@@ -268,6 +311,15 @@ export default function LeaveManagement() {
                     {expanded === leave.id && (
                       <tr className="bg-blue-50/50">
                         <td colSpan={7} className="px-4 py-3 space-y-4">
+                          {/* Auto-assign shortcut */}
+                          <button
+                            disabled={busyId === leave.id}
+                            onClick={() => assignSubstitute(leave)}
+                            className="bg-cyan-600 hover:bg-cyan-700 disabled:opacity-60 text-white px-3 py-1.5 rounded text-xs font-medium"
+                          >
+                            ⚙️ {isPending(leave.status) ? "Accept & auto-assign substitute" : "Auto-assign best substitute"}
+                          </button>
+
                           {/* Recommended (free + same subject) substitutes */}
                           <div className="space-y-2">
                             <p className="font-semibold text-blue-900 text-sm">⭐ Recommended substitutes (free that day, same subject):</p>
@@ -286,10 +338,10 @@ export default function LeaveManagement() {
                                   </div>
                                   <button
                                     disabled={busyId === leave.id}
-                                    onClick={() => approve(leave.id, sub.id)}
+                                    onClick={() => assignSubstitute(leave, sub.id)}
                                     className="bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white px-3 py-1 rounded text-xs font-medium"
                                   >
-                                    Approve with {sub.name.split(" ")[0]}
+                                    {isPending(leave.status) ? "Approve with" : "Assign"} {sub.name.split(" ")[0]}
                                   </button>
                                 </div>
                               ))
@@ -317,15 +369,15 @@ export default function LeaveManagement() {
                               </select>
                               <button
                                 disabled={busyId === leave.id || !manualSub}
-                                onClick={() => approve(leave.id, Number(manualSub))}
+                                onClick={() => assignSubstitute(leave, Number(manualSub))}
                                 className="bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white px-4 py-2 rounded text-sm font-medium"
                               >
-                                Approve with selected
+                                {isPending(leave.status) ? "Approve with selected" : "Assign selected"}
                               </button>
                             </div>
                             <p className="text-xs text-slate-500">
                               🟢 free · 🟡 free but flagged the slot unavailable · 🔴 already has a class.
-                              The teacher must be free during the absent teacher's periods that day, otherwise approval is rejected.
+                              The teacher must be free during the absent teacher's periods that day, otherwise it is rejected.
                             </p>
                           </div>
                         </td>
@@ -339,7 +391,8 @@ export default function LeaveManagement() {
         )}
       </div>
 
-      {/* Emergency Actions */}
+      {/* Emergency Actions — principal only (admins cannot mark present/absent) */}
+      {canDecide && (
       <div className="bg-gradient-to-r from-red-50 to-red-100 rounded-lg p-6 border-2 border-red-200">
         <h3 className="text-xl font-bold text-red-900 mb-2">🚨 Emergency Actions</h3>
         <p className="text-red-700 mb-4">Mark a teacher as absent today, then auto-assign a substitute or pick one yourself.</p>
@@ -386,6 +439,14 @@ export default function LeaveManagement() {
           Substitute status: 🟢 free · 🟡 free but flagged the slot unavailable · 🔴 already has a class.
         </p>
       </div>
+      )}
+
+      {!canDecide && (
+        <div className="bg-blue-50 rounded-lg p-4 border border-blue-200 text-sm text-blue-800">
+          ℹ️ As an admin you can assign or change substitute teachers for approved/absent leaves.
+          Accepting/rejecting leave and marking teachers absent is handled by the principal.
+        </div>
+      )}
     </div>
   );
 }

@@ -352,7 +352,77 @@ class LeaveService:
         except Exception as e:
             db.session.rollback()
             return {"success": False, "error": str(e)}
-    
+
+    @staticmethod
+    def set_substitute(leave_request_id, substitute_teacher_id=None, changed_by=None):
+        """Assign or change the substitute on an already-approved leave.
+
+        Used by admins/principals to manage cover *after* a leave has been
+        approved or a teacher marked absent. Does NOT change the leave's
+        approval status. If ``substitute_teacher_id`` is None, the best
+        available substitute is auto-assigned.
+        """
+        try:
+            leave_request = LeaveRequest.query.get(leave_request_id)
+            if not leave_request:
+                return {"success": False, "error": "Leave request not found"}
+            if leave_request.status != "approved":
+                return {"success": False, "error": "Substitutes can only be set on approved/absent leaves"}
+
+            day_name = leave_request.leave_date.strftime('%A')
+
+            # The slots this leave covers. Prefer the originally-recorded slot
+            # ids (they may have been reassigned to a previous substitute);
+            # otherwise fall back to the absent teacher's slots that day.
+            adj = leave_request.timetable_adjustments or {}
+            original = adj.get("original_slots") or []
+            slot_ids = [o.get("id") for o in original if o.get("id")]
+            if slot_ids:
+                slots = TimetableSlot.query.filter(TimetableSlot.id.in_(slot_ids)).all()
+            else:
+                slots = TimetableSlot.query.filter_by(
+                    teacher_id=leave_request.teacher_id, day=day_name
+                ).all()
+
+            # Resolve the substitute: explicit (validated) or auto.
+            if substitute_teacher_id:
+                substitute_teacher_id = int(substitute_teacher_id)
+                if substitute_teacher_id == leave_request.substitute_teacher_id:
+                    return {"success": True, "leave_request": leave_request.to_dict()}  # no-op
+                busy_periods = {s.period_number for s in slots}
+                if not LeaveService._is_substitute_available(substitute_teacher_id, leave_request.leave_date, busy_periods):
+                    return {"success": False, "error": "Selected substitute has conflicting classes on that day"}
+                new_sub_id = substitute_teacher_id
+            else:
+                best = LeaveService._find_best_substitute(leave_request)
+                new_sub_id = best.id if best else None
+                if not new_sub_id:
+                    return {"success": False, "error": "No available substitute found for that day"}
+
+            # Reassign the covered slots to the new substitute.
+            for s in slots:
+                s.teacher_id = new_sub_id
+
+            leave_request.substitute_teacher_id = new_sub_id
+            leave_request.timetable_adjustments = {
+                "original_slots": original or [s.to_dict() for s in slots],
+                "adjustments": [
+                    {"slot_id": s.id, "period": s.period_number, "day": s.day,
+                     "new_teacher_id": new_sub_id}
+                    for s in slots
+                ],
+                "reassigned_by": changed_by,
+            }
+            db.session.commit()
+
+            LeaveService._notify_leave_approval(leave_request)
+
+            return {"success": True, "leave_request": leave_request.to_dict()}
+
+        except Exception as e:
+            db.session.rollback()
+            return {"success": False, "error": str(e)}
+
     @staticmethod
     def get_leave_requests(filters=None):
         """Get leave requests with optional filters"""

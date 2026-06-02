@@ -3336,6 +3336,38 @@ def reject_leave(leave_request_id):
         return jsonify({"error": str(e)}), 500
 
 
+@api.route("/leaves/<int:leave_request_id>/substitute", methods=["POST"])
+@token_required
+@role_required(["admin", "principal"])
+def set_leave_substitute(leave_request_id):
+    """Assign or change the substitute on an approved leave (admin/principal).
+
+    This does NOT change approval status — it only manages cover. Admins use
+    this to set/edit substitutes for leaves the principal has approved or for
+    teachers the principal has marked absent.
+    """
+    try:
+        from leave_service import LeaveService
+
+        # Ensure the leave belongs to the caller's organization.
+        from models import LeaveRequest
+        lr = LeaveRequest.query.get(leave_request_id)
+        if not lr or lr.organization_id != current_org_id():
+            return jsonify({"error": "Leave request not found"}), 404
+
+        data = request.get_json() or {}
+        result = LeaveService.set_substitute(
+            leave_request_id,
+            data.get("substitute_teacher_id"),
+            changed_by=request.user.get("user_id"),
+        )
+        if result["success"]:
+            return jsonify(result["leave_request"]), 200
+        return jsonify(result), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @api.route("/teachers/<int:teacher_id>/mark-absent", methods=["POST"])
 @token_required
 @role_required(["admin", "principal"])
