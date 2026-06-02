@@ -69,18 +69,33 @@ export default function LoginPage() {
   if (!organization) return null;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 flex flex-col">
+    <div className="relative min-h-screen overflow-hidden bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 flex flex-col">
+      {/* Decorative background blobs */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute -top-32 -left-24 h-96 w-96 rounded-full bg-indigo-600/30 blur-3xl animate-pulse" />
+        <div className="absolute top-1/3 -right-24 h-96 w-96 rounded-full bg-purple-600/20 blur-3xl" />
+        <div className="absolute -bottom-32 left-1/3 h-96 w-96 rounded-full bg-blue-600/20 blur-3xl" />
+        <div
+          className="absolute inset-0 opacity-[0.04]"
+          style={{
+            backgroundImage:
+              "linear-gradient(to right, white 1px, transparent 1px), linear-gradient(to bottom, white 1px, transparent 1px)",
+            backgroundSize: "44px 44px",
+          }}
+        />
+      </div>
+
       {/* Org banner */}
-      <div className="bg-slate-950/60 border-b border-slate-700">
+      <div className="relative z-10 bg-slate-950/50 backdrop-blur-md border-b border-white/10">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
           <Link to="/" className="flex items-center gap-3 group">
             <img
               src={organization.logo_url || "/scheduler-logo.png"}
               alt="logo"
-              className="h-8 w-8 object-contain rounded"
+              className="h-9 w-9 object-contain rounded-lg ring-1 ring-white/10"
             />
             <div>
-              <p className="text-xs uppercase tracking-wider text-slate-400">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-indigo-300/80">
                 Organisation
               </p>
               <p className="text-sm font-semibold text-white group-hover:text-indigo-300 transition">
@@ -90,30 +105,33 @@ export default function LoginPage() {
           </Link>
           <button
             onClick={handleSwitchOrg}
-            className="text-xs sm:text-sm text-slate-300 hover:text-white px-3 py-1.5 rounded border border-slate-600 hover:border-slate-400 bg-transparent"
+            className="text-xs sm:text-sm text-slate-200 hover:text-white px-3.5 py-1.5 rounded-full border border-white/15 hover:border-white/40 bg-white/5 hover:bg-white/10 transition"
           >
             Switch organisation
           </button>
         </div>
       </div>
 
-      <div className="flex-1 flex items-center justify-center p-4">
+      <div className="relative z-10 flex-1 flex items-center justify-center p-4 py-10">
         <div className="max-w-6xl w-full">
           {/* Header */}
           <div className="text-center mb-12">
-            <h1 className="text-4xl font-bold text-white mb-2">
-              📅 School Timetable Scheduler
+            <div className="inline-flex items-center justify-center h-16 w-16 mb-5 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 shadow-lg shadow-indigo-900/50 text-3xl ring-1 ring-white/20">
+              📅
+            </div>
+            <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight mb-3 bg-gradient-to-r from-white via-indigo-100 to-indigo-300 bg-clip-text text-transparent">
+              School Timetable Scheduler
             </h1>
-            <p className="text-slate-300">
+            <p className="text-slate-300/90 text-base sm:text-lg">
               {selectedRole
                 ? `Sign in as ${loginOptions[selectedRole].label}`
-                : "Select your role to log in"}
+                : "Choose how you'd like to sign in"}
             </p>
           </div>
 
           {!selectedRole ? (
             // Role Selector
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
               {(
                 Object.entries(loginOptions) as [
                   Role,
@@ -123,20 +141,28 @@ export default function LoginPage() {
                 <button
                   key={role}
                   onClick={() => setSelectedRole(role)}
-                  className="p-6 rounded-lg border-2 border-slate-700 hover:border-slate-500 transition transform hover:scale-105 bg-slate-800 text-left"
+                  className="group relative overflow-hidden p-6 rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-xl text-left transition-all duration-300 hover:-translate-y-1.5 hover:border-white/25 hover:bg-white/[0.07] hover:shadow-2xl hover:shadow-indigo-900/40"
                 >
-                  <div className="text-4xl mb-3">{option.icon}</div>
-                  <h3 className="text-xl font-bold text-white mb-1">
+                  {/* hover gradient sheen */}
+                  <div className={`absolute inset-0 opacity-0 group-hover:opacity-10 transition-opacity duration-300 bg-gradient-to-br ${option.color}`} />
+                  <div className={`relative mb-4 inline-flex h-14 w-14 items-center justify-center rounded-xl bg-gradient-to-br ${option.color} text-3xl shadow-lg ring-1 ring-white/20`}>
+                    {option.icon}
+                  </div>
+                  <h3 className="relative text-xl font-bold text-white mb-1">
                     {option.label}
                   </h3>
-                  <p className="text-sm text-slate-400">{option.description}</p>
+                  <p className="relative text-sm text-slate-400 leading-snug">{option.description}</p>
+                  <span className="relative mt-4 inline-flex items-center gap-1 text-sm font-medium text-indigo-300 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all">
+                    Continue
+                    <span aria-hidden>→</span>
+                  </span>
                 </button>
               ))}
             </div>
           ) : (
             // Login Form
             <div className="max-w-md mx-auto">
-              <div className="bg-slate-800 rounded-lg shadow-xl p-8">
+              <div className="bg-white/[0.06] backdrop-blur-xl rounded-2xl shadow-2xl shadow-indigo-950/40 border border-white/10 p-8">
                 <button
                   onClick={() => {
                     setSelectedRole(null);
@@ -144,9 +170,9 @@ export default function LoginPage() {
                     setPassword("");
                     setError("");
                   }}
-                  className="text-slate-400 hover:text-slate-200 mb-4 flex items-center gap-2 bg-transparent border-0 p-0"
+                  className="text-slate-300 hover:text-white mb-5 inline-flex items-center gap-2 bg-transparent border-0 p-0 transition"
                 >
-                  ← Back to roles
+                  <span aria-hidden>←</span> Back to roles
                 </button>
 
                 <div className="mb-6">
@@ -174,7 +200,7 @@ export default function LoginPage() {
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder="Enter your email"
-                      className="w-full px-4 py-2 rounded-lg bg-slate-700 border border-slate-600 text-white placeholder-slate-400 focus:border-blue-500 focus:outline-none"
+                      className="w-full px-4 py-2.5 rounded-lg bg-slate-900/50 border border-white/10 text-white placeholder-slate-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/30 focus:outline-none transition"
                       required
                     />
                   </div>
@@ -188,7 +214,7 @@ export default function LoginPage() {
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="Enter your password"
-                      className="w-full px-4 py-2 rounded-lg bg-slate-700 border border-slate-600 text-white placeholder-slate-400 focus:border-blue-500 focus:outline-none"
+                      className="w-full px-4 py-2.5 rounded-lg bg-slate-900/50 border border-white/10 text-white placeholder-slate-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/30 focus:outline-none transition"
                       required
                     />
                   </div>
@@ -196,17 +222,17 @@ export default function LoginPage() {
                   <button
                     type="submit"
                     disabled={loading}
-                    className={`w-full py-2 rounded-lg font-semibold text-white transition ${
+                    className={`w-full py-2.5 rounded-lg font-semibold text-white transition shadow-lg ${
                       loading
                         ? "bg-slate-600 cursor-not-allowed"
-                        : `bg-gradient-to-r ${loginOptions[selectedRole].color} hover:shadow-lg`
+                        : `bg-gradient-to-r ${loginOptions[selectedRole].color} hover:shadow-xl hover:brightness-110`
                     }`}
                   >
                     {loading ? "Signing in…" : "Sign In"}
                   </button>
                 </form>
 
-                <div className="mt-6 p-4 bg-slate-700 rounded text-sm text-slate-300">
+                <div className="mt-6 p-4 bg-slate-900/50 border border-white/10 rounded-lg text-sm text-slate-300">
                   <p className="font-semibold mb-2">Demo credentials:</p>
                   <div className="space-y-1 font-mono text-xs">
                     <p>

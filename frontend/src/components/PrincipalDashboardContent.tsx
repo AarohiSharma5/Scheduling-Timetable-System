@@ -17,6 +17,7 @@ export default function PrincipalDashboardContent() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [activeTab, setActiveTab] = useState<"overview" | "leaves" | "notifications" | "timetable">("overview");
   const [loading, setLoading] = useState(true);
+  const [notice, setNotice] = useState("");
 
   useEffect(() => {
     loadDashboardStats();
@@ -141,18 +142,37 @@ export default function PrincipalDashboardContent() {
               {/* Quick Actions */}
               <div className="bg-gradient-to-r from-amber-50 to-amber-100 rounded-lg p-6 border-2 border-amber-200">
                 <h3 className="font-bold text-amber-900 mb-4">📌 Quick Actions</h3>
+                {notice && (
+                  <div className="mb-3 bg-white border border-amber-300 text-amber-900 text-sm rounded-lg px-3 py-2">
+                    {notice}
+                  </div>
+                )}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <button className="bg-white hover:bg-amber-50 text-amber-900 font-medium py-2 px-4 rounded-lg border border-amber-200 transition">
-                    📊 View Reports
+                  <button
+                    onClick={() => setActiveTab("timetable")}
+                    className="bg-white hover:bg-amber-50 text-amber-900 font-medium py-2 px-4 rounded-lg border border-amber-200 transition"
+                  >
+                    📊 View Timetable
                   </button>
-                  <button className="bg-white hover:bg-amber-50 text-amber-900 font-medium py-2 px-4 rounded-lg border border-amber-200 transition">
-                    👥 Manage Staff
+                  <button
+                    onClick={() => setActiveTab("leaves")}
+                    className="bg-white hover:bg-amber-50 text-amber-900 font-medium py-2 px-4 rounded-lg border border-amber-200 transition"
+                  >
+                    📋 Leave Requests
                   </button>
-                  <button className="bg-white hover:bg-amber-50 text-amber-900 font-medium py-2 px-4 rounded-lg border border-amber-200 transition">
-                    📋 View Leaves
+                  <button
+                    onClick={() => setActiveTab("notifications")}
+                    className="bg-white hover:bg-amber-50 text-amber-900 font-medium py-2 px-4 rounded-lg border border-amber-200 transition"
+                  >
+                    🔔 Notifications
                   </button>
-                  <button className="bg-white hover:bg-amber-50 text-amber-900 font-medium py-2 px-4 rounded-lg border border-amber-200 transition">
-                    📚 Curriculum
+                  <button
+                    onClick={() => setNotice(
+                      `Staff & curriculum management is handled in the Admin dashboard. This school has ${stats.total_teachers} teachers and ${stats.total_subjects} subjects.`
+                    )}
+                    className="bg-white hover:bg-amber-50 text-amber-900 font-medium py-2 px-4 rounded-lg border border-amber-200 transition"
+                  >
+                    👥 Staff & Curriculum
                   </button>
                 </div>
               </div>
