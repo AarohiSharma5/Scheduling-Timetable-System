@@ -116,7 +116,11 @@ class ConflictDetector:
             raise ValueError(f"Timetable {self.timetable_id} not found")
         
         self.slots = TimetableSlot.query.filter_by(timetable_id=self.timetable_id).all()
-        self.config = SchoolConfig.query.first()
+        # Scope config to the timetable's own organization so validation uses
+        # the correct school's period structure in a multi-tenant deployment.
+        self.config = SchoolConfig.query.filter_by(
+            organization_id=self.timetable.organization_id
+        ).first()
         if not self.config:
             raise ValueError("School configuration not found")
     
@@ -280,8 +284,8 @@ class ConflictDetector:
             
             teacher_workload[slot.teacher_id]["count"] += 1
         
-        # Get teacher max periods
-        for teacher in Teacher.query.all():
+        # Get teacher max periods (scoped to this timetable's organization)
+        for teacher in Teacher.query.filter_by(organization_id=self.timetable.organization_id).all():
             if teacher.id in teacher_workload:
                 teacher_workload[teacher.id]["max_allowed"] = teacher.max_periods_per_week or 24
         
@@ -353,8 +357,8 @@ class ConflictDetector:
             key = (slot.subject_id, slot.batch_id)
             scheduled_periods[key] = scheduled_periods.get(key, 0) + 1
         
-        # Check against requirements
-        for batch in Batch.query.all():
+        # Check against requirements (scoped to this timetable's organization)
+        for batch in Batch.query.filter_by(organization_id=self.timetable.organization_id).all():
             for subject_id in (batch.subject_ids or []):
                 subject = Subject.query.get(subject_id)
                 if not subject:

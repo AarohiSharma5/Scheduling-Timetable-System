@@ -911,8 +911,11 @@ def accept_invitation(token):
 
 def format_timetable_as_plan(timetable):
     """Convert Timetable object to Plan format for frontend"""
-    config = SchoolConfig.query.first() or SchoolConfig()
-    
+    # Scope the config to the timetable's own organization so a multi-tenant
+    # deployment never serves another school's period structure / lunch timing.
+    org_id = timetable.organization_id
+    config = SchoolConfig.query.filter_by(organization_id=org_id).first() or SchoolConfig()
+
     # Build per-batch timetable grids
     days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     periods_per_day = config.periods_per_day
@@ -920,7 +923,6 @@ def format_timetable_as_plan(timetable):
 
     # Lookups (avoids a DB query per slot when building grids), scoped to the
     # timetable's own organization.
-    org_id = timetable.organization_id
     all_teachers = Teacher.query.filter_by(organization_id=org_id).all()
     all_subjects = Subject.query.filter_by(organization_id=org_id).all()
     all_batches = Batch.query.filter_by(organization_id=org_id).all()
@@ -977,9 +979,9 @@ def format_timetable_as_plan(timetable):
         else [[None for _ in range(periods_per_day)] for _ in days]
     )
 
-    # Resolve the institution name from the organization (single tenant) or the
-    # timetable's own school_name, falling back to a generic label.
-    organization = Organization.query.first()
+    # Resolve the institution name from the timetable's OWN organization (never
+    # an arbitrary first row), then the timetable's school_name, then a label.
+    organization = Organization.query.get(org_id) if org_id else None
     institution_name = (
         (organization.name if organization else None)
         or timetable.school_name
@@ -4025,19 +4027,20 @@ def get_substitute_options(leave_request_id):
         from models import LeaveRequest, Teacher, Subject
         from leave_service import LeaveService
         
-        leave_request = LeaveRequest.query.get(leave_request_id)
-        if not leave_request:
-            return jsonify({"error": "Leave request not found"}), 404
-        
-        teacher = Teacher.query.get(leave_request.teacher_id)
+        # Tenant guard: the leave request must belong to the caller's org.
+        leave_request = owned_or_404(LeaveRequest, leave_request_id)
+
+        teacher = Teacher.query.filter_by(
+            id=leave_request.teacher_id, organization_id=current_org_id()
+        ).first()
         if not teacher:
             return jsonify({"error": "Teacher not found"}), 404
         
-        # Find teachers who can substitute
+        # Find teachers who can substitute (scoped to this organization only).
         available_substitutes = []
-        
+        potential_subs = Teacher.query.filter_by(organization_id=current_org_id()).all()
+
         for subject_id in (teacher.subject_ids or []):
-            potential_subs = Teacher.query.all()
             for sub in potential_subs:
                 if sub.id != teacher.id and LeaveService._is_substitute_available(sub.id, leave_request.leave_date):
                     available_substitutes.append({
