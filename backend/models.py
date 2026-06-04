@@ -826,6 +826,146 @@ class Student(db.Model):
 
 
 # ============================================================================
+# ATTENDANCE MODEL - Daily and period-wise student attendance
+# ============================================================================
+class AttendanceRecord(db.Model):
+    """One attendance mark for a student on a given date.
+
+    period_number == 0 means the whole-day (daily) mark; a value >= 1 is a
+    period-wise mark for that period. The composite unique constraint makes a
+    (student, date, period) mark idempotent so re-marking updates in place.
+    """
+    __tablename__ = "attendance_records"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "organization_id", "student_id", "date", "period_number",
+            name="uq_attendance_student_date_period",
+        ),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True, nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey("students.id"), index=True, nullable=False)
+    batch_id = db.Column(db.Integer, db.ForeignKey("batches.id"), index=True)
+    date = db.Column(db.Date, nullable=False, index=True)
+    # 0 = daily/whole-day; >=1 = that period in the day.
+    period_number = db.Column(db.Integer, nullable=False, default=0)
+    subject_id = db.Column(db.Integer, db.ForeignKey("subjects.id"))  # optional, for period-wise
+    # present | absent | late | excused
+    status = db.Column(db.String(20), nullable=False, default="present")
+    remarks = db.Column(db.Text)
+    marked_by = db.Column(db.Integer, db.ForeignKey("users.id"))  # who recorded it
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "student_id": self.student_id,
+            "batch_id": self.batch_id,
+            "date": self.date.isoformat() if self.date else None,
+            "period_number": self.period_number,
+            "subject_id": self.subject_id,
+            "status": self.status,
+            "remarks": self.remarks,
+            "marked_by": self.marked_by,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+# ============================================================================
+# EXAM + MARKS MODELS - Assessments, gradebook, report cards
+# ============================================================================
+
+# Default CBSE-style grade bands keyed on the subject percentage.
+def grade_for_percentage(pct):
+    """Letter grade for a 0-100 percentage (None -> None)."""
+    if pct is None:
+        return None
+    if pct >= 91: return "A1"
+    if pct >= 81: return "A2"
+    if pct >= 71: return "B1"
+    if pct >= 61: return "B2"
+    if pct >= 51: return "C1"
+    if pct >= 41: return "C2"
+    if pct >= 33: return "D"
+    return "E"
+
+
+class Exam(db.Model):
+    """An assessment event (unit test, mid-term, finals) for an organization."""
+    __tablename__ = "exams"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True, nullable=False)
+    name = db.Column(db.String(150), nullable=False)         # "Term 1 Mid-Term"
+    term = db.Column(db.String(50))                          # "Term 1" (optional)
+    exam_type = db.Column(db.String(40), default="other")    # unit_test|mid_term|final|other
+    max_marks = db.Column(db.Integer, default=100)           # default per-subject max
+    start_date = db.Column(db.Date)
+    end_date = db.Column(db.Date)
+    # draft = results hidden from students; published = visible to students.
+    status = db.Column(db.String(20), default="draft")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "term": self.term,
+            "exam_type": self.exam_type,
+            "max_marks": self.max_marks,
+            "start_date": self.start_date.isoformat() if self.start_date else None,
+            "end_date": self.end_date.isoformat() if self.end_date else None,
+            "status": self.status,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class Mark(db.Model):
+    """One student's score in one subject of one exam."""
+    __tablename__ = "exam_marks"
+    __table_args__ = (
+        db.UniqueConstraint("organization_id", "exam_id", "student_id", "subject_id",
+                            name="uq_mark_exam_student_subject"),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True, nullable=False)
+    exam_id = db.Column(db.Integer, db.ForeignKey("exams.id"), index=True, nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey("students.id"), index=True, nullable=False)
+    subject_id = db.Column(db.Integer, db.ForeignKey("subjects.id"), index=True, nullable=False)
+    batch_id = db.Column(db.Integer, db.ForeignKey("batches.id"))
+    max_marks = db.Column(db.Integer, nullable=False, default=100)
+    marks_obtained = db.Column(db.Float)  # null when absent / not yet entered
+    is_absent = db.Column(db.Boolean, nullable=False, default=False)
+    grade = db.Column(db.String(5))       # cached letter grade
+    remarks = db.Column(db.Text)
+    entered_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    @property
+    def percentage(self):
+        if self.is_absent or self.marks_obtained is None or not self.max_marks:
+            return None
+        return round(self.marks_obtained / self.max_marks * 100, 1)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "exam_id": self.exam_id,
+            "student_id": self.student_id,
+            "subject_id": self.subject_id,
+            "batch_id": self.batch_id,
+            "max_marks": self.max_marks,
+            "marks_obtained": self.marks_obtained,
+            "is_absent": self.is_absent,
+            "grade": self.grade,
+            "percentage": self.percentage,
+            "remarks": self.remarks,
+        }
+
+
+# ============================================================================
 # CLASSROOM MODEL - Physical classroom resources
 # ============================================================================
 class Classroom(db.Model):
