@@ -125,3 +125,59 @@ def test_teacher_only_teaches_assigned_batches(db, small_school):
             continue
         if s.teacher_id in allowed:
             assert s.batch_id in allowed[s.teacher_id]
+
+
+def test_reports_unplaceable_periods_instead_of_hiding_them(db):
+    """An over-constrained school must report the shortfall, not silently fill it.
+
+    Only 2 slots exist (2 periods x 1 day) but Math needs 5 periods/week, so 3
+    periods can't be placed. The engine must say so honestly.
+    """
+    from models import (
+        Organization, SchoolConfig, Subject, Batch, Teacher, User, Timetable,
+    )
+
+    org = Organization(name="Tiny", slug="tiny", password_hash="x")
+    db.session.add(org)
+    db.session.flush()
+    # 08:00-09:30 at 45 min/period => 2 periods; 1 working day => only 2 slots.
+    db.session.add(SchoolConfig(
+        organization_id=org.id, start_time="08:00", end_time="09:30",
+        period_duration=45, periods_per_day=2, working_days=1,
+        has_lunch_break=False,
+    ))
+    math = Subject(organization_id=org.id, name="Math",
+                   periods_per_week=5, max_periods_per_day=8)
+    db.session.add(math)
+    db.session.flush()
+    batch = Batch(organization_id=org.id, grade="9", section="A",
+                  student_count=30, subject_ids=[math.id])
+    db.session.add(batch)
+    db.session.flush()
+    user = User(name="T", email="t@tiny.test", role="teacher", organization_id=org.id)
+    db.session.add(user)
+    db.session.flush()
+    teacher = Teacher(organization_id=org.id, user_id=user.id, name="T",
+                      email="t@tiny.test", subject_ids=[math.id],
+                      assigned_batch_ids=[batch.id], max_periods_per_week=30)
+    db.session.add(teacher)
+    tt = Timetable(organization_id=org.id, name="Tiny TT")
+    db.session.add(tt)
+    db.session.commit()
+
+    engine = SchedulingEngine(organization_id=org.id)
+    success, warnings = engine.generate_timetable(tt.id)
+
+    assert success is True
+    assert engine.report["complete"] is False
+    assert engine.report["total_required_missing"] == 3
+
+    shortfall = engine.report["shortfalls"][0]
+    assert shortfall["subject"] == "Math"
+    assert shortfall["batch"] == "Grade 9-A"
+    assert shortfall["missing"] == 3
+
+    # The truth is persisted on the timetable + returned as a warning.
+    refreshed = Timetable.query.get(tt.id)
+    assert any("Math" in w and "missing" in w for w in (refreshed.warnings or []))
+    assert any("Incomplete timetable" in w for w in warnings)

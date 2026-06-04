@@ -100,12 +100,19 @@ def generate_timetable():
 
         # Count generated slots
         slots_count = TimetableSlot.query.filter_by(timetable_id=timetable.id).count()
+        report = getattr(engine, "report", {}) or {}
+        message = f"Generated {slots_count} timetable slots"
+        if not report.get("complete", True):
+            missing = report.get("total_required_missing", 0)
+            message += f" — but {missing} required period(s) could not be placed"
         return jsonify({
             "success": True,
             "timetable": timetable.to_dict(),
             "slots_generated": slots_count,
             "warnings": warnings,
-            "message": f"Generated {slots_count} timetable slots"
+            "report": report,
+            "complete": report.get("complete", True),
+            "message": message,
         }), 201
 
     except Exception as e:

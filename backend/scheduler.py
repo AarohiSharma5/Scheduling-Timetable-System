@@ -113,6 +113,14 @@ class SchedulingEngine:
         self.batch_schedule = {}  # {batch_id -> {subject_id -> periods_assigned}}
         self.conflicts = []
         self.warnings = []
+        # Honest incompleteness tracking: per (batch, subject) periods that the
+        # engine required but could not place. Surfaced in the API response and
+        # persisted on the timetable so the gap-filler never hides the truth.
+        self.shortfalls = []
+        self._shortfall_index = {}  # (batch_id, subject_id) -> shortfall dict
+        self._subject_name = {}
+        self._batch_label = {}
+        self.report = {}
     
     def generate_timetable(self, timetable_id: int) -> Tuple[bool, List[str]]:
         """
@@ -142,6 +150,10 @@ class SchedulingEngine:
             
             if not teachers or not batches or not subjects:
                 return False, ["Missing teachers, batches, or subjects"]
+
+            # Human-readable labels for the incompleteness report.
+            self._subject_name = {s.id: s.name for s in subjects}
+            self._batch_label = {b.id: f"Grade {b.grade}-{b.section}" for b in batches}
             
             # Step 3: Validate input data
             errors = self._validate_input(teachers, batches, subjects, config)
@@ -207,6 +219,11 @@ class SchedulingEngine:
 
             # Step 8: Save to database
             self._save_timetable(timetable_id, config)
+
+            # Step 9: Be honest about anything that didn't fit. The gap filler
+            # above hides empty cells, so this records the real shortfalls onto
+            # the timetable and in self.report before returning.
+            self._finalize_report(timetable_id)
 
             return True, self.warnings
         
@@ -1037,10 +1054,7 @@ class SchedulingEngine:
             self._commit(req.teacher_id, req.subject_id, req.batch_id, slot.day, slot.period_num)
             placed += 1
         if placed < remaining:
-            self.conflicts.append(
-                f"Could only place {placed}/{remaining} periods of subject {req.subject_id} "
-                f"for batch {req.batch_id}"
-            )
+            self._record_shortfall(req, placed, remaining)
 
     def _place_doubles(self, req: Requirement, remaining: int):
         """Place lab/double subjects as consecutive pairs (one block per day)."""
@@ -1079,15 +1093,78 @@ class SchedulingEngine:
             self._commit(req.teacher_id, req.subject_id, req.batch_id, day, p2)
             pairs_placed += 1
 
+        if pairs_placed < pairs_needed:
+            # Record the unplaced paired periods (each block is 2 periods).
+            self._record_shortfall(req, pairs_placed * 2, pairs_needed * 2)
+
         if leftover_single:
             self._place_singles(req, 1)
-
-        if pairs_placed < pairs_needed:
-            self.conflicts.append(
-                f"Could only place {pairs_placed}/{pairs_needed} double-period blocks of "
-                f"subject {req.subject_id} for batch {req.batch_id}"
-            )
     
+    def _record_shortfall(self, req, placed, required):
+        """Record periods the engine required for (batch, subject) but couldn't place.
+
+        Aggregated per (batch, subject) so doubles + leftover singles for the
+        same class roll up into one honest line instead of several cryptic ones.
+        """
+        missing = required - placed
+        if missing <= 0:
+            return
+        key = (req.batch_id, req.subject_id)
+        entry = self._shortfall_index.get(key)
+        if entry is None:
+            entry = {
+                "batch_id": req.batch_id,
+                "batch": self._batch_label.get(req.batch_id, f"Batch {req.batch_id}"),
+                "subject_id": req.subject_id,
+                "subject": self._subject_name.get(req.subject_id, f"Subject {req.subject_id}"),
+                "teacher_id": req.teacher_id,
+                "required": 0,
+                "placed": 0,
+                "missing": 0,
+            }
+            self._shortfall_index[key] = entry
+            self.shortfalls.append(entry)
+        entry["required"] += required
+        entry["placed"] += placed
+        entry["missing"] += missing
+
+    def _finalize_report(self, timetable_id):
+        """Fold the per-subject shortfalls into human-readable warnings.
+
+        The gap filler (next) packs the empty cells with supervised activities,
+        so without this the admin would see a full-looking grid and never learn
+        that, e.g., Math is 2 periods short. We persist the truth on the
+        timetable and return it in the API response.
+        """
+        lines = []
+        total_missing = 0
+        for s in sorted(self.shortfalls, key=lambda x: (x["batch"], x["subject"])):
+            total_missing += s["missing"]
+            lines.append(
+                f"{s['subject']} for {s['batch']}: only {s['placed']}/{s['required']} "
+                f"periods scheduled ({s['missing']} missing)"
+            )
+
+        persisted = list(self.warnings)
+        if lines:
+            persisted.append(
+                f"Incomplete timetable: {total_missing} required period(s) could not be "
+                f"placed (empty slots were filled with supervised activities)."
+            )
+            persisted.extend(lines)
+
+        tt = Timetable.query.get(timetable_id)
+        if tt is not None:
+            tt.warnings = persisted
+
+        # Make the same detail flow back through the (success, warnings) return.
+        self.warnings = persisted
+        self.report = {
+            "complete": len(self.shortfalls) == 0,
+            "total_required_missing": total_missing,
+            "shortfalls": self.shortfalls,
+        }
+
     # ========================================================================
     # GAP FILLING - no student left with a free/unattended period
     # ========================================================================
