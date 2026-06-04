@@ -182,6 +182,7 @@ def get_db_stats(org_id=None):
 
     return {
         "users": _count(User),
+        "students": _count(Student),
         "batches": _count(Batch),
         "subjects": _count(Subject),
         "teachers": _count(Teacher),
