@@ -29,3 +29,77 @@ def test_me_requires_authentication(app):
     client = app.test_client()
     resp = client.get("/api/auth/me")
     assert resp.status_code == 401
+
+
+# --- Brute-force lockout + org-scoped login ---------------------------------
+
+from werkzeug.security import generate_password_hash
+
+
+def _make_org_and_user(db, *, org_slug, email, org_pw="OrgPass123", user_pw="UserPass123"):
+    from models import Organization, User
+    org = Organization(name=org_slug.title(), slug=org_slug,
+                       password_hash=generate_password_hash(org_pw))
+    db.session.add(org)
+    db.session.flush()
+    user = User(name="Admin", email=email, role="admin",
+                organization_id=org.id, password_hash=generate_password_hash(user_pw))
+    db.session.add(user)
+    db.session.commit()
+    return org, user
+
+
+def _org_client(app, slug, org_pw="OrgPass123"):
+    """A test client that has already established an organization session."""
+    client = app.test_client()
+    resp = client.post("/api/organizations/login",
+                       json={"identifier": slug, "password": org_pw})
+    assert resp.status_code == 200, resp.get_json()
+    return client
+
+
+def test_account_locks_after_repeated_failures(app, db):
+    _make_org_and_user(db, org_slug="alpha", email="admin@alpha.test")
+    client = _org_client(app, "alpha")
+
+    # 5 wrong attempts: each rejected as invalid credentials.
+    for _ in range(5):
+        r = client.post("/api/auth/login",
+                        json={"email": "admin@alpha.test", "password": "wrong"})
+        assert r.status_code == 401
+
+    # 6th attempt with the CORRECT password is now blocked by the lock.
+    r = client.post("/api/auth/login",
+                    json={"email": "admin@alpha.test", "password": "UserPass123"})
+    assert r.status_code == 429
+    assert r.get_json().get("locked") is True
+
+
+def test_successful_login_resets_failure_counter(app, db):
+    _make_org_and_user(db, org_slug="beta", email="admin@beta.test")
+    client = _org_client(app, "beta")
+
+    for _ in range(3):
+        client.post("/api/auth/login",
+                    json={"email": "admin@beta.test", "password": "wrong"})
+
+    r = client.post("/api/auth/login",
+                    json={"email": "admin@beta.test", "password": "UserPass123"})
+    assert r.status_code == 200
+
+    from models import User
+    user = User.query.filter_by(email="admin@beta.test").first()
+    assert user.failed_login_attempts == 0
+    assert user.locked_until is None
+
+
+def test_login_is_scoped_to_the_org_session(app, db):
+    # User lives in org "two"; we authenticate the session as org "one".
+    _make_org_and_user(db, org_slug="one", email="admin@one.test")
+    _make_org_and_user(db, org_slug="two", email="user@two.test")
+
+    client = _org_client(app, "one")
+    # Correct credentials, but the account isn't in the logged-in org => 401.
+    r = client.post("/api/auth/login",
+                    json={"email": "user@two.test", "password": "UserPass123"})
+    assert r.status_code == 401

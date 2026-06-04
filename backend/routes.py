@@ -133,6 +133,17 @@ def password_ok(pw):
     return bool(pw and _PW_RE.match(pw))
 
 
+# Brute-force protection for user login: lock an account after this many
+# consecutive failures, for this many minutes. (Org login uses IP rate limiting
+# instead of lockout, so one bad actor can't lock an entire school out.)
+LOGIN_MAX_FAILS = 5
+LOGIN_LOCK_MINUTES = 15
+
+# A precomputed hash used only to equalize password-check timing when the
+# account doesn't exist, so login can't be used to enumerate valid emails.
+_DUMMY_PW_HASH = generate_password_hash("dummy-password-for-timing-equalization")
+
+
 def gen_temp_password():
     """Random temporary password that satisfies the password policy.
 
@@ -241,6 +252,10 @@ def organization_login():
             or Organization.query.filter(db.func.lower(Organization.name) == identifier.lower()).first()
         )
         if not org or not check_password_hash(org.password_hash, password):
+            # Audit the failure (org-level uses IP rate limiting, not lockout,
+            # to avoid letting anyone DoS a whole school's sign-in).
+            log_audit("org.login_failed", {"identifier": identifier},
+                      organization_id=org.id if org else None)
             return jsonify({"error": "Invalid organization or password"}), 401
 
         token = generate_org_token(org.id, org.slug)
@@ -483,20 +498,59 @@ def login():
         if err:
             return err
 
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         email = data.get("email", "").strip()
         password = data.get("password", "").strip()
 
         if not email or not password:
             return jsonify({"error": "Email and password required"}), 400
 
-        user = User.query.filter_by(email=email).first()
-        if not user or not check_password_hash(user.password_hash, password):
+        # Scope the lookup to the organization being logged into. This is both an
+        # isolation guarantee (you can only ever match an account in *your* org)
+        # and forward-compatible with per-tenant email uniqueness.
+        user = User.query.filter_by(email=email, organization_id=org.id).first()
+
+        # Account lockout: refuse early (before the password check) while a lock
+        # is active, so a locked account can't be probed during the window.
+        if user and user.locked_until and user.locked_until > datetime.utcnow():
+            remaining = int((user.locked_until - datetime.utcnow()).total_seconds() // 60) + 1
+            log_audit("user.login_locked", {"email": email}, user_id=user.id,
+                      organization_id=org.id)
+            return jsonify({
+                "error": f"Account temporarily locked due to repeated failed attempts. "
+                         f"Try again in {remaining} minute(s).",
+                "locked": True,
+            }), 429
+
+        # Verify the password. When the user doesn't exist we still run a hash
+        # comparison against a dummy value so the response timing doesn't reveal
+        # whether the email is registered (defends against user enumeration).
+        valid = (
+            check_password_hash(user.password_hash, password)
+            if user and user.password_hash
+            else check_password_hash(_DUMMY_PW_HASH, password) and False
+        )
+
+        if not valid:
+            if user:
+                user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+                detail = {"email": email, "attempts": user.failed_login_attempts}
+                if user.failed_login_attempts >= LOGIN_MAX_FAILS:
+                    user.locked_until = datetime.utcnow() + timedelta(minutes=LOGIN_LOCK_MINUTES)
+                    user.failed_login_attempts = 0
+                    log_audit("user.login_locked", detail, user_id=user.id,
+                              organization_id=org.id, commit=False)
+                else:
+                    log_audit("user.login_failed", detail, user_id=user.id,
+                              organization_id=org.id, commit=False)
+                db.session.commit()
+            else:
+                log_audit("user.login_failed", {"email": email}, organization_id=org.id)
             return jsonify({"error": "Invalid email or password"}), 401
 
-        # Enforce that user belongs to the organization they're logging into.
-        if user.organization_id is not None and user.organization_id != org.id:
-            return jsonify({"error": "This account does not belong to the selected organization"}), 403
+        # Success: clear any failure counter / lock.
+        user.failed_login_attempts = 0
+        user.locked_until = None
 
         token = generate_token(user.id, user.email, user.role, organization_id=org.id)
         log_audit("user.login", {"email": user.email, "role": user.role},

@@ -80,6 +80,11 @@ class User(db.Model):
     must_change_password = db.Column(db.Boolean, default=False)
     profile_completed = db.Column(db.Boolean, default=True)
     terms_accepted_at = db.Column(db.DateTime)
+    # --- Brute-force protection ---
+    # Consecutive failed logins since the last success; reset to 0 on success.
+    failed_login_attempts = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+    # When set and in the future, login is refused until this time.
+    locked_until = db.Column(db.DateTime)
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
