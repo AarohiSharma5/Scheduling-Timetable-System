@@ -393,8 +393,8 @@ def organization_register():
                 errors["school_code"] = "This school code is already taken"
             if official_email and Organization.query.filter(db.func.lower(Organization.official_email) == official_email).first():
                 errors["official_email"] = "This organization email is already registered"
-            if admin_email and User.query.filter(db.func.lower(User.email) == admin_email).first():
-                errors["admin_email"] = "A user with this email already exists"
+            # No global admin-email check: emails are unique per organization, and
+            # this is a brand-new tenant, so the admin email can't collide here.
 
         if errors:
             return jsonify({"error": "Validation failed", "fields": errors}), 400
@@ -821,7 +821,7 @@ def create_invitation():
             return jsonify({"error": "Email is required"}), 400
         if role not in _INVITABLE_ROLES:
             return jsonify({"error": f"Cannot invite role '{role}'"}), 400
-        if User.query.filter_by(email=email).first():
+        if User.query.filter_by(email=email, organization_id=org_id).first():
             return jsonify({"error": "A user with this email already exists"}), 409
 
         # Reuse an existing pending invite for the same email/role if present.
@@ -915,7 +915,7 @@ def accept_invitation(token):
             return jsonify({"error": "Name is required"}), 400
         if not password_ok(password):
             return jsonify({"error": "Password must be at least 8 characters and include a letter and a number"}), 400
-        if User.query.filter_by(email=inv.email).first():
+        if User.query.filter_by(email=inv.email, organization_id=inv.organization_id).first():
             inv.status = "accepted"
             db.session.commit()
             return jsonify({"error": "An account with this email already exists. Please sign in."}), 409
@@ -1591,7 +1591,7 @@ def create_teacher():
             return jsonify({"error": "Name and email are required"}), 400
 
         email = data.get("email")
-        if User.query.filter_by(email=email).first():
+        if User.query.filter_by(email=email, organization_id=org_id).first():
             return jsonify({"error": "A user with this email already exists"}), 409
 
         # Use the provided password, or auto-generate a temporary one the admin
@@ -1685,8 +1685,12 @@ def update_teacher(teacher_id):
             if user:
                 user.name = data["name"]
         if "email" in data and data["email"] and data["email"] != teacher.email:
-            # Email is the login id, so it must stay unique across all users.
-            clash = User.query.filter(User.email == data["email"], User.id != teacher.user_id).first()
+            # Email is the login id; it must stay unique within this organization.
+            clash = User.query.filter(
+                User.email == data["email"],
+                User.organization_id == teacher.organization_id,
+                User.id != teacher.user_id,
+            ).first()
             if clash:
                 return jsonify({"error": "A user with this email already exists"}), 409
             teacher.email = data["email"]
@@ -2569,8 +2573,15 @@ def _annotate_students(org_id, records, scope):
 
 
 def _annotate_teachers(org_id, records):
-    """Validate parsed teacher rows; emails must be present & unique (login id)."""
-    db_email = {u.email.lower() for u in User.query.all() if u.email}
+    """Validate parsed teacher rows; emails must be present & unique (login id).
+
+    Uniqueness is per organization, so only this org's emails count as clashes.
+    """
+    db_email = {
+        u.email.lower()
+        for u in User.query.filter_by(organization_id=org_id).all()
+        if u.email
+    }
     seen_email = set()
     rows = []
     for rec in records:

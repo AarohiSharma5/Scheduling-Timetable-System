@@ -66,10 +66,15 @@ class Organization(db.Model):
 # ============================================================================
 class User(db.Model):
     __tablename__ = "users"
+    # Email is unique PER ORGANIZATION, not globally: two schools may each have
+    # a user with the same (e.g. personal) email. Identity is always (org, email).
+    __table_args__ = (
+        db.UniqueConstraint("organization_id", "email", name="uq_users_org_email"),
+    )
     id = db.Column(db.Integer, primary_key=True)
     organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
     name = db.Column(db.String(120), nullable=False)
-    email = db.Column(db.String(120), unique=True, nullable=False)
+    email = db.Column(db.String(120), nullable=False)
     role = db.Column(db.String(20), nullable=False)  # 'owner','admin','principal','coordinator','teacher','student','parent'
     password_hash = db.Column(db.String(255))  # For email/password auth
     batch_id = db.Column(db.Integer, db.ForeignKey("batches.id"))  # For students only

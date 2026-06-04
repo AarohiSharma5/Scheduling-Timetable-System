@@ -103,3 +103,32 @@ def test_login_is_scoped_to_the_org_session(app, db):
     r = client.post("/api/auth/login",
                     json={"email": "user@two.test", "password": "UserPass123"})
     assert r.status_code == 401
+
+
+def test_same_email_allowed_in_different_orgs(app, db):
+    """Two schools may each have a user with the same email; both can log in."""
+    from models import User
+
+    _make_org_and_user(db, org_slug="orga", email="shared@x.test")
+    _make_org_and_user(db, org_slug="orgb", email="shared@x.test")
+    assert User.query.filter_by(email="shared@x.test").count() == 2
+
+    for slug in ("orga", "orgb"):
+        client = _org_client(app, slug)
+        r = client.post("/api/auth/login",
+                        json={"email": "shared@x.test", "password": "UserPass123"})
+        assert r.status_code == 200, f"login failed for {slug}"
+
+
+def test_duplicate_email_within_one_org_is_rejected(app, db):
+    """The same email twice inside ONE org must still violate uniqueness."""
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+    from models import User
+
+    org, _ = _make_org_and_user(db, org_slug="solo", email="dup@x.test")
+    db.session.add(User(name="Dup", email="dup@x.test", role="teacher",
+                        organization_id=org.id, password_hash="x"))
+    with pytest.raises(IntegrityError):
+        db.session.commit()
+    db.session.rollback()

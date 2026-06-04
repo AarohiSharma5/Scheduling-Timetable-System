@@ -478,7 +478,14 @@ class LeaveService:
     def _notify_leave_approval(leave_request):
         """Notify teacher and affected batches of leave approval"""
         teacher = Teacher.query.get(leave_request.teacher_id)
-        teacher_user = User.query.filter_by(email=teacher.email).first()
+        # Resolve the auth user via the direct link, falling back to an
+        # org-scoped email match (email is only unique within an organization).
+        teacher_user = (
+            User.query.get(teacher.user_id) if teacher.user_id
+            else User.query.filter_by(
+                email=teacher.email, organization_id=teacher.organization_id
+            ).first()
+        )
         
         if teacher_user:
             message = f"Your leave request for {leave_request.leave_date.strftime('%d %B %Y')} has been approved"
@@ -531,7 +538,12 @@ class LeaveService:
     def _notify_leave_rejection(leave_request):
         """Notify teacher of leave rejection"""
         teacher = Teacher.query.get(leave_request.teacher_id)
-        teacher_user = User.query.filter_by(email=teacher.email).first()
+        teacher_user = (
+            User.query.get(teacher.user_id) if teacher.user_id
+            else User.query.filter_by(
+                email=teacher.email, organization_id=teacher.organization_id
+            ).first()
+        )
         
         if teacher_user:
             notification = Notification(
