@@ -588,6 +588,12 @@ class TimetableSlot(db.Model):
     # preserved across future auto-generation (mirrored into pinned_slots).
     is_pinned = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # Read-only convenience relationships so callers can do slot.teacher.name
+    # etc. (used by the conflict detector). View-only: no cascades / writes.
+    teacher = db.relationship("Teacher", foreign_keys=[teacher_id], viewonly=True)
+    subject = db.relationship("Subject", foreign_keys=[subject_id], viewonly=True)
+    batch = db.relationship("Batch", foreign_keys=[batch_id], viewonly=True)
     
     def to_dict(self):
         return {
