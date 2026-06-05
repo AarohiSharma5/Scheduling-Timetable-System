@@ -1,0 +1,49 @@
+.env
+.env.local
+.env.*.local
+
+# Backend
+backend/venv/
+backend/.pytest_cache/
+
+# Python (recursive)
+__pycache__/
+*.pyc
+*.pyo
+
+# Cookie jars / curl artifacts
+cj.txt
+*.cookies
+
+# Frontend
+frontend/node_modules/
+frontend/build/
+frontend/dist/
+frontend/.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore
+
+# Database
+*.db
+*.sqlite
+postgres_data/
+
+# C++ (old project)
+*.o
+*.a
+*.dSYM/
+main
+web_app
+*.exe
