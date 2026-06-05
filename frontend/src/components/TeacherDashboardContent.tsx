@@ -2,6 +2,9 @@ import React, { useState, useEffect, useMemo } from "react";
 import { api } from "../api";
 import NotificationsCenter from "./NotificationsCenter";
 import StudentManagement from "./StudentManagement";
+import AttendancePanel from "./AttendancePanel";
+import ExamsPanel from "./ExamsPanel";
+import AnnouncementsPanel from "./AnnouncementsPanel";
 import { useAuthStore } from "../stores/authStore";
 
 interface PeriodRow {
@@ -21,7 +24,7 @@ interface TeacherSchedule {
   subjects: { id: number; name: string }[];
 }
 
-type Tab = "overview" | "schedule" | "myclass" | "notifications";
+type Tab = "overview" | "schedule" | "attendance" | "exams" | "announcements" | "myclass" | "notifications";
 
 export default function TeacherDashboardContent() {
   const { user } = useAuthStore();
@@ -85,6 +88,9 @@ export default function TeacherDashboardContent() {
       <div className="flex gap-2 flex-wrap">
         <TabButton id="overview" label="📊 My Schedule" />
         <TabButton id="schedule" label="📅 Timetable" />
+        <TabButton id="attendance" label="📝 Attendance" />
+        <TabButton id="exams" label="🧪 Exams" />
+        <TabButton id="announcements" label="📣 Announcements" />
         {isClassTeacher && <TabButton id="myclass" label="🧑‍🎓 My Class" />}
         <TabButton id="notifications" label="🔔 Notifications" />
       </div>
@@ -129,7 +135,7 @@ export default function TeacherDashboardContent() {
                     data && data.classes.length ? `You teach: ${data.classes.join(", ")}` : "No classes found in the current timetable."))}
                   {action("📋 Request Leave", () => setShowLeave(true))}
                   {action("🔔 Notifications", () => setActiveTab("notifications"))}
-                  {action("📝 Mark Attendance", () => setNotice("Attendance isn't available yet — coming soon."))}
+                  {action("📝 Mark Attendance", () => setActiveTab("attendance"))}
                   {action("🎓 View Profile", () => setNotice(
                     `${data?.teacher.name || user?.name}${data ? ` · ${data.stats.subjects} subject(s), ${data.stats.classes} class(es)` : ""}`))}
                 </div>
@@ -204,6 +210,12 @@ export default function TeacherDashboardContent() {
           )}
         </div>
       )}
+
+      {activeTab === "attendance" && <AttendancePanel />}
+
+      {activeTab === "exams" && <ExamsPanel />}
+
+      {activeTab === "announcements" && <AnnouncementsPanel />}
 
       {activeTab === "myclass" && isClassTeacher && (
         <StudentManagement scopedGrade={user!.class_teacher_grade} scopedSection={user!.class_teacher_section} />

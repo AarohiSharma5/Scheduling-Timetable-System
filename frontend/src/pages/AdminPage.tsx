@@ -14,13 +14,21 @@ import NotificationsCenter from "../components/NotificationsCenter";
 import PinnedSlotsManager from "../components/PinnedSlotsManager";
 import ChargeManagement from "../components/ChargeManagement";
 import InvitationsPanel from "../components/InvitationsPanel";
+import AttendancePanel from "../components/AttendancePanel";
+import ExamsPanel from "../components/ExamsPanel";
+import AnnouncementsPanel from "../components/AnnouncementsPanel";
+import ParentsPanel from "../components/ParentsPanel";
 
-type Tab = "timetable" | "students" | "teachers" | "batches" | "rooms" | "groups" | "classperiods" | "subjects" | "charges" | "pinned" | "invitations" | "leaves" | "notifications" | "config";
+type Tab = "timetable" | "students" | "attendance" | "exams" | "announcements" | "teachers" | "parents" | "batches" | "rooms" | "groups" | "classperiods" | "subjects" | "charges" | "pinned" | "invitations" | "leaves" | "notifications" | "config";
 
 const tabs: Record<Tab, { icon: string; label: string }> = {
   timetable: { icon: "📊", label: "Timetable" },
   students: { icon: "👥", label: "Students" },
+  attendance: { icon: "📝", label: "Attendance" },
+  exams: { icon: "🧪", label: "Exams" },
+  announcements: { icon: "📣", label: "Announcements" },
   teachers: { icon: "👨‍🏫", label: "Teachers" },
+  parents: { icon: "👪", label: "Parents" },
   batches: { icon: "📚", label: "Batches" },
   rooms: { icon: "🏫", label: "Rooms" },
   groups: { icon: "🧩", label: "Teaching Groups" },
@@ -81,6 +89,10 @@ export default function AdminPage() {
         <div className="bg-white rounded-lg shadow-md p-6">
           {activeTab === "timetable" && <TimetableGenerator />}
           {activeTab === "students" && <StudentManagement />}
+          {activeTab === "attendance" && <AttendancePanel />}
+          {activeTab === "exams" && <ExamsPanel />}
+          {activeTab === "announcements" && <AnnouncementsPanel />}
+          {activeTab === "parents" && <ParentsPanel />}
           {activeTab === "teachers" && <TeacherManagement />}
           {activeTab === "batches" && <BatchManagement />}
           {activeTab === "rooms" && <RoomManagement />}

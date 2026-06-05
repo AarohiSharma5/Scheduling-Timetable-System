@@ -6,7 +6,7 @@ export interface User {
   id: number;
   name: string;
   email: string;
-  role: "admin" | "principal" | "teacher" | "student" | "coordinator";
+  role: "admin" | "principal" | "teacher" | "student" | "coordinator" | "parent";
   must_change_password?: boolean;
   profile_completed?: boolean;
   phone?: string;
@@ -18,6 +18,8 @@ export interface User {
   class_teacher_batch_id?: number | null;
   class_teacher_grade?: string;
   class_teacher_section?: string;
+  children_ids?: number[];
+  children_count?: number;
 }
 
 interface AuthState {

@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../stores/authStore";
 import { useOrgStore } from "../stores/orgStore";
 
-type Role = "admin" | "principal" | "teacher" | "student";
+type Role = "admin" | "principal" | "teacher" | "student" | "parent";
 
 // Map an authenticated user's real role to its dashboard route. Owner is
 // treated as admin (matches the backend role assignment at signup).
@@ -13,6 +13,7 @@ const ROLE_ROUTES: Record<string, string> = {
   principal: "/principal",
   teacher: "/teacher",
   student: "/student",
+  parent: "/parent",
 };
 
 const loginOptions: Record<
@@ -42,6 +43,12 @@ const loginOptions: Record<
     icon: "👨‍🎓",
     color: "from-purple-500 to-purple-600",
     description: "View your class schedule",
+  },
+  parent: {
+    label: "Parent",
+    icon: "👪",
+    color: "from-amber-500 to-amber-600",
+    description: "Track your child's attendance & results",
   },
 };
 

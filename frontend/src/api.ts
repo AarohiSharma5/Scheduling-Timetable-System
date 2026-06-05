@@ -506,6 +506,85 @@ export const api = {
     ) => (await axiosInstance.post(`/invitations/accept/${token}`, payload)).data,
   },
 
+  attendance: {
+    classes: async () => (await axiosInstance.get("/attendance/classes")).data,
+    roster: async (params: { batch_id: number; date?: string; period_number?: number }) =>
+      (await axiosInstance.get("/attendance/roster", { params })).data,
+    mark: async (payload: {
+      batch_id: number;
+      date: string;
+      period_number?: number;
+      subject_id?: number | null;
+      records: { student_id: number; status: string; remarks?: string }[];
+    }) => (await axiosInstance.post("/attendance/mark", payload)).data,
+    summary: async (params: { batch_id: number; from?: string; to?: string; period_number?: number }) =>
+      (await axiosInstance.get("/attendance/summary", { params })).data,
+    student: async (studentId: number, params: { from?: string; to?: string; period_number?: number } = {}) =>
+      (await axiosInstance.get(`/attendance/student/${studentId}`, { params })).data,
+    today: async (date?: string) =>
+      (await axiosInstance.get("/attendance/today", { params: date ? { date } : {} })).data,
+  },
+
+  exams: {
+    meta: async () => (await axiosInstance.get("/exams/meta")).data,
+    list: async () => (await axiosInstance.get("/exams")).data,
+    create: async (payload: {
+      name: string;
+      term?: string;
+      exam_type?: string;
+      max_marks?: number;
+      start_date?: string;
+      end_date?: string;
+    }) => (await axiosInstance.post("/exams", payload)).data,
+    update: async (id: number, payload: Record<string, unknown>) =>
+      (await axiosInstance.put(`/exams/${id}`, payload)).data,
+    remove: async (id: number) => (await axiosInstance.delete(`/exams/${id}`)).data,
+    publish: async (id: number, published = true) =>
+      (await axiosInstance.post(`/exams/${id}/publish`, { published })).data,
+    marksheet: async (id: number, params: { batch_id: number; subject_id: number }) =>
+      (await axiosInstance.get(`/exams/${id}/marksheet`, { params })).data,
+    saveMarks: async (
+      id: number,
+      payload: {
+        batch_id: number;
+        subject_id: number;
+        max_marks?: number;
+        records: { student_id: number; marks_obtained?: number | null; is_absent?: boolean; remarks?: string }[];
+      }
+    ) => (await axiosInstance.post(`/exams/${id}/marks`, payload)).data,
+    results: async (id: number, params: { batch_id: number }) =>
+      (await axiosInstance.get(`/exams/${id}/results`, { params })).data,
+    student: async (studentId: number) =>
+      (await axiosInstance.get(`/exams/student/${studentId}`)).data,
+  },
+
+  announcements: {
+    list: async () => (await axiosInstance.get("/announcements")).data,
+    audiences: async () => (await axiosInstance.get("/announcements/audiences")).data,
+    create: async (payload: {
+      title: string;
+      body: string;
+      audience: string;
+      batch_id?: number | null;
+    }) => (await axiosInstance.post("/announcements", payload)).data,
+    update: async (id: number, payload: Record<string, unknown>) =>
+      (await axiosInstance.put(`/announcements/${id}`, payload)).data,
+    remove: async (id: number) => (await axiosInstance.delete(`/announcements/${id}`)).data,
+  },
+
+  parents: {
+    list: async () => (await axiosInstance.get("/admin/parents")).data,
+    create: async (payload: {
+      name: string;
+      email: string;
+      phone?: string;
+      relation?: string;
+      student_ids: number[];
+    }) => (await axiosInstance.post("/admin/parents", payload)).data,
+    remove: async (id: number) => (await axiosInstance.delete(`/admin/parents/${id}`)).data,
+    children: async () => (await axiosInstance.get("/parent/children")).data,
+  },
+
   leaves: {
     request: async (payload: { leave_date: string; reason: string; leave_type?: string }) => {
       const { data } = await axiosInstance.post("/leaves/request", payload);

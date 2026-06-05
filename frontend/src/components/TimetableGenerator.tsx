@@ -3,8 +3,9 @@ import { api } from "../api";
 import TimetableEditor from "./TimetableEditor";
 
 interface GenerationStatus {
-  status: "idle" | "loading" | "success" | "error";
+  status: "idle" | "loading" | "success" | "error" | "warning";
   message: string;
+  details?: string[];
 }
 
 interface TimetableSummary {
@@ -99,10 +100,32 @@ export default function TimetableGenerator() {
       });
 
       if (response.data.success) {
-        setStatus({
-          status: "success",
-          message: `Timetable generated successfully! (${response.data.slots_generated} periods created)`,
-        });
+        const report = response.data.report || {};
+        const isComplete = response.data.complete !== false && report.complete !== false;
+        if (isComplete) {
+          setStatus({
+            status: "success",
+            message: `Timetable generated successfully! (${response.data.slots_generated} periods created)`,
+          });
+        } else {
+          const shortfalls = (report.shortfalls || []) as Array<{
+            subject: string;
+            batch: string;
+            placed: number;
+            required: number;
+            missing: number;
+          }>;
+          setStatus({
+            status: "warning",
+            message:
+              `Timetable generated with ${report.total_required_missing || 0} required ` +
+              `period(s) that couldn't be placed. Empty slots were filled with supervised ` +
+              `activities — review the gaps below or adjust teachers/availability.`,
+            details: shortfalls.map(
+              (s) => `${s.subject} · ${s.batch}: ${s.placed}/${s.required} placed (${s.missing} missing)`
+            ),
+          });
+        }
         await loadData();
       } else {
         setStatus({ status: "error", message: `Error: ${response.data.message}` });
@@ -174,6 +197,8 @@ export default function TimetableGenerator() {
       ? "bg-green-100 text-green-800 border border-green-300"
       : status.status === "error"
       ? "bg-red-100 text-red-800 border border-red-300"
+      : status.status === "warning"
+      ? "bg-amber-100 text-amber-900 border border-amber-300"
       : "bg-blue-100 text-blue-800 border border-blue-300";
 
   return (
@@ -192,7 +217,16 @@ export default function TimetableGenerator() {
         </button>
 
         {status.message && (
-          <div className={`mt-4 p-3 rounded text-sm font-medium ${statusClasses}`}>{status.message}</div>
+          <div className={`mt-4 p-3 rounded text-sm font-medium ${statusClasses}`}>
+            <div>{status.message}</div>
+            {status.details && status.details.length > 0 && (
+              <ul className="mt-2 list-disc list-inside space-y-1 font-normal">
+                {status.details.map((d, i) => (
+                  <li key={i}>{d}</li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
       </div>
 

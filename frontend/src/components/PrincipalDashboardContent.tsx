@@ -3,19 +3,29 @@ import { api } from "../api";
 import LeaveManagement from "./LeaveManagement";
 import NotificationsCenter from "./NotificationsCenter";
 import TimetableGenerator from "./TimetableGenerator";
+import AttendancePanel from "./AttendancePanel";
+import ExamsPanel from "./ExamsPanel";
+import AnnouncementsPanel from "./AnnouncementsPanel";
 
 interface DashboardStats {
   total_students: number;
   total_teachers: number;
   total_batches: number;
   total_subjects: number;
-  total_houses: number;
   leave_requests_pending: number;
+}
+
+interface TodayAttendance {
+  present_percentage: number | null;
+  classes_marked: number;
+  total_classes: number;
+  total_marked: number;
 }
 
 export default function PrincipalDashboardContent() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [activeTab, setActiveTab] = useState<"overview" | "leaves" | "notifications" | "timetable">("overview");
+  const [todayAtt, setTodayAtt] = useState<TodayAttendance | null>(null);
+  const [activeTab, setActiveTab] = useState<"overview" | "attendance" | "exams" | "announcements" | "leaves" | "notifications" | "timetable">("overview");
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
 
@@ -26,24 +36,32 @@ export default function PrincipalDashboardContent() {
   const loadDashboardStats = async () => {
     try {
       setLoading(true);
-      // Get basic stats
-      const teachersRes = await api.get("/admin/teachers");
-      const leaveRes = await api.get("/leaves");
-      
+      // Real, organization-scoped counts from the backend (never hardcoded).
+      const [dbStats, leaveRes, todayRes] = await Promise.all([
+        api.stats(),
+        api.get("/leaves"),
+        api.attendance.today().catch(() => null),
+      ]);
+
       setStats({
-        total_students: 2800, // From seed data
-        total_teachers: teachersRes.data?.length || 0,
-        total_batches: 73, // From seed data
-        total_subjects: 20, // From seed data
-        total_houses: 4, // From seed data
-        leave_requests_pending: leaveRes.data?.filter((l: any) => (l.status || "").toLowerCase() === "pending").length || 0,
+        total_students: dbStats?.students || 0,
+        total_teachers: dbStats?.teachers || 0,
+        total_batches: dbStats?.batches || 0,
+        total_subjects: dbStats?.subjects || 0,
+        leave_requests_pending:
+          leaveRes.data?.filter((l: any) => (l.status || "").toLowerCase() === "pending").length || 0,
       });
+      if (todayRes) setTodayAtt(todayRes);
     } catch (error) {
       console.error("Error loading stats:", error);
     } finally {
       setLoading(false);
     }
   };
+
+  // Derived, not hardcoded: average section strength.
+  const avgStudentsPerClass = (s: DashboardStats) =>
+    s.total_batches > 0 ? Math.round(s.total_students / s.total_batches) : 0;
 
   return (
     <div className="space-y-6">
@@ -68,6 +86,36 @@ export default function PrincipalDashboardContent() {
           }`}
         >
           📋 Leave Requests
+        </button>
+        <button
+          onClick={() => setActiveTab("attendance")}
+          className={`px-4 py-2 rounded-lg font-medium transition ${
+            activeTab === "attendance"
+              ? "bg-blue-600 text-white"
+              : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+          }`}
+        >
+          📝 Attendance
+        </button>
+        <button
+          onClick={() => setActiveTab("exams")}
+          className={`px-4 py-2 rounded-lg font-medium transition ${
+            activeTab === "exams"
+              ? "bg-blue-600 text-white"
+              : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+          }`}
+        >
+          🧪 Exams
+        </button>
+        <button
+          onClick={() => setActiveTab("announcements")}
+          className={`px-4 py-2 rounded-lg font-medium transition ${
+            activeTab === "announcements"
+              ? "bg-blue-600 text-white"
+              : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+          }`}
+        >
+          📣 Announcements
         </button>
         <button
           onClick={() => setActiveTab("timetable")}
@@ -120,7 +168,7 @@ export default function PrincipalDashboardContent() {
               </div>
 
               {/* Additional Stats */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-3 gap-4">
                 <div className="bg-white rounded-lg p-4 border border-gray-200 shadow-sm">
                   <p className="text-2xl font-bold text-orange-600">{stats.total_batches}</p>
                   <p className="text-sm text-gray-600">Classes/Sections</p>
@@ -130,13 +178,40 @@ export default function PrincipalDashboardContent() {
                   <p className="text-sm text-gray-600">Subjects</p>
                 </div>
                 <div className="bg-white rounded-lg p-4 border border-gray-200 shadow-sm">
-                  <p className="text-2xl font-bold text-indigo-600">{stats.total_houses}</p>
-                  <p className="text-sm text-gray-600">House Groups</p>
-                </div>
-                <div className="bg-white rounded-lg p-4 border border-gray-200 shadow-sm">
-                  <p className="text-2xl font-bold text-cyan-600">34</p>
+                  <p className="text-2xl font-bold text-cyan-600">{avgStudentsPerClass(stats)}</p>
                   <p className="text-sm text-gray-600">Avg Students/Class</p>
                 </div>
+              </div>
+
+              {/* Today's attendance snapshot */}
+              <div className="bg-gradient-to-r from-emerald-50 to-emerald-100 rounded-lg p-6 border-2 border-emerald-200">
+                <div className="flex items-center justify-between mb-1">
+                  <h3 className="font-bold text-emerald-900">📝 Today's Attendance</h3>
+                  <button onClick={() => setActiveTab("attendance")}
+                          className="text-sm text-emerald-800 underline">Open</button>
+                </div>
+                {todayAtt && todayAtt.total_marked > 0 ? (
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-2">
+                    <div>
+                      <p className="text-3xl font-bold text-emerald-700">
+                        {todayAtt.present_percentage ?? "—"}%
+                      </p>
+                      <p className="text-sm text-gray-600">Present today</p>
+                    </div>
+                    <div>
+                      <p className="text-3xl font-bold text-emerald-700">
+                        {todayAtt.classes_marked}/{todayAtt.total_classes}
+                      </p>
+                      <p className="text-sm text-gray-600">Classes marked</p>
+                    </div>
+                    <div>
+                      <p className="text-3xl font-bold text-emerald-700">{todayAtt.total_marked}</p>
+                      <p className="text-sm text-gray-600">Students recorded</p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-emerald-800 mt-1">No attendance recorded yet today.</p>
+                )}
               </div>
 
               {/* Quick Actions */}
@@ -180,6 +255,13 @@ export default function PrincipalDashboardContent() {
           ) : null}
         </div>
       )}
+
+      {/* Attendance Tab */}
+      {activeTab === "attendance" && <AttendancePanel />}
+
+      {activeTab === "exams" && <ExamsPanel />}
+
+      {activeTab === "announcements" && <AnnouncementsPanel />}
 
       {/* Leave Management Tab */}
       {activeTab === "leaves" && <LeaveManagement />}

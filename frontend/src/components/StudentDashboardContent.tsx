@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { api } from "../api";
 import { useAuthStore } from "../stores/authStore";
 import NotificationsCenter from "./NotificationsCenter";
+import AnnouncementsPanel from "./AnnouncementsPanel";
 
 interface PeriodRow {
   number: number;
@@ -34,7 +35,7 @@ interface BatchSchedule {
   teachers: { id: number; name: string }[];
 }
 
-type Tab = "overview" | "schedule" | "teachers" | "subjects" | "notifications";
+type Tab = "overview" | "schedule" | "teachers" | "subjects" | "announcements" | "notifications";
 
 export default function StudentDashboardContent() {
   const { user } = useAuthStore();
@@ -109,6 +110,7 @@ export default function StudentDashboardContent() {
         <TabButton id="schedule" label="📅 My Timetable" />
         <TabButton id="teachers" label="👨‍🏫 My Teachers" />
         <TabButton id="subjects" label="📖 My Subjects" />
+        <TabButton id="announcements" label="📣 Announcements" />
         <TabButton id="notifications" label="🔔 Notifications" />
       </div>
 
@@ -261,6 +263,8 @@ export default function StudentDashboardContent() {
           )}
         </div>
       )}
+
+      {activeTab === "announcements" && <AnnouncementsPanel />}
 
       {activeTab === "notifications" && <NotificationsCenter />}
     </div>

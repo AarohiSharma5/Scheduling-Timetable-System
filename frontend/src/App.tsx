@@ -18,6 +18,7 @@ import AdminPage from "./pages/AdminPage";
 import PrincipalPage from "./pages/PrincipalPage";
 import TeacherPage from "./pages/TeacherPage";
 import StudentPage from "./pages/StudentPage";
+import ParentPage from "./pages/ParentPage";
 
 const App: React.FC = () => {
   const { restoreSession, error } = useAuthStore();
@@ -106,6 +107,14 @@ const App: React.FC = () => {
           element={
             <ProtectedRoute requiredRole="student">
               <StudentPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/parent"
+          element={
+            <ProtectedRoute requiredRole="parent">
+              <ParentPage />
             </ProtectedRoute>
           }
         />
