@@ -522,8 +522,8 @@ def organization_register():
 def public_user_register_blocked():
     """Public self-registration of users is disabled.
 
-    Teachers, students, parents and coordinators are provisioned only by an
-    organization admin (see /admin/teachers, /admin/students, invitations).
+    Teachers, students and parents are provisioned only by an organization
+    admin (see /admin/teachers, /admin/students, invitations).
     """
     return jsonify({
         "error": "Public user registration is disabled. Accounts are created by your organization's admin.",
@@ -838,7 +838,7 @@ def reset_password(token):
 # ============================================================================
 
 # Roles an admin/principal is allowed to invite.
-_INVITABLE_ROLES = {"teacher", "coordinator", "principal", "student"}
+_INVITABLE_ROLES = {"teacher", "principal", "student"}
 
 
 @api.route("/invitations", methods=["GET"])
@@ -2153,7 +2153,6 @@ def get_students():
             'class_grade': s.class_grade,
             'section': s.section,
             'roll_no': s.roll_no,
-            'house_name': s.house_name if hasattr(s, 'house_name') else 'Not Assigned',
             'contact_number': s.contact_number,
             'status': s.status
         } for s in students]), 200
@@ -2556,6 +2555,60 @@ def anonymize_student_route(student_id):
     log_audit("pii.anonymize", {"student_id": student_code},
               user_id=request.user.get("user_id"), organization_id=org_id)
     return jsonify({"message": "Student data anonymized", "student": student.to_dict()}), 200
+
+
+@api.route("/admin/onboarding", methods=["GET"])
+@role_required("admin", "principal")
+def onboarding_status():
+    """Setup checklist for a new school, so an admin isn't dropped into a wall of
+    empty tabs. Each step maps to a dashboard tab and is 'done' once that entity
+    exists. The whole checklist can be dismissed once the school is set up."""
+    org_id = current_org_id()
+    org = Organization.query.get(org_id)
+
+    def _count(model):
+        return model.query.filter_by(organization_id=org_id).count()
+
+    config_exists = SchoolConfig.query.filter_by(organization_id=org_id).first() is not None
+    subjects = _count(Subject)
+    batches = _count(Batch)
+    teachers = _count(Teacher)
+    students = _count(Student)
+    timetables = _count(Timetable)
+
+    steps = [
+        {"key": "config", "label": "Set school hours & periods", "tab": "config",
+         "done": config_exists, "count": None},
+        {"key": "subjects", "label": "Add subjects", "tab": "subjects",
+         "done": subjects > 0, "count": subjects},
+        {"key": "batches", "label": "Create classes & sections", "tab": "batches",
+         "done": batches > 0, "count": batches},
+        {"key": "teachers", "label": "Add teachers", "tab": "teachers",
+         "done": teachers > 0, "count": teachers},
+        {"key": "students", "label": "Add students", "tab": "students",
+         "done": students > 0, "count": students},
+        {"key": "timetable", "label": "Generate your first timetable", "tab": "timetable",
+         "done": timetables > 0, "count": timetables},
+    ]
+    done_count = sum(1 for s in steps if s["done"])
+    return jsonify({
+        "completed": bool(org.onboarding_completed) if org else False,
+        "done_count": done_count,
+        "total": len(steps),
+        "steps": steps,
+    }), 200
+
+
+@api.route("/admin/onboarding/dismiss", methods=["POST"])
+@role_required("admin", "principal")
+def onboarding_dismiss():
+    """Permanently hide the setup checklist for this organization."""
+    org_id = current_org_id()
+    org = Organization.query.get(org_id)
+    if org:
+        org.onboarding_completed = True
+        db.session.commit()
+    return jsonify({"completed": True}), 200
 
 
 @api.route("/admin/students/<int:student_id>/transfer", methods=["POST"])

@@ -26,7 +26,7 @@ const features = [
   {
     icon: "🔐",
     title: "Role-based Access",
-    desc: "Distinct dashboards for Admin, Principal, Coordinator, Teacher, and Student.",
+    desc: "Distinct dashboards for Admin, Principal, Teacher, Student, and Parent.",
   },
   {
     icon: "🏫",

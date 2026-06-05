@@ -87,7 +87,7 @@ Body for `POST`:
 | ------ | ---------------- | ------------------ |
 | GET    | `/api/students`  | admin/principal/coordinator |
 
-Query parameters: `class`, `section`, `house`, `search`.
+Query parameters: `class`, `section`, `search`.
 
 ---
 

@@ -338,6 +338,18 @@ export const api = {
       },
     },
 
+    // First-run setup checklist
+    onboarding: {
+      get: async () => {
+        const { data } = await axiosInstance.get("/admin/onboarding");
+        return data;
+      },
+      dismiss: async () => {
+        const { data } = await axiosInstance.post("/admin/onboarding/dismiss");
+        return data;
+      },
+    },
+
     // Bulk import (CSV / XLSX) for students & teachers
     imports: {
       preview: async (entity: "students" | "teachers", file: File) => {

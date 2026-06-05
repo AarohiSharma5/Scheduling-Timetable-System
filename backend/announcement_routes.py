@@ -92,7 +92,6 @@ def _visible(ann, role, my_batches):
         "teacher": {"all", "teachers"},
         "student": {"all", "students"},
         "parent": {"all", "parents"},
-        "coordinator": {"all", "teachers"},
     }.get(role, {"all"})
     if ann.audience not in role_audiences:
         return False

@@ -2,10 +2,13 @@ import React, { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useOrgStore } from "../stores/orgStore";
 
+// Demo credentials only make sense against a seeded dev database.
+const SHOW_DEMO = process.env.NODE_ENV !== "production";
+
 export default function OrgLoginPage() {
   const navigate = useNavigate();
   const { loginOrg, loading, organization } = useOrgStore();
-  const [identifier, setIdentifier] = useState("Test Sample Institute");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -118,16 +121,18 @@ export default function OrgLoginPage() {
             </button>
           </form>
 
-          <div className="mt-6 p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-600">
-            <p className="font-semibold text-slate-700 mb-1">Demo credentials</p>
-            <p>
-              Organisation:{" "}
-              <span className="font-mono">Test Sample Institute</span>
-            </p>
-            <p>
-              Password: <span className="font-mono">institute123</span>
-            </p>
-          </div>
+          {SHOW_DEMO && (
+            <div className="mt-6 p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-600">
+              <p className="font-semibold text-slate-700 mb-1">Demo credentials (dev only)</p>
+              <p>
+                Organisation:{" "}
+                <span className="font-mono">Test Sample Institute</span>
+              </p>
+              <p>
+                Password: <span className="font-mono">institute123</span>
+              </p>
+            </div>
+          )}
 
           <p className="mt-6 text-xs text-slate-500 text-center">
             Once you sign in to an organisation, you'll stay signed in to it.

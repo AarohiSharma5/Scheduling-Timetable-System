@@ -3,8 +3,6 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../stores/authStore";
 import { useOrgStore } from "../stores/orgStore";
 
-type Role = "admin" | "principal" | "teacher" | "student" | "parent";
-
 // Map an authenticated user's real role to its dashboard route. Owner is
 // treated as admin (matches the backend role assignment at signup).
 const ROLE_ROUTES: Record<string, string> = {
@@ -16,44 +14,11 @@ const ROLE_ROUTES: Record<string, string> = {
   parent: "/parent",
 };
 
-const loginOptions: Record<
-  Role,
-  { label: string; icon: string; color: string; description: string }
-> = {
-  admin: {
-    label: "Admin",
-    icon: "⚙️",
-    color: "from-red-500 to-red-600",
-    description: "Manage school, teachers, and schedules",
-  },
-  principal: {
-    label: "Principal",
-    icon: "👨‍💼",
-    color: "from-blue-500 to-blue-600",
-    description: "View all timetables and reports",
-  },
-  teacher: {
-    label: "Teacher",
-    icon: "👨‍🏫",
-    color: "from-green-500 to-green-600",
-    description: "View your classes and schedule",
-  },
-  student: {
-    label: "Student",
-    icon: "👨‍🎓",
-    color: "from-purple-500 to-purple-600",
-    description: "View your class schedule",
-  },
-  parent: {
-    label: "Parent",
-    icon: "👪",
-    color: "from-amber-500 to-amber-600",
-    description: "Track your child's attendance & results",
-  },
-};
+// Demo credentials are only useful against a seeded dev database and must never
+// be advertised on a real deployment.
+const SHOW_DEMO = process.env.NODE_ENV !== "production";
 
 export default function LoginPage() {
-  const [selectedRole, setSelectedRole] = useState<Role | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -75,13 +40,14 @@ export default function LoginPage() {
         navigate("/change-password", { replace: true });
         return;
       }
-      // Route by the account's ACTUAL role (not the card the user clicked) so a
-      // mismatch doesn't get bounced back to /login by the route guard.
-      const target = ROLE_ROUTES[user?.role || ""] || "/login";
-      if (selectedRole && user?.role && selectedRole !== user.role && target !== "/login") {
+      // Route by the account's actual role from the server — no role selection,
+      // so there's no mismatch to reconcile.
+      const target = ROLE_ROUTES[user?.role || ""];
+      if (!target) {
         setError(
-          `This account is a ${user.role}, not a ${loginOptions[selectedRole].label.toLowerCase()}. Taking you to your dashboard…`
+          "Your account doesn't have a dashboard configured yet. Please contact your administrator."
         );
+        return;
       }
       navigate(target);
     } catch (err) {
@@ -144,157 +110,96 @@ export default function LoginPage() {
       </div>
 
       <div className="relative z-10 flex-1 flex items-center justify-center p-4 py-10">
-        <div className="max-w-6xl w-full">
+        <div className="max-w-md w-full">
           {/* Header */}
-          <div className="text-center mb-12">
+          <div className="text-center mb-8">
             <div className="inline-flex items-center justify-center h-16 w-16 mb-5 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 shadow-lg shadow-indigo-900/50 text-3xl ring-1 ring-white/20">
               📅
             </div>
-            <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight mb-3 bg-gradient-to-r from-white via-indigo-100 to-indigo-300 bg-clip-text text-transparent">
+            <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight mb-3 bg-gradient-to-r from-white via-indigo-100 to-indigo-300 bg-clip-text text-transparent">
               School Timetable Scheduler
             </h1>
-            <p className="text-slate-300/90 text-base sm:text-lg">
-              {selectedRole
-                ? `Sign in as ${loginOptions[selectedRole].label}`
-                : "Choose how you'd like to sign in"}
+            <p className="text-slate-300/90 text-base">
+              Sign in to {organization.name}
             </p>
           </div>
 
-          {!selectedRole ? (
-            // Role Selector
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-              {(
-                Object.entries(loginOptions) as [
-                  Role,
-                  typeof loginOptions[Role]
-                ][]
-              ).map(([role, option]) => (
-                <button
-                  key={role}
-                  onClick={() => setSelectedRole(role)}
-                  className="group relative overflow-hidden p-6 rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-xl text-left transition-all duration-300 hover:-translate-y-1.5 hover:border-white/25 hover:bg-white/[0.07] hover:shadow-2xl hover:shadow-indigo-900/40"
-                >
-                  {/* hover gradient sheen */}
-                  <div className={`absolute inset-0 opacity-0 group-hover:opacity-10 transition-opacity duration-300 bg-gradient-to-br ${option.color}`} />
-                  <div className={`relative mb-4 inline-flex h-14 w-14 items-center justify-center rounded-xl bg-gradient-to-br ${option.color} text-3xl shadow-lg ring-1 ring-white/20`}>
-                    {option.icon}
-                  </div>
-                  <h3 className="relative text-xl font-bold text-white mb-1">
-                    {option.label}
-                  </h3>
-                  <p className="relative text-sm text-slate-400 leading-snug">{option.description}</p>
-                  <span className="relative mt-4 inline-flex items-center gap-1 text-sm font-medium text-indigo-300 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all">
-                    Continue
-                    <span aria-hidden>→</span>
-                  </span>
-                </button>
-              ))}
+          <div className="bg-white/[0.06] backdrop-blur-xl rounded-2xl shadow-2xl shadow-indigo-950/40 border border-white/10 p-8">
+            {error && (
+              <div className="mb-4 p-4 bg-red-500/20 border border-red-500 rounded text-red-200">
+                {error}
+              </div>
+            )}
+
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-white mb-2">
+                  Email
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="Enter your email"
+                  autoFocus
+                  className="w-full px-4 py-2.5 rounded-lg bg-slate-900/50 border border-white/10 text-white placeholder-slate-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/30 focus:outline-none transition"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-white mb-2">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Enter your password"
+                  className="w-full px-4 py-2.5 rounded-lg bg-slate-900/50 border border-white/10 text-white placeholder-slate-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/30 focus:outline-none transition"
+                  required
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className={`w-full py-2.5 rounded-lg font-semibold text-white transition shadow-lg ${
+                  loading
+                    ? "bg-slate-600 cursor-not-allowed"
+                    : "bg-gradient-to-r from-indigo-500 to-purple-600 hover:shadow-xl hover:brightness-110"
+                }`}
+              >
+                {loading ? "Signing in…" : "Sign In"}
+              </button>
+            </form>
+
+            <div className="mt-4 text-center">
+              <Link
+                to="/forgot-password"
+                className="text-sm text-indigo-300 hover:text-indigo-200 transition"
+              >
+                Forgot password?
+              </Link>
             </div>
-          ) : (
-            // Login Form
-            <div className="max-w-md mx-auto">
-              <div className="bg-white/[0.06] backdrop-blur-xl rounded-2xl shadow-2xl shadow-indigo-950/40 border border-white/10 p-8">
-                <button
-                  onClick={() => {
-                    setSelectedRole(null);
-                    setEmail("");
-                    setPassword("");
-                    setError("");
-                  }}
-                  className="text-slate-300 hover:text-white mb-5 inline-flex items-center gap-2 bg-transparent border-0 p-0 transition"
-                >
-                  <span aria-hidden>←</span> Back to roles
-                </button>
 
-                <div className="mb-6">
-                  <div
-                    className={`inline-block px-4 py-2 rounded-full bg-gradient-to-r ${loginOptions[selectedRole].color} text-white font-semibold`}
-                  >
-                    {loginOptions[selectedRole].icon}{" "}
-                    {loginOptions[selectedRole].label}
-                  </div>
-                </div>
-
-                {error && (
-                  <div className="mb-4 p-4 bg-red-500/20 border border-red-500 rounded text-red-200">
-                    {error}
-                  </div>
-                )}
-
-                <form onSubmit={handleLogin} className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-white mb-2">
-                      Email
-                    </label>
-                    <input
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="Enter your email"
-                      className="w-full px-4 py-2.5 rounded-lg bg-slate-900/50 border border-white/10 text-white placeholder-slate-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/30 focus:outline-none transition"
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-white mb-2">
-                      Password
-                    </label>
-                    <input
-                      type="password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="Enter your password"
-                      className="w-full px-4 py-2.5 rounded-lg bg-slate-900/50 border border-white/10 text-white placeholder-slate-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/30 focus:outline-none transition"
-                      required
-                    />
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className={`w-full py-2.5 rounded-lg font-semibold text-white transition shadow-lg ${
-                      loading
-                        ? "bg-slate-600 cursor-not-allowed"
-                        : `bg-gradient-to-r ${loginOptions[selectedRole].color} hover:shadow-xl hover:brightness-110`
-                    }`}
-                  >
-                    {loading ? "Signing in…" : "Sign In"}
-                  </button>
-                </form>
-
-                <div className="mt-4 text-center">
-                  <Link
-                    to="/forgot-password"
-                    className="text-sm text-indigo-300 hover:text-indigo-200 transition"
-                  >
-                    Forgot password?
-                  </Link>
-                </div>
-
-                <div className="mt-6 p-4 bg-slate-900/50 border border-white/10 rounded-lg text-sm text-slate-300">
-                  <p className="font-semibold mb-2">Demo credentials:</p>
-                  <div className="space-y-1 font-mono text-xs">
-                    <p>
-                      <strong>Admin:</strong> admin@school.edu / admin123
-                    </p>
-                    <p>
-                      <strong>Principal:</strong> principal@school.edu /
-                      principal123
-                    </p>
-                    <p>
-                      <strong>Teacher:</strong> priya.sharma@school.edu /
-                      teacher123
-                    </p>
-                    <p>
-                      <strong>Student:</strong> student9A1@school.edu /
-                      student123
-                    </p>
-                  </div>
+            {SHOW_DEMO && (
+              <div className="mt-6 p-4 bg-slate-900/50 border border-white/10 rounded-lg text-sm text-slate-300">
+                <p className="font-semibold mb-2">Demo credentials (dev only):</p>
+                <div className="space-y-1 font-mono text-xs">
+                  <p>
+                    <strong>Admin:</strong> admin@school.edu / admin123
+                  </p>
+                  <p>
+                    <strong>Principal:</strong> principal@school.edu / principal123
+                  </p>
+                  <p>
+                    <strong>Teacher:</strong> priya.sharma@school.edu / teacher123
+                  </p>
                 </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
     </div>

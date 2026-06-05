@@ -1,5 +1,7 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useAuthStore } from "../stores/authStore";
+import { api } from "../api";
+import OnboardingChecklist from "../components/OnboardingChecklist";
 import TeacherManagement from "../components/TeacherManagement";
 import StudentManagement from "../components/StudentManagement";
 import BatchManagement from "../components/BatchManagement";
@@ -27,9 +29,9 @@ import InventoryPanel from "../components/InventoryPanel";
 import AnalyticsPanel from "../components/AnalyticsPanel";
 import MessagesPanel from "../components/MessagesPanel";
 
-type Tab = "timetable" | "analytics" | "students" | "attendance" | "exams" | "homework" | "fees" | "announcements" | "messages" | "calendar" | "library" | "transport" | "inventory" | "teachers" | "parents" | "batches" | "rooms" | "groups" | "classperiods" | "subjects" | "charges" | "pinned" | "invitations" | "leaves" | "notifications" | "config";
+type Tab = "setup" | "timetable" | "analytics" | "students" | "attendance" | "exams" | "homework" | "fees" | "announcements" | "messages" | "calendar" | "library" | "transport" | "inventory" | "teachers" | "parents" | "batches" | "rooms" | "groups" | "classperiods" | "subjects" | "charges" | "pinned" | "invitations" | "leaves" | "notifications" | "config";
 
-const tabs: Record<Tab, { icon: string; label: string }> = {
+const tabs: Record<Exclude<Tab, "setup">, { icon: string; label: string }> = {
   timetable: { icon: "📊", label: "Timetable" },
   analytics: { icon: "📈", label: "Analytics" },
   students: { icon: "👥", label: "Students" },
@@ -61,6 +63,40 @@ const tabs: Record<Tab, { icon: string; label: string }> = {
 export default function AdminPage() {
   const { user, logout } = useAuthStore();
   const [activeTab, setActiveTab] = useState<Tab>("timetable");
+  const [onboarding, setOnboarding] = useState<any>(null);
+
+  const loadOnboarding = () => api.admin.onboarding.get().then(setOnboarding).catch(() => {});
+
+  useEffect(() => {
+    // New schools land on the setup checklist instead of an empty timetable.
+    api.admin.onboarding
+      .get()
+      .then((data) => {
+        setOnboarding(data);
+        if (!data.completed && data.done_count < data.total) {
+          setActiveTab("setup");
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const showSetupTab = onboarding && !onboarding.completed;
+
+  const goToTab = (tab: Tab) => {
+    setActiveTab(tab);
+    // Re-check progress when leaving the checklist so ticks stay current.
+    loadOnboarding();
+  };
+
+  const dismissOnboarding = async () => {
+    try {
+      await api.admin.onboarding.dismiss();
+    } catch {
+      /* best-effort */
+    }
+    setOnboarding((o: any) => (o ? { ...o, completed: true } : o));
+    setActiveTab("timetable");
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
@@ -83,7 +119,20 @@ export default function AdminPage() {
       {/* Tab Navigation */}
       <div className="bg-white border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex gap-1 overflow-x-auto">
-          {(Object.entries(tabs) as [Tab, typeof tabs[Tab]][]).map(([key, { icon, label }]) => (
+          {showSetupTab && (
+            <button
+              onClick={() => setActiveTab("setup")}
+              className={`px-4 py-3 text-sm font-medium flex items-center gap-2 border-b-2 whitespace-nowrap transition ${
+                activeTab === "setup"
+                  ? "border-blue-600 text-blue-700 bg-blue-50"
+                  : "border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-50"
+              }`}
+            >
+              <span className="text-base">🚀</span>
+              Getting Started
+            </button>
+          )}
+          {(Object.entries(tabs) as [Tab, { icon: string; label: string }][]).map(([key, { icon, label }]) => (
             <button
               key={key}
               onClick={() => setActiveTab(key)}
@@ -103,6 +152,13 @@ export default function AdminPage() {
       {/* Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="bg-white rounded-lg shadow-md p-6">
+          {activeTab === "setup" && (
+            <OnboardingChecklist
+              data={onboarding}
+              onNavigate={(tab) => goToTab(tab as Tab)}
+              onDismiss={dismissOnboarding}
+            />
+          )}
           {activeTab === "timetable" && <TimetableGenerator />}
           {activeTab === "analytics" && <AnalyticsPanel />}
           {activeTab === "students" && <StudentManagement />}

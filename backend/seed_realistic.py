@@ -376,44 +376,6 @@ def seed_database():
         print("   ✅ Principal created")
         
         # =====================================================================
-        # 7. COORDINATORS
-        # =====================================================================
-        print("\n📝 Creating coordinators...")
-        coordinators_data = [
-            ("C001", "Anjali Sharma", "Pre Primary Coordinator", "Nursery-UKG", "anjali@school.edu"),
-            ("C002", "Ritika Verma", "Junior Coordinator", "Classes 1-5", "ritika@school.edu"),
-            ("C003", "Ajay Mehta", "Middle School Coordinator", "Classes 6-8", "ajay@school.edu"),
-            ("C004", "Sonal Gupta", "Secondary Coordinator", "Classes 9-10", "sonal@school.edu"),
-            ("C005", "Vivek Sharma", "Senior Secondary Coordinator", "Classes 11-12", "vivek@school.edu"),
-        ]
-        
-        coordinators = []
-        for coord_id, name, designation, responsibility, email in coordinators_data:
-            coord_user = User(
-                organization_id=org_id,
-                name=name,
-                email=email,
-                role="coordinator",
-                password_hash=generate_password_hash("coordinator123"),
-            )
-            db.session.add(coord_user)
-            db.session.commit()
-            
-            coordinator = Coordinator(
-                coordinator_id=coord_id,
-                user_id=coord_user.id,
-                name=name,
-                designation=designation,
-                responsibility=responsibility,
-                email=email,
-                phone="98" + "".join([str(random.randint(0, 9)) for _ in range(8)])
-            )
-            db.session.add(coordinator)
-            coordinators.append(coordinator)
-        db.session.commit()
-        print(f"   ✅ Created {len(coordinators)} coordinators")
-        
-        # =====================================================================
         # 8. TEACHERS (75 TOTAL)
         # =====================================================================
         print("\n👨‍🏫 Creating 75 teachers with specializations...")
@@ -791,7 +753,6 @@ def seed_database():
         stats = {
             "Students": Student.query.count(),
             "Teachers": Teacher.query.count(),
-            "Coordinators": Coordinator.query.count(),
             "Principals": Principal.query.count(),
             "Batches/Sections": Batch.query.count(),
             "Houses": House.query.count(),
@@ -812,7 +773,6 @@ def seed_database():
         print("\n🎯 USER CREDENTIALS (step 2 — after organization login):")
         print("   Admin:       admin@school.edu / admin123")
         print("   Principal:   principal@school.edu / principal123")
-        print("   Coordinator: anjali@school.edu / coordinator123")
         print("   Teacher:     priya.sharma@school.edu / teacher123")
 
         print("\n🚀 Ready to start the application!\n")

@@ -15,7 +15,6 @@ interface Invite {
 
 const ROLES = [
   { value: "teacher", label: "Teacher" },
-  { value: "coordinator", label: "Coordinator" },
   { value: "principal", label: "Principal" },
   { value: "student", label: "Student" },
 ];

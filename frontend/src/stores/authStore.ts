@@ -6,7 +6,7 @@ export interface User {
   id: number;
   name: string;
   email: string;
-  role: "admin" | "principal" | "teacher" | "student" | "coordinator" | "parent";
+  role: "admin" | "principal" | "teacher" | "student" | "parent";
   must_change_password?: boolean;
   profile_completed?: boolean;
   phone?: string;
