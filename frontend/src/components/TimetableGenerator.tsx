@@ -90,6 +90,68 @@ export default function TimetableGenerator() {
     [batches]
   );
 
+  // Render the final result payload (shape is identical for sync + async paths).
+  const applyGenerationResult = async (result: any) => {
+    if (!result || !result.success) {
+      setStatus({ status: "error", message: `Error: ${result?.message || "Generation failed"}` });
+      return;
+    }
+    const report = result.report || {};
+    const isComplete = result.complete !== false && report.complete !== false;
+    if (isComplete) {
+      setStatus({
+        status: "success",
+        message: `Timetable generated successfully! (${result.slots_generated} periods created)`,
+      });
+    } else {
+      const shortfalls = (report.shortfalls || []) as Array<{
+        subject: string; batch: string; placed: number; required: number; missing: number;
+      }>;
+      setStatus({
+        status: "warning",
+        message:
+          `Timetable generated with ${report.total_required_missing || 0} required ` +
+          `period(s) that couldn't be placed. Empty slots were filled with supervised ` +
+          `activities — review the gaps below or adjust teachers/availability.`,
+        details: shortfalls.map(
+          (s) => `${s.subject} · ${s.batch}: ${s.placed}/${s.required} placed (${s.missing} missing)`
+        ),
+      });
+    }
+    await loadData();
+  };
+
+  // Poll a queued job until it finishes (or times out), then render the result.
+  const pollJob = async (jobId: number) => {
+    const startedAt = Date.now();
+    const TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+    while (Date.now() - startedAt < TIMEOUT_MS) {
+      await new Promise((r) => setTimeout(r, 2000));
+      let job: any;
+      try {
+        job = await api.timetable.job(jobId);
+      } catch {
+        continue; // transient; keep polling
+      }
+      if (job.status === "completed") {
+        await applyGenerationResult(job.result);
+        return;
+      }
+      if (job.status === "failed") {
+        setStatus({ status: "error", message: `Error: ${job.error || "Generation failed"}` });
+        return;
+      }
+      setStatus({
+        status: "loading",
+        message: job.status === "running" ? "Generating timetable…" : "Queued — waiting for a worker…",
+      });
+    }
+    setStatus({
+      status: "error",
+      message: "Generation is taking longer than expected. Please check back shortly.",
+    });
+  };
+
   const generateTimetable = async () => {
     try {
       setStatus({ status: "loading", message: "Generating timetable..." });
@@ -99,41 +161,19 @@ export default function TimetableGenerator() {
         description: "Auto-generated",
       });
 
-      if (response.data.success) {
-        const report = response.data.report || {};
-        const isComplete = response.data.complete !== false && report.complete !== false;
-        if (isComplete) {
-          setStatus({
-            status: "success",
-            message: `Timetable generated successfully! (${response.data.slots_generated} periods created)`,
-          });
-        } else {
-          const shortfalls = (report.shortfalls || []) as Array<{
-            subject: string;
-            batch: string;
-            placed: number;
-            required: number;
-            missing: number;
-          }>;
-          setStatus({
-            status: "warning",
-            message:
-              `Timetable generated with ${report.total_required_missing || 0} required ` +
-              `period(s) that couldn't be placed. Empty slots were filled with supervised ` +
-              `activities — review the gaps below or adjust teachers/availability.`,
-            details: shortfalls.map(
-              (s) => `${s.subject} · ${s.batch}: ${s.placed}/${s.required} placed (${s.missing} missing)`
-            ),
-          });
-        }
-        await loadData();
-      } else {
-        setStatus({ status: "error", message: `Error: ${response.data.message}` });
+      // 202 + queued: generation runs on a background worker; poll for the result.
+      if (response.status === 202 || response.data?.queued) {
+        setStatus({ status: "loading", message: "Queued — waiting for a worker…" });
+        await pollJob(response.data.job_id);
+        return;
       }
+
+      // 201: synchronous fallback returned the full result inline.
+      await applyGenerationResult(response.data);
     } catch (error: any) {
       setStatus({
         status: "error",
-        message: `Error: ${error.response?.data?.message || error.message}`,
+        message: `Error: ${error.response?.data?.error || error.response?.data?.message || error.message}`,
       });
     }
   };

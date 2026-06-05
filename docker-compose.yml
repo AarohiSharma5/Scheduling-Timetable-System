@@ -36,6 +36,35 @@ services:
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
       # Shared store so rate limits are accurate across all gunicorn workers.
       RATELIMIT_STORAGE_URI: redis://redis:6379
+      # Job queue for async timetable generation.
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:3000/api/health/live').status==200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    volumes:
+      - ./backend:/app
+      - ./frontend/build:/app/../frontend/build
+
+  # Background worker: runs timetable generation off the HTTP request so a long
+  # run can't tie up a web worker or hit the gunicorn request timeout.
+  worker:
+    build: ./backend
+    command: ["python", "worker.py"]
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/timetable_db
+      FLASK_ENV: production
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set in .env}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
+      RATELIMIT_STORAGE_URI: redis://redis:6379
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy

@@ -385,6 +385,10 @@ export const api = {
       });
       return data;
     },
+    job: async (jobId: number) => {
+      const { data } = await axiosInstance.get(`/timetable/jobs/${jobId}`);
+      return data;
+    },
     publish: async (id: number) => {
       const { data } = await axiosInstance.post(`/timetable/${id}/publish`);
       return data;
