@@ -5,6 +5,7 @@ Flask-Migrate==4.0.5
 Flask-Limiter==3.5.1
 redis==5.0.1
 rq==1.16.2
+cryptography==42.0.8
 python-dotenv==1.0.0
 gunicorn==21.2.0
 psycopg2-binary==2.9.9

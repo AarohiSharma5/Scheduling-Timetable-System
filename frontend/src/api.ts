@@ -328,6 +328,14 @@ export const api = {
         const { data } = await axiosInstance.post("/admin/students/resequence-rolls", payload);
         return data;
       },
+      dataExport: async (id: number) => {
+        const { data } = await axiosInstance.get(`/admin/students/${id}/data-export`);
+        return data;
+      },
+      anonymize: async (id: number) => {
+        const { data } = await axiosInstance.post(`/admin/students/${id}/anonymize`);
+        return data;
+      },
     },
 
     // Bulk import (CSV / XLSX) for students & teachers

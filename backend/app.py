@@ -69,6 +69,9 @@ def create_app(config_name=None):
     app.register_blueprint(inventory_bp)
     app.register_blueprint(analytics_bp)
     app.register_blueprint(message_bp)
+
+    from cli import register_cli
+    register_cli(app)
     
     # Serve React index.html for all non-API routes (for React Router)
     if is_production:

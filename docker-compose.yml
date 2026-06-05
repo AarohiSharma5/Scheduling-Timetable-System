@@ -38,6 +38,9 @@ services:
       RATELIMIT_STORAGE_URI: redis://redis:6379
       # Job queue for async timetable generation.
       REDIS_URL: redis://redis:6379/0
+      # Encrypts student PII at rest. Optional: unset = stored as plaintext.
+      PII_ENCRYPTION_KEY: ${PII_ENCRYPTION_KEY:-}
+      DATA_RETENTION_YEARS: ${DATA_RETENTION_YEARS:-7}
     depends_on:
       postgres:
         condition: service_healthy
@@ -65,6 +68,8 @@ services:
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
       RATELIMIT_STORAGE_URI: redis://redis:6379
       REDIS_URL: redis://redis:6379/0
+      PII_ENCRYPTION_KEY: ${PII_ENCRYPTION_KEY:-}
+      DATA_RETENTION_YEARS: ${DATA_RETENTION_YEARS:-7}
     depends_on:
       postgres:
         condition: service_healthy

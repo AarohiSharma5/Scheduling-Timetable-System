@@ -45,6 +45,7 @@ from student_service import (
     DEFAULT_ADMISSION_BUFFER,
 )
 import bulk_import
+from compliance_utils import student_data_export, anonymize_student
 import os
 import re
 import secrets
@@ -247,6 +248,13 @@ def health_ready():
             checks["redis"] = "not configured"
     except Exception as e:  # noqa: BLE001
         checks["redis"] = f"error: {e}"
+
+    # Informational: surface whether PII-at-rest encryption is active.
+    try:
+        from crypto_utils import encryption_enabled
+        checks["pii_encryption"] = "enabled" if encryption_enabled() else "disabled"
+    except Exception:
+        checks["pii_encryption"] = "unknown"
 
     status = "ready" if ready else "not ready"
     return jsonify({"status": status, "checks": checks,
@@ -2381,6 +2389,10 @@ def create_student():
             subject_combination=(data.get("subject_combination") or None),
             elective_subjects=(data.get("elective_subjects") if isinstance(data.get("elective_subjects"), list) else []),
         )
+        if data.get("consent_given") is True:
+            student.consent_given = True
+            student.consent_at = datetime.utcnow()
+            student.consent_by = request.user.get("user_id")
         if explicit_roll:
             try:
                 student.roll_no = int(provided_roll)
@@ -2463,6 +2475,11 @@ def update_student(student_id):
         if "subject_combination" in data: student.subject_combination = data["subject_combination"] or None
         if "elective_subjects" in data:
             student.elective_subjects = data["elective_subjects"] if isinstance(data["elective_subjects"], list) else []
+        if "consent_given" in data:
+            granted = bool(data["consent_given"])
+            student.consent_given = granted
+            student.consent_at = datetime.utcnow() if granted else None
+            student.consent_by = request.user.get("user_id") if granted else None
 
         # Section / class moves (admin & principal only).
         new_grade = str(data.get("class_grade", student.class_grade))
@@ -2482,6 +2499,8 @@ def update_student(student_id):
         if (student.class_grade, student.section) != (old_grade, old_section):
             resequence_rolls(org_id, student.class_grade, student.section)
         db.session.commit()
+        log_audit("student.update", {"student_id": student.student_id},
+                  user_id=request.user.get("user_id"), organization_id=org_id)
         return jsonify(student.to_dict()), 200
     except Exception as e:
         db.session.rollback()
@@ -2498,14 +2517,45 @@ def delete_student(student_id):
         if not _can_manage_scope(student.class_grade, student.section):
             return jsonify({"error": "Not allowed to manage this student"}), 403
         grade, section = student.class_grade, student.section
+        student_code = student.student_id
         db.session.delete(student)
         db.session.flush()
         resequence_rolls(org_id, grade, section)
         db.session.commit()
+        log_audit("student.delete", {"student_id": student_code},
+                  user_id=request.user.get("user_id"), organization_id=org_id)
         return jsonify({"message": "Student deleted"}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
+
+
+@api.route("/admin/students/<int:student_id>/data-export", methods=["GET"])
+@role_required("admin", "principal")
+def export_student_data(student_id):
+    """Right of access / portability: full bundle of a student's data as JSON.
+    Every export is recorded in the audit trail (who, when, which subject)."""
+    org_id = current_org_id()
+    student = owned_or_404(Student, student_id)
+    bundle = student_data_export(student)
+    log_audit("pii.export", {"student_id": student.student_id},
+              user_id=request.user.get("user_id"), organization_id=org_id)
+    return jsonify(bundle), 200
+
+
+@api.route("/admin/students/<int:student_id>/anonymize", methods=["POST"])
+@role_required("admin", "principal")
+def anonymize_student_route(student_id):
+    """Right to erasure: irreversibly strip a student's PII while keeping their
+    de-identified academic records for referential integrity. Audited."""
+    org_id = current_org_id()
+    student = owned_or_404(Student, student_id)
+    student_code = student.student_id
+    anonymize_student(student)
+    db.session.commit()
+    log_audit("pii.anonymize", {"student_id": student_code},
+              user_id=request.user.get("user_id"), organization_id=org_id)
+    return jsonify({"message": "Student data anonymized", "student": student.to_dict()}), 200
 
 
 @api.route("/admin/students/<int:student_id>/transfer", methods=["POST"])

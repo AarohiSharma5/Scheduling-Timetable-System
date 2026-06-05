@@ -22,6 +22,7 @@ interface Student {
   blood_group?: string | null;
   admission_date?: string | null;
   status: string;
+  consent_given?: boolean;
 }
 
 const BLOOD_GROUPS = ["", "A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"];
@@ -61,6 +62,7 @@ const emptyForm = {
   stream: "",
   subject_combination: "",
   elective_subjects: [] as string[],
+  consent_given: false,
 };
 
 export default function StudentManagement({ scopedGrade, scopedSection }: Props) {
@@ -240,6 +242,7 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
       stream: (s as any).stream || "",
       subject_combination: (s as any).subject_combination || "",
       elective_subjects: Array.isArray((s as any).elective_subjects) ? (s as any).elective_subjects : [],
+      consent_given: !!s.consent_given,
     });
     setEditingId(s.id);
     setShowForm(true);
@@ -272,6 +275,7 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
         stream: formData.stream || null,
         subject_combination: formData.subject_combination || null,
         elective_subjects: formData.elective_subjects || [],
+        consent_given: formData.consent_given,
       };
       // Only send section when the user picked one; blank means "auto-balance".
       if (formData.section) payload.section = formData.section;
@@ -310,6 +314,39 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
       await Promise.all([fetchStudents(), fetchStrengths()]);
     } catch (e: any) {
       flash("err", e.response?.data?.error || "Failed to delete");
+    }
+  };
+
+  const handleExport = async (s: Student) => {
+    try {
+      const bundle = await api.admin.students.dataExport(s.id);
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${s.student_id || "student"}_data_export.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      flash("ok", "Data export downloaded");
+    } catch (e: any) {
+      flash("err", e.response?.data?.error || "Export failed");
+    }
+  };
+
+  const handleAnonymize = async (s: Student) => {
+    if (
+      !window.confirm(
+        `Irreversibly erase all personal data for ${s.full_name}?\n\n` +
+          `Academic records are kept but de-identified. This cannot be undone.`
+      )
+    )
+      return;
+    try {
+      await api.admin.students.anonymize(s.id);
+      flash("ok", "Student data anonymized");
+      await Promise.all([fetchStudents(), fetchStrengths()]);
+    } catch (e: any) {
+      flash("err", e.response?.data?.error || "Anonymize failed");
     }
   };
 
@@ -571,6 +608,24 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
                             Transfer
                           </button>
                         )}
+                        {!scoped && (
+                          <button
+                            onClick={() => handleExport(s)}
+                            title="Download all data held on this student (data-subject access)"
+                            className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 text-xs font-medium px-2.5 py-1.5 rounded"
+                          >
+                            Export
+                          </button>
+                        )}
+                        {!scoped && (
+                          <button
+                            onClick={() => handleAnonymize(s)}
+                            title="Erase personal data (right to erasure) — keeps de-identified records"
+                            className="bg-white hover:bg-amber-50 text-amber-700 border border-amber-300 text-xs font-medium px-2.5 py-1.5 rounded"
+                          >
+                            Erase
+                          </button>
+                        )}
                         <button
                           onClick={() => handleDelete(s)}
                           className="bg-red-600 hover:bg-red-700 text-white text-xs font-medium px-2.5 py-1.5 rounded"
@@ -814,6 +869,21 @@ export default function StudentManagement({ scopedGrade, scopedSection }: Props)
                 onChange={(e) => setFormData({ ...formData, address: e.target.value })}
                 className="w-full border rounded px-3 py-2"
               />
+            </div>
+
+            <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+              <label className="flex items-start gap-2 text-xs text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={formData.consent_given}
+                  onChange={(e) => setFormData({ ...formData, consent_given: e.target.checked })}
+                  className="mt-0.5"
+                />
+                <span>
+                  Guardian consent obtained to process this student's personal data
+                  (DPDP / GDPR). Recorded with your name and a timestamp.
+                </span>
+              </label>
             </div>
 
             <div className="grid grid-cols-2 gap-3">

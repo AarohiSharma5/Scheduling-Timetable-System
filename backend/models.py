@@ -2,6 +2,8 @@ from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 import json
 
+from crypto_utils import EncryptedString
+
 db = SQLAlchemy()
 
 
@@ -783,14 +785,20 @@ class Student(db.Model):
     subject_combination = db.Column(db.String(80))
     elective_subjects = db.Column(db.JSON, default=list)
     house_id = db.Column(db.Integer, db.ForeignKey("houses.id"))  # Which house assigned
-    father_name = db.Column(db.String(120))
-    mother_name = db.Column(db.String(120))
-    contact_number = db.Column(db.String(20))
-    address = db.Column(db.Text)
+    # Sensitive PII — encrypted at rest (see crypto_utils.EncryptedString).
+    # Not used in any query filter, so encryption is transparent to the app.
+    father_name = db.Column(EncryptedString)
+    mother_name = db.Column(EncryptedString)
+    contact_number = db.Column(EncryptedString)
+    address = db.Column(EncryptedString)
     transport_mode = db.Column(db.String(50), default="Private")  # Bus, Private, Walk
-    blood_group = db.Column(db.String(10))  # A+, B-, etc.
+    blood_group = db.Column(EncryptedString)  # A+, B-, etc.
     admission_date = db.Column(db.Date, nullable=False)
-    status = db.Column(db.String(50), default="Active")  # Active, Inactive, Left, etc.
+    status = db.Column(db.String(50), default="Active")  # Active, Inactive, Left, Anonymized, etc.
+    # Data-processing consent (DPDP/GDPR lawful-basis tracking).
+    consent_given = db.Column(db.Boolean, default=False)
+    consent_at = db.Column(db.DateTime)
+    consent_by = db.Column(db.Integer, db.ForeignKey("users.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -821,6 +829,8 @@ class Student(db.Model):
             "stream": self.stream,
             "subject_combination": self.subject_combination,
             "elective_subjects": self.elective_subjects or [],
+            "consent_given": bool(self.consent_given),
+            "consent_at": self.consent_at.isoformat() if self.consent_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
