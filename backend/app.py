@@ -49,6 +49,12 @@ def create_app(config_name=None):
     from parent_routes import parent_bp
     from fees_routes import fees_bp
     from assignment_routes import assignment_bp
+    from calendar_routes import calendar_bp
+    from library_routes import library_bp
+    from transport_routes import transport_bp
+    from inventory_routes import inventory_bp
+    from analytics_routes import analytics_bp
+    from message_routes import message_bp
     app.register_blueprint(api)
     app.register_blueprint(timetable_bp)
     app.register_blueprint(attendance_bp)
@@ -57,6 +63,12 @@ def create_app(config_name=None):
     app.register_blueprint(parent_bp)
     app.register_blueprint(fees_bp)
     app.register_blueprint(assignment_bp)
+    app.register_blueprint(calendar_bp)
+    app.register_blueprint(library_bp)
+    app.register_blueprint(transport_bp)
+    app.register_blueprint(inventory_bp)
+    app.register_blueprint(analytics_bp)
+    app.register_blueprint(message_bp)
     
     # Serve React index.html for all non-API routes (for React Router)
     if is_production:

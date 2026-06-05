@@ -1180,6 +1180,175 @@ class AssignmentSubmission(db.Model):
 
 
 # ============================================================================
+# CALENDAR MODEL - academic calendar, holidays, events
+# ============================================================================
+class CalendarEvent(db.Model):
+    __tablename__ = "calendar_events"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True, nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    # holiday | event | exam | break | activity
+    event_type = db.Column(db.String(20), nullable=False, default="event")
+    start_date = db.Column(db.Date, nullable=False)
+    end_date = db.Column(db.Date)
+    description = db.Column(db.Text)
+    created_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id, "title": self.title, "event_type": self.event_type,
+            "start_date": self.start_date.isoformat() if self.start_date else None,
+            "end_date": self.end_date.isoformat() if self.end_date else None,
+            "description": self.description,
+        }
+
+
+# ============================================================================
+# LIBRARY MODELS - book catalogue + loans
+# ============================================================================
+class Book(db.Model):
+    __tablename__ = "library_books"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True, nullable=False)
+    title = db.Column(db.String(250), nullable=False)
+    author = db.Column(db.String(150))
+    isbn = db.Column(db.String(40))
+    category = db.Column(db.String(80))
+    total_copies = db.Column(db.Integer, nullable=False, default=1)
+    available_copies = db.Column(db.Integer, nullable=False, default=1)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id, "title": self.title, "author": self.author,
+            "isbn": self.isbn, "category": self.category,
+            "total_copies": self.total_copies, "available_copies": self.available_copies,
+        }
+
+
+class BookLoan(db.Model):
+    __tablename__ = "library_loans"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True, nullable=False)
+    book_id = db.Column(db.Integer, db.ForeignKey("library_books.id"), index=True, nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey("students.id"), index=True, nullable=False)
+    issued_on = db.Column(db.Date)
+    due_on = db.Column(db.Date)
+    returned_on = db.Column(db.Date)
+    status = db.Column(db.String(20), nullable=False, default="issued")  # issued | returned
+    created_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def is_overdue(self):
+        if self.status != "issued" or not self.due_on:
+            return False
+        return self.due_on < datetime.utcnow().date()
+
+    def to_dict(self, book_title=None, student_name=None):
+        return {
+            "id": self.id, "book_id": self.book_id, "book_title": book_title,
+            "student_id": self.student_id, "student_name": student_name,
+            "issued_on": self.issued_on.isoformat() if self.issued_on else None,
+            "due_on": self.due_on.isoformat() if self.due_on else None,
+            "returned_on": self.returned_on.isoformat() if self.returned_on else None,
+            "status": self.status, "overdue": self.is_overdue(),
+        }
+
+
+# ============================================================================
+# TRANSPORT MODELS - routes + student assignments
+# ============================================================================
+class TransportRoute(db.Model):
+    __tablename__ = "transport_routes"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True, nullable=False)
+    name = db.Column(db.String(150), nullable=False)
+    description = db.Column(db.String(255))
+    driver_name = db.Column(db.String(120))
+    driver_phone = db.Column(db.String(40))
+    vehicle_no = db.Column(db.String(40))
+    capacity = db.Column(db.Integer)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self, assigned_count=None):
+        return {
+            "id": self.id, "name": self.name, "description": self.description,
+            "driver_name": self.driver_name, "driver_phone": self.driver_phone,
+            "vehicle_no": self.vehicle_no, "capacity": self.capacity,
+            "assigned_count": assigned_count,
+        }
+
+
+class TransportAssignment(db.Model):
+    __tablename__ = "transport_assignments"
+    __table_args__ = (
+        db.UniqueConstraint("route_id", "student_id", name="uq_transport_route_student"),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True, nullable=False)
+    route_id = db.Column(db.Integer, db.ForeignKey("transport_routes.id"), index=True, nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey("students.id"), index=True, nullable=False)
+    stop_name = db.Column(db.String(150))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self, student_name=None, route_name=None):
+        return {
+            "id": self.id, "route_id": self.route_id, "route_name": route_name,
+            "student_id": self.student_id, "student_name": student_name,
+            "stop_name": self.stop_name,
+        }
+
+
+# ============================================================================
+# INVENTORY MODEL - school assets / stock
+# ============================================================================
+class InventoryItem(db.Model):
+    __tablename__ = "inventory_items"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True, nullable=False)
+    name = db.Column(db.String(150), nullable=False)
+    category = db.Column(db.String(80))
+    quantity = db.Column(db.Integer, nullable=False, default=0)
+    unit = db.Column(db.String(30), default="unit")
+    min_quantity = db.Column(db.Integer, default=0)
+    location = db.Column(db.String(120))
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id, "name": self.name, "category": self.category,
+            "quantity": self.quantity, "unit": self.unit,
+            "min_quantity": self.min_quantity, "location": self.location,
+            "notes": self.notes, "low_stock": self.quantity <= (self.min_quantity or 0),
+        }
+
+
+# ============================================================================
+# MESSAGING MODEL - direct 1:1 messages between users
+# ============================================================================
+class Message(db.Model):
+    __tablename__ = "messages"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True, nullable=False)
+    sender_id = db.Column(db.Integer, db.ForeignKey("users.id"), index=True, nullable=False)
+    recipient_id = db.Column(db.Integer, db.ForeignKey("users.id"), index=True, nullable=False)
+    body = db.Column(db.Text, nullable=False)
+    read_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    def to_dict(self, my_user_id=None):
+        return {
+            "id": self.id, "sender_id": self.sender_id, "recipient_id": self.recipient_id,
+            "body": self.body, "read": self.read_at is not None,
+            "mine": (self.sender_id == my_user_id) if my_user_id else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ============================================================================
 # CLASSROOM MODEL - Physical classroom resources
 # ============================================================================
 class Classroom(db.Model):
