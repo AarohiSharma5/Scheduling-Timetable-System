@@ -966,6 +966,58 @@ class Mark(db.Model):
 
 
 # ============================================================================
+# GUARDIAN MODEL - links a parent login to one or more students
+# ============================================================================
+class Guardian(db.Model):
+    """A parent/guardian User account linked to a Student (child).
+
+    A parent may have several children; a child may have several guardians.
+    """
+    __tablename__ = "guardians"
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "student_id", name="uq_guardian_user_student"),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True, nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), index=True, nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey("students.id"), index=True, nullable=False)
+    relation = db.Column(db.String(20), default="guardian")  # father|mother|guardian
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+# ============================================================================
+# ANNOUNCEMENT MODEL - org-wide / role-targeted / class-targeted broadcasts
+# ============================================================================
+class Announcement(db.Model):
+    """A broadcast message authored by staff, targeted by audience and class."""
+    __tablename__ = "announcements"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True, nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    body = db.Column(db.Text, nullable=False)
+    # all | teachers | students | parents
+    audience = db.Column(db.String(20), nullable=False, default="all")
+    # When set, the announcement is scoped to one class (and its parents).
+    batch_id = db.Column(db.Integer, db.ForeignKey("batches.id"))
+    created_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self, author_name=None, batch_label=None):
+        return {
+            "id": self.id,
+            "title": self.title,
+            "body": self.body,
+            "audience": self.audience,
+            "batch_id": self.batch_id,
+            "batch_label": batch_label,
+            "created_by": self.created_by,
+            "author_name": author_name,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ============================================================================
 # CLASSROOM MODEL - Physical classroom resources
 # ============================================================================
 class Classroom(db.Model):

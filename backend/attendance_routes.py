@@ -19,7 +19,7 @@ from flask import Blueprint, request, jsonify
 from datetime import datetime, date as date_cls
 from sqlalchemy import func
 
-from models import db, AttendanceRecord, Student, Batch, Teacher, Subject, User
+from models import db, AttendanceRecord, Student, Batch, Teacher, Subject, User, Guardian
 from jwt_utils import token_required, role_required
 
 attendance_bp = Blueprint("attendance", __name__, url_prefix="/api/attendance")
@@ -323,6 +323,13 @@ def attendance_student(student_id):
         ).first()
         if not batch or not _can_access_batch(batch):
             return jsonify({"error": "You cannot view this student's attendance"}), 403
+    elif role == "parent":
+        link = Guardian.query.filter_by(
+            organization_id=_org_id(), user_id=(getattr(request, "user", {}) or {}).get("user_id"),
+            student_id=student_id,
+        ).first()
+        if not link:
+            return jsonify({"error": "You can only view your own children's attendance"}), 403
     elif not _is_admin_principal():
         return jsonify({"error": "Not allowed"}), 403
 

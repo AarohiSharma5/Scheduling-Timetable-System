@@ -613,6 +613,14 @@ def get_current_user():
                         additional_info["class_teacher_section"] = b.section
         elif user.role == "student":
             additional_info["batch_id"] = user.batch_id
+        elif user.role == "parent":
+            from models import Guardian
+            child_ids = [
+                g.student_id for g in
+                Guardian.query.filter_by(organization_id=user.organization_id, user_id=user.id).all()
+            ]
+            additional_info["children_ids"] = child_ids
+            additional_info["children_count"] = len(child_ids)
         
         return jsonify({
             "id": user.id,

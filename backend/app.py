@@ -45,10 +45,14 @@ def create_app(config_name=None):
     from timetable_routes import timetable_bp
     from attendance_routes import attendance_bp
     from exam_routes import exam_bp
+    from announcement_routes import announcement_bp
+    from parent_routes import parent_bp
     app.register_blueprint(api)
     app.register_blueprint(timetable_bp)
     app.register_blueprint(attendance_bp)
     app.register_blueprint(exam_bp)
+    app.register_blueprint(announcement_bp)
+    app.register_blueprint(parent_bp)
     
     # Serve React index.html for all non-API routes (for React Router)
     if is_production:

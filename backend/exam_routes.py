@@ -17,7 +17,7 @@ from flask import Blueprint, request, jsonify
 from datetime import datetime
 
 from models import (
-    db, Exam, Mark, Student, Batch, Subject, Teacher, grade_for_percentage,
+    db, Exam, Mark, Student, Batch, Subject, Teacher, Guardian, grade_for_percentage,
 )
 from jwt_utils import token_required, role_required
 
@@ -433,12 +433,19 @@ def student_results(student_id):
         ).first()
         if not batch or not _can_access_batch(batch):
             return jsonify({"error": "You cannot view this student's results"}), 403
+    elif role == "parent":
+        link = Guardian.query.filter_by(
+            organization_id=_org_id(), user_id=(getattr(request, "user", {}) or {}).get("user_id"),
+            student_id=student_id,
+        ).first()
+        if not link:
+            return jsonify({"error": "You can only view your own children's results"}), 403
     elif not _is_admin_principal():
         return jsonify({"error": "Not allowed"}), 403
 
-    # Students only see published exams; staff see all.
+    # Students and parents only see published exams; staff see all.
     exam_q = Exam.query.filter_by(organization_id=_org_id())
-    if role == "student":
+    if role in ("student", "parent"):
         exam_q = exam_q.filter_by(status="published")
     exams = {e.id: e for e in exam_q.all()}
 
