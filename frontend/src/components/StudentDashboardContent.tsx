@@ -3,6 +3,8 @@ import { api } from "../api";
 import { useAuthStore } from "../stores/authStore";
 import NotificationsCenter from "./NotificationsCenter";
 import AnnouncementsPanel from "./AnnouncementsPanel";
+import AssignmentsPanel from "./AssignmentsPanel";
+import StudentFeesView from "./StudentFeesView";
 
 interface PeriodRow {
   number: number;
@@ -35,7 +37,7 @@ interface BatchSchedule {
   teachers: { id: number; name: string }[];
 }
 
-type Tab = "overview" | "schedule" | "teachers" | "subjects" | "announcements" | "notifications";
+type Tab = "overview" | "schedule" | "teachers" | "subjects" | "homework" | "fees" | "announcements" | "notifications";
 
 export default function StudentDashboardContent() {
   const { user } = useAuthStore();
@@ -110,6 +112,8 @@ export default function StudentDashboardContent() {
         <TabButton id="schedule" label="📅 My Timetable" />
         <TabButton id="teachers" label="👨‍🏫 My Teachers" />
         <TabButton id="subjects" label="📖 My Subjects" />
+        <TabButton id="homework" label="📒 Homework" />
+        <TabButton id="fees" label="💳 Fees" />
         <TabButton id="announcements" label="📣 Announcements" />
         <TabButton id="notifications" label="🔔 Notifications" />
       </div>
@@ -263,6 +267,10 @@ export default function StudentDashboardContent() {
           )}
         </div>
       )}
+
+      {activeTab === "homework" && <AssignmentsPanel />}
+
+      {activeTab === "fees" && <StudentFeesView />}
 
       {activeTab === "announcements" && <AnnouncementsPanel />}
 

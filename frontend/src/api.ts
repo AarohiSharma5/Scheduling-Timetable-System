@@ -585,6 +585,42 @@ export const api = {
     children: async () => (await axiosInstance.get("/parent/children")).data,
   },
 
+  fees: {
+    structures: async () => (await axiosInstance.get("/fees/structures")).data,
+    createStructure: async (payload: {
+      name: string; amount: number; grade?: string | null; term?: string; due_date?: string;
+    }) => (await axiosInstance.post("/fees/structures", payload)).data,
+    removeStructure: async (id: number) => (await axiosInstance.delete(`/fees/structures/${id}`)).data,
+    generate: async (id: number) => (await axiosInstance.post(`/fees/structures/${id}/generate`)).data,
+    invoices: async (params: { status?: string; grade?: string; student_id?: number } = {}) =>
+      (await axiosInstance.get("/fees/invoices", { params })).data,
+    createInvoice: async (payload: { student_id: number; title: string; amount: number; due_date?: string }) =>
+      (await axiosInstance.post("/fees/invoices", payload)).data,
+    invoice: async (id: number) => (await axiosInstance.get(`/fees/invoices/${id}`)).data,
+    pay: async (id: number, payload: { amount: number; method?: string; reference?: string; paid_on?: string }) =>
+      (await axiosInstance.post(`/fees/invoices/${id}/payments`, payload)).data,
+    summary: async () => (await axiosInstance.get("/fees/summary")).data,
+    student: async (studentId: number) => (await axiosInstance.get(`/fees/student/${studentId}`)).data,
+    my: async () => (await axiosInstance.get("/fees/my")).data,
+  },
+
+  assignments: {
+    meta: async () => (await axiosInstance.get("/assignments/meta")).data,
+    list: async () => (await axiosInstance.get("/assignments")).data,
+    create: async (payload: {
+      title: string; batch_id: number; subject_id?: number | null; description?: string; due_date?: string;
+    }) => (await axiosInstance.post("/assignments", payload)).data,
+    update: async (id: number, payload: Record<string, unknown>) =>
+      (await axiosInstance.put(`/assignments/${id}`, payload)).data,
+    remove: async (id: number) => (await axiosInstance.delete(`/assignments/${id}`)).data,
+    submit: async (id: number, payload: { note?: string } = {}) =>
+      (await axiosInstance.post(`/assignments/${id}/submit`, payload)).data,
+    submissions: async (id: number) => (await axiosInstance.get(`/assignments/${id}/submissions`)).data,
+    grade: async (id: number, studentId: number, payload: { grade?: string; feedback?: string }) =>
+      (await axiosInstance.put(`/assignments/${id}/submissions/${studentId}`, payload)).data,
+    student: async (studentId: number) => (await axiosInstance.get(`/assignments/student/${studentId}`)).data,
+  },
+
   leaves: {
     request: async (payload: { leave_date: string; reason: string; leave_type?: string }) => {
       const { data } = await axiosInstance.post("/leaves/request", payload);

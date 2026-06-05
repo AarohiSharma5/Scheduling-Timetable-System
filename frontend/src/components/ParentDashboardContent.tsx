@@ -3,6 +3,8 @@ import { api } from "../api";
 import { useAuthStore } from "../stores/authStore";
 import AnnouncementsPanel from "./AnnouncementsPanel";
 import NotificationsCenter from "./NotificationsCenter";
+import StudentFeesView from "./StudentFeesView";
+import StudentAssignmentsView from "./StudentAssignmentsView";
 
 interface Child {
   student_id: number;
@@ -25,7 +27,7 @@ interface ExamResult {
   overall_grade: string | null;
 }
 
-type Tab = "attendance" | "results" | "announcements" | "notifications";
+type Tab = "attendance" | "results" | "homework" | "fees" | "announcements" | "notifications";
 
 const gradeColor = (g: string | null) => {
   if (!g) return "text-slate-400";
@@ -125,6 +127,8 @@ export default function ParentDashboardContent() {
           <div className="flex flex-wrap gap-2">
             <TabBtn id="attendance" label="📝 Attendance" />
             <TabBtn id="results" label="🧾 Results" />
+            <TabBtn id="homework" label="📒 Homework" />
+            <TabBtn id="fees" label="💳 Fees" />
             <TabBtn id="announcements" label="📣 Announcements" />
             <TabBtn id="notifications" label="🔔 Notifications" />
           </div>
@@ -188,6 +192,8 @@ export default function ParentDashboardContent() {
             ) : <p className="text-slate-500 text-sm">No published results yet.</p>
           )}
 
+          {tab === "homework" && activeChild != null && <StudentAssignmentsView studentId={activeChild} />}
+          {tab === "fees" && activeChild != null && <StudentFeesView studentId={activeChild} />}
           {tab === "announcements" && <AnnouncementsPanel />}
           {tab === "notifications" && <NotificationsCenter />}
         </>

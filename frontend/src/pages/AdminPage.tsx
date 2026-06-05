@@ -18,14 +18,18 @@ import AttendancePanel from "../components/AttendancePanel";
 import ExamsPanel from "../components/ExamsPanel";
 import AnnouncementsPanel from "../components/AnnouncementsPanel";
 import ParentsPanel from "../components/ParentsPanel";
+import FeesPanel from "../components/FeesPanel";
+import AssignmentsPanel from "../components/AssignmentsPanel";
 
-type Tab = "timetable" | "students" | "attendance" | "exams" | "announcements" | "teachers" | "parents" | "batches" | "rooms" | "groups" | "classperiods" | "subjects" | "charges" | "pinned" | "invitations" | "leaves" | "notifications" | "config";
+type Tab = "timetable" | "students" | "attendance" | "exams" | "homework" | "fees" | "announcements" | "teachers" | "parents" | "batches" | "rooms" | "groups" | "classperiods" | "subjects" | "charges" | "pinned" | "invitations" | "leaves" | "notifications" | "config";
 
 const tabs: Record<Tab, { icon: string; label: string }> = {
   timetable: { icon: "📊", label: "Timetable" },
   students: { icon: "👥", label: "Students" },
   attendance: { icon: "📝", label: "Attendance" },
   exams: { icon: "🧪", label: "Exams" },
+  homework: { icon: "📒", label: "Homework" },
+  fees: { icon: "💳", label: "Fees" },
   announcements: { icon: "📣", label: "Announcements" },
   teachers: { icon: "👨‍🏫", label: "Teachers" },
   parents: { icon: "👪", label: "Parents" },
@@ -91,6 +95,8 @@ export default function AdminPage() {
           {activeTab === "students" && <StudentManagement />}
           {activeTab === "attendance" && <AttendancePanel />}
           {activeTab === "exams" && <ExamsPanel />}
+          {activeTab === "homework" && <AssignmentsPanel />}
+          {activeTab === "fees" && <FeesPanel />}
           {activeTab === "announcements" && <AnnouncementsPanel />}
           {activeTab === "parents" && <ParentsPanel />}
           {activeTab === "teachers" && <TeacherManagement />}

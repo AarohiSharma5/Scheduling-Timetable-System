@@ -5,6 +5,7 @@ import StudentManagement from "./StudentManagement";
 import AttendancePanel from "./AttendancePanel";
 import ExamsPanel from "./ExamsPanel";
 import AnnouncementsPanel from "./AnnouncementsPanel";
+import AssignmentsPanel from "./AssignmentsPanel";
 import { useAuthStore } from "../stores/authStore";
 
 interface PeriodRow {
@@ -24,7 +25,7 @@ interface TeacherSchedule {
   subjects: { id: number; name: string }[];
 }
 
-type Tab = "overview" | "schedule" | "attendance" | "exams" | "announcements" | "myclass" | "notifications";
+type Tab = "overview" | "schedule" | "attendance" | "exams" | "homework" | "announcements" | "myclass" | "notifications";
 
 export default function TeacherDashboardContent() {
   const { user } = useAuthStore();
@@ -90,6 +91,7 @@ export default function TeacherDashboardContent() {
         <TabButton id="schedule" label="📅 Timetable" />
         <TabButton id="attendance" label="📝 Attendance" />
         <TabButton id="exams" label="🧪 Exams" />
+        <TabButton id="homework" label="📒 Homework" />
         <TabButton id="announcements" label="📣 Announcements" />
         {isClassTeacher && <TabButton id="myclass" label="🧑‍🎓 My Class" />}
         <TabButton id="notifications" label="🔔 Notifications" />
@@ -214,6 +216,8 @@ export default function TeacherDashboardContent() {
       {activeTab === "attendance" && <AttendancePanel />}
 
       {activeTab === "exams" && <ExamsPanel />}
+
+      {activeTab === "homework" && <AssignmentsPanel />}
 
       {activeTab === "announcements" && <AnnouncementsPanel />}
 

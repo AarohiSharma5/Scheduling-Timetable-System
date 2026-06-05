@@ -1018,6 +1018,168 @@ class Announcement(db.Model):
 
 
 # ============================================================================
+# FEES MODELS - fee structures, per-student invoices, payments
+# ============================================================================
+class FeeStructure(db.Model):
+    """A chargeable fee item defined by the school (optionally per grade)."""
+    __tablename__ = "fee_structures"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True, nullable=False)
+    name = db.Column(db.String(150), nullable=False)       # "Term 1 Tuition"
+    amount = db.Column(db.Float, nullable=False, default=0)
+    # Applies to one class grade; null/"all" means every active student.
+    grade = db.Column(db.String(20))
+    term = db.Column(db.String(50))
+    due_date = db.Column(db.Date)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id, "name": self.name, "amount": self.amount,
+            "grade": self.grade, "term": self.term,
+            "due_date": self.due_date.isoformat() if self.due_date else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class FeeInvoice(db.Model):
+    """A bill issued to a single student."""
+    __tablename__ = "fee_invoices"
+    __table_args__ = (
+        db.UniqueConstraint("organization_id", "student_id", "fee_structure_id",
+                            name="uq_invoice_student_structure"),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True, nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey("students.id"), index=True, nullable=False)
+    fee_structure_id = db.Column(db.Integer, db.ForeignKey("fee_structures.id"))
+    title = db.Column(db.String(150), nullable=False)
+    amount = db.Column(db.Float, nullable=False, default=0)
+    due_date = db.Column(db.Date)
+    # pending | partial | paid | waived
+    status = db.Column(db.String(20), nullable=False, default="pending")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def amount_paid(self):
+        from sqlalchemy import func
+        total = db.session.query(
+            func.coalesce(func.sum(Payment.amount), 0)
+        ).filter(Payment.invoice_id == self.id).scalar()
+        return round(float(total or 0), 2)
+
+    def to_dict(self, student_name=None):
+        paid = self.amount_paid()
+        return {
+            "id": self.id, "student_id": self.student_id,
+            "student_name": student_name,
+            "fee_structure_id": self.fee_structure_id,
+            "title": self.title, "amount": self.amount,
+            "amount_paid": paid, "balance": round(self.amount - paid, 2),
+            "status": self.status,
+            "due_date": self.due_date.isoformat() if self.due_date else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class Payment(db.Model):
+    """A payment recorded against an invoice."""
+    __tablename__ = "fee_payments"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True, nullable=False)
+    invoice_id = db.Column(db.Integer, db.ForeignKey("fee_invoices.id"), index=True, nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey("students.id"), index=True)
+    amount = db.Column(db.Float, nullable=False)
+    method = db.Column(db.String(20), default="cash")  # cash|online|cheque|other
+    reference = db.Column(db.String(100))
+    paid_on = db.Column(db.Date)
+    recorded_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    invoice = db.relationship("FeeInvoice", backref=db.backref("payments", lazy="joined"))
+
+    def to_dict(self):
+        return {
+            "id": self.id, "invoice_id": self.invoice_id, "amount": self.amount,
+            "method": self.method, "reference": self.reference,
+            "paid_on": self.paid_on.isoformat() if self.paid_on else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+def recompute_invoice_status(invoice):
+    """Set invoice.status from its payments (leaves 'waived' untouched)."""
+    if invoice.status == "waived":
+        return
+    paid = invoice.amount_paid()
+    if paid <= 0:
+        invoice.status = "pending"
+    elif paid < invoice.amount:
+        invoice.status = "partial"
+    else:
+        invoice.status = "paid"
+
+
+# ============================================================================
+# HOMEWORK MODELS - assignments and per-student submissions
+# ============================================================================
+class Assignment(db.Model):
+    """A homework/assignment for a class, optionally tied to a subject."""
+    __tablename__ = "assignments"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True, nullable=False)
+    batch_id = db.Column(db.Integer, db.ForeignKey("batches.id"), index=True, nullable=False)
+    subject_id = db.Column(db.Integer, db.ForeignKey("subjects.id"))
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text)
+    due_date = db.Column(db.Date)
+    created_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self, subject_name=None, batch_label=None, author_name=None, extra=None):
+        d = {
+            "id": self.id, "batch_id": self.batch_id, "subject_id": self.subject_id,
+            "subject": subject_name, "batch_label": batch_label,
+            "title": self.title, "description": self.description,
+            "author_name": author_name,
+            "due_date": self.due_date.isoformat() if self.due_date else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+        if extra:
+            d.update(extra)
+        return d
+
+
+class AssignmentSubmission(db.Model):
+    """One student's status on one assignment."""
+    __tablename__ = "assignment_submissions"
+    __table_args__ = (
+        db.UniqueConstraint("assignment_id", "student_id", name="uq_submission_assignment_student"),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True, nullable=False)
+    assignment_id = db.Column(db.Integer, db.ForeignKey("assignments.id"), index=True, nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey("students.id"), index=True, nullable=False)
+    # pending | submitted | graded
+    status = db.Column(db.String(20), nullable=False, default="submitted")
+    note = db.Column(db.Text)         # student's note
+    grade = db.Column(db.String(20))  # teacher's grade
+    feedback = db.Column(db.Text)     # teacher's feedback
+    submitted_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self, student_name=None):
+        return {
+            "id": self.id, "assignment_id": self.assignment_id,
+            "student_id": self.student_id, "student_name": student_name,
+            "status": self.status, "note": self.note,
+            "grade": self.grade, "feedback": self.feedback,
+            "submitted_at": self.submitted_at.isoformat() if self.submitted_at else None,
+        }
+
+
+# ============================================================================
 # CLASSROOM MODEL - Physical classroom resources
 # ============================================================================
 class Classroom(db.Model):
