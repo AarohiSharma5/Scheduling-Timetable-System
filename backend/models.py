@@ -1180,6 +1180,42 @@ class AssignmentSubmission(db.Model):
 
 
 # ============================================================================
+# GENERATION JOB - async timetable generation tracking
+# ============================================================================
+class GenerationJob(db.Model):
+    """Tracks an async timetable-generation run so the HTTP request can return
+    immediately and the client can poll for progress. Survives worker restarts
+    because state lives in the database, not in worker memory."""
+    __tablename__ = "generation_jobs"
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True, nullable=False)
+    timetable_id = db.Column(db.Integer, db.ForeignKey("timetables.id"))
+    # queued | running | completed | failed
+    status = db.Column(db.String(20), nullable=False, default="queued", index=True)
+    name = db.Column(db.String(200))
+    description = db.Column(db.Text)
+    result = db.Column(db.JSON)     # slots_generated, warnings, report, complete, message
+    error = db.Column(db.Text)
+    created_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    started_at = db.Column(db.DateTime)
+    finished_at = db.Column(db.DateTime)
+
+    def to_dict(self):
+        return {
+            "job_id": self.id,
+            "status": self.status,
+            "timetable_id": self.timetable_id,
+            "name": self.name,
+            "result": self.result,
+            "error": self.error,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+        }
+
+
+# ============================================================================
 # CALENDAR MODEL - academic calendar, holidays, events
 # ============================================================================
 class CalendarEvent(db.Model):

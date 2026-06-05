@@ -212,6 +212,47 @@ def health_check():
     }), 200
 
 
+@api.route("/health/live", methods=["GET"])
+def health_live():
+    """Liveness probe: process is up. No external dependencies touched, so it
+    stays fast and never fails just because the DB is briefly unreachable."""
+    return jsonify({"status": "alive", "timestamp": datetime.utcnow().isoformat()}), 200
+
+
+@api.route("/health/ready", methods=["GET"])
+def health_ready():
+    """Readiness probe: can we actually serve traffic? Checks the database and
+    (best-effort) the Redis job queue. Returns 503 if a hard dependency is down
+    so a load balancer / orchestrator can route around this instance."""
+    checks = {}
+    ready = True
+
+    # Database is a hard dependency.
+    try:
+        db.session.execute(db.text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception as e:  # noqa: BLE001
+        checks["database"] = f"error: {e}"
+        ready = False
+
+    # Redis powers rate-limiting + the job queue; degraded (not fatal) if down.
+    try:
+        import os
+        from redis import Redis
+        url = os.getenv("REDIS_URL") or os.getenv("RATELIMIT_STORAGE_URI")
+        if url:
+            Redis.from_url(url).ping()
+            checks["redis"] = "ok"
+        else:
+            checks["redis"] = "not configured"
+    except Exception as e:  # noqa: BLE001
+        checks["redis"] = f"error: {e}"
+
+    status = "ready" if ready else "not ready"
+    return jsonify({"status": status, "checks": checks,
+                    "timestamp": datetime.utcnow().isoformat()}), (200 if ready else 503)
+
+
 # ============================================================================
 # ORGANIZATION ENDPOINTS
 # ============================================================================
@@ -2214,17 +2255,41 @@ def list_students():
     if status:
         q = q.filter(Student.status == status)
 
-    students = q.all()
+    # Filter in SQL instead of pulling the whole org into memory.
     if search:
-        students = [
-            s for s in students
-            if search in f"{s.first_name} {s.last_name}".lower()
-            or search in (s.student_id or "").lower()
-            or search in (s.admission_no or "").lower()
-        ]
-    students.sort(key=lambda s: (s.roll_no if s.roll_no is not None else 9999,
-                                 (s.first_name or "").lower()))
-    return jsonify([s.to_dict() for s in students]), 200
+        like = f"%{search}%"
+        full_name = db.func.lower(Student.first_name + " " + Student.last_name)
+        q = q.filter(db.or_(
+            full_name.like(like),
+            db.func.lower(Student.student_id).like(like),
+            db.func.lower(Student.admission_no).like(like),
+        ))
+
+    # Order roll_no ascending with NULLs last, then by name. Expressed with a
+    # CASE so it behaves identically on Postgres and SQLite (tests).
+    q = q.order_by(
+        db.case((Student.roll_no.is_(None), 1), else_=0),
+        Student.roll_no.asc(),
+        db.func.lower(Student.first_name),
+    )
+
+    # Backward compatible: only paginate when the client asks (page/per_page).
+    # Otherwise return the full array exactly as before.
+    page = request.args.get("page", type=int)
+    per_page = request.args.get("per_page", type=int)
+    if page is not None or per_page is not None:
+        page = max(1, page or 1)
+        per_page = min(200, max(1, per_page or 50))
+        pag = q.paginate(page=page, per_page=per_page, error_out=False)
+        return jsonify({
+            "data": [s.to_dict() for s in pag.items],
+            "page": pag.page,
+            "per_page": per_page,
+            "total": pag.total,
+            "pages": pag.pages,
+        }), 200
+
+    return jsonify([s.to_dict() for s in q.all()]), 200
 
 
 @api.route("/admin/students/sections", methods=["GET"])

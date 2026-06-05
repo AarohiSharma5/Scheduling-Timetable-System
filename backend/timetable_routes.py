@@ -10,13 +10,14 @@ POST /api/timetable/<id>/publish - Publish timetable
 from flask import Blueprint, request, jsonify
 from models import (
     db, Timetable, TimetableSlot, Batch, Subject, Teacher, SchoolConfig,
-    PinnedSlot, TeacherPreference,
+    PinnedSlot, TeacherPreference, GenerationJob,
 )
 from scheduler import SchedulingEngine
 from jwt_utils import token_required, role_required
 from datetime import datetime
 import period_utils
 from timetable_edit import collect_conflicts, build_teacher_unavailable, hard_conflicts
+from jobs import enqueue_generation, execute_generation
 
 timetable_bp = Blueprint("timetable", __name__, url_prefix="/api/timetable")
 
@@ -56,13 +57,14 @@ def generate_timetable():
     try:
         data = request.get_json(silent=True) or {}
         org_id = _org_id()
+        user = getattr(request, "user", {}) or {}
         name = data.get("name", f"Timetable {datetime.utcnow().isoformat()}")
         description = data.get("description", "")
 
         # Each generation is a new draft version, so the admin keeps a short
-        # history to compare/roll back to. Older drafts are pruned after commit
-        # (see DRAFT_HISTORY_LIMIT below) so storage stays bounded no matter how
-        # many times they regenerate. Published timetables are never pruned.
+        # history to compare/roll back to. Older drafts are pruned after the run
+        # so storage stays bounded no matter how many times they regenerate.
+        # Published timetables are never pruned.
         timetable = Timetable(
             organization_id=org_id,
             name=name,
@@ -72,54 +74,60 @@ def generate_timetable():
         )
         db.session.add(timetable)
         db.session.flush()  # Get ID without committing
-        # Run scheduling engine, scoped to this organization's data
-        engine = SchedulingEngine(organization_id=org_id)
-        success, warnings = engine.generate_timetable(timetable.id)
-        if not success:
-            db.session.rollback()
-            return jsonify({
-                "error": "Failed to generate timetable",
-                "details": warnings
-            }), 400
+
+        # Track the run as a job so generation can move off the HTTP request.
+        job = GenerationJob(
+            organization_id=org_id,
+            timetable_id=timetable.id,
+            status="queued",
+            name=name,
+            description=description,
+            created_by=user.get("user_id"),
+        )
+        db.session.add(job)
         db.session.commit()
 
-        # Retain only the most recent N draft versions as history; prune older
-        # drafts (their slots cascade-delete) to keep the database bounded.
-        DRAFT_HISTORY_LIMIT = 5
-        stale_drafts = (
-            Timetable.query
-            .filter_by(organization_id=org_id, status="draft")
-            .order_by(Timetable.generated_at.desc())
-            .offset(DRAFT_HISTORY_LIMIT)
-            .all()
-        )
-        if stale_drafts:
-            for old in stale_drafts:
-                db.session.delete(old)
-            db.session.commit()
+        # Prefer async: enqueue to a worker and return immediately so a long
+        # generation can't tie up a gunicorn worker or hit the request timeout.
+        if enqueue_generation(job.id):
+            return jsonify({
+                "queued": True,
+                "job_id": job.id,
+                "timetable_id": timetable.id,
+                "status": "queued",
+                "message": "Timetable generation started. Poll the job for progress.",
+            }), 202
 
-        # Count generated slots
-        slots_count = TimetableSlot.query.filter_by(timetable_id=timetable.id).count()
-        report = getattr(engine, "report", {}) or {}
-        message = f"Generated {slots_count} timetable slots"
-        if not report.get("complete", True):
-            missing = report.get("total_required_missing", 0)
-            message += f" — but {missing} required period(s) could not be placed"
+        # No worker/Redis available (dev, tests): run inline and return the
+        # full result, preserving the original synchronous response shape.
+        execute_generation(job.id)
+        job = GenerationJob.query.get(job.id)
+        if job.status == "completed":
+            payload = dict(job.result or {})
+            payload["job_id"] = job.id
+            return jsonify(payload), 201
         return jsonify({
-            "success": True,
-            "timetable": timetable.to_dict(),
-            "slots_generated": slots_count,
-            "warnings": warnings,
-            "report": report,
-            "complete": report.get("complete", True),
-            "message": message,
-        }), 201
+            "error": "Failed to generate timetable",
+            "details": job.error,
+            "job_id": job.id,
+        }), 400
 
     except Exception as e:
         db.session.rollback()
         return jsonify({
             "error": f"Error generating timetable: {str(e)}"
         }), 500
+
+
+@timetable_bp.route("/jobs/<int:job_id>", methods=["GET"])
+@token_required
+@role_required("admin", "principal")
+def generation_job_status(job_id):
+    """Poll the status/result of an async generation job."""
+    job = GenerationJob.query.filter_by(id=job_id, organization_id=_org_id()).first()
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify(job.to_dict()), 200
 
 
 # ============================================================================
