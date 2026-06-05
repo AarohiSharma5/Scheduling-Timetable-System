@@ -8,6 +8,12 @@ import ExamsPanel from "./ExamsPanel";
 import AnnouncementsPanel from "./AnnouncementsPanel";
 import FeesPanel from "./FeesPanel";
 import AssignmentsPanel from "./AssignmentsPanel";
+import CalendarPanel from "./CalendarPanel";
+import LibraryPanel from "./LibraryPanel";
+import TransportPanel from "./TransportPanel";
+import InventoryPanel from "./InventoryPanel";
+import AnalyticsPanel from "./AnalyticsPanel";
+import MessagesPanel from "./MessagesPanel";
 
 interface DashboardStats {
   total_students: number;
@@ -27,7 +33,7 @@ interface TodayAttendance {
 export default function PrincipalDashboardContent() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [todayAtt, setTodayAtt] = useState<TodayAttendance | null>(null);
-  const [activeTab, setActiveTab] = useState<"overview" | "attendance" | "exams" | "homework" | "fees" | "announcements" | "leaves" | "notifications" | "timetable">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "analytics" | "attendance" | "exams" | "homework" | "fees" | "announcements" | "messages" | "calendar" | "library" | "transport" | "inventory" | "leaves" | "notifications" | "timetable">("overview");
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
 
@@ -139,6 +145,26 @@ export default function PrincipalDashboardContent() {
         >
           📣 Announcements
         </button>
+        {([
+          ["analytics", "📈 Analytics"],
+          ["messages", "💬 Messages"],
+          ["calendar", "🗓️ Calendar"],
+          ["library", "📚 Library"],
+          ["transport", "🚌 Transport"],
+          ["inventory", "📦 Inventory"],
+        ] as const).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setActiveTab(key)}
+            className={`px-4 py-2 rounded-lg font-medium transition ${
+              activeTab === key
+                ? "bg-blue-600 text-white"
+                : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
         <button
           onClick={() => setActiveTab("timetable")}
           className={`px-4 py-2 rounded-lg font-medium transition ${
@@ -288,6 +314,18 @@ export default function PrincipalDashboardContent() {
       {activeTab === "fees" && <FeesPanel />}
 
       {activeTab === "announcements" && <AnnouncementsPanel />}
+
+      {activeTab === "analytics" && <AnalyticsPanel />}
+
+      {activeTab === "messages" && <MessagesPanel />}
+
+      {activeTab === "calendar" && <CalendarPanel />}
+
+      {activeTab === "library" && <LibraryPanel />}
+
+      {activeTab === "transport" && <TransportPanel />}
+
+      {activeTab === "inventory" && <InventoryPanel />}
 
       {/* Leave Management Tab */}
       {activeTab === "leaves" && <LeaveManagement />}

@@ -474,6 +474,7 @@ export const api = {
       const { data } = await axiosInstance.get(`/analytics/${planId}`);
       return data;
     },
+    overview: async () => (await axiosInstance.get("/analytics/overview")).data,
   },
 
   // First-login / password management + in-app token links
@@ -619,6 +620,67 @@ export const api = {
     grade: async (id: number, studentId: number, payload: { grade?: string; feedback?: string }) =>
       (await axiosInstance.put(`/assignments/${id}/submissions/${studentId}`, payload)).data,
     student: async (studentId: number) => (await axiosInstance.get(`/assignments/student/${studentId}`)).data,
+  },
+
+  calendar: {
+    list: async (params: { year?: number; type?: string } = {}) =>
+      (await axiosInstance.get("/calendar", { params })).data,
+    create: async (payload: { title: string; event_type?: string; start_date: string; end_date?: string; description?: string }) =>
+      (await axiosInstance.post("/calendar", payload)).data,
+    update: async (id: number, payload: Record<string, unknown>) =>
+      (await axiosInstance.put(`/calendar/${id}`, payload)).data,
+    remove: async (id: number) => (await axiosInstance.delete(`/calendar/${id}`)).data,
+  },
+
+  library: {
+    books: async (q?: string) => (await axiosInstance.get("/library/books", { params: q ? { q } : {} })).data,
+    createBook: async (payload: { title: string; author?: string; isbn?: string; category?: string; total_copies?: number }) =>
+      (await axiosInstance.post("/library/books", payload)).data,
+    updateBook: async (id: number, payload: Record<string, unknown>) =>
+      (await axiosInstance.put(`/library/books/${id}`, payload)).data,
+    removeBook: async (id: number) => (await axiosInstance.delete(`/library/books/${id}`)).data,
+    loans: async (status?: string) => (await axiosInstance.get("/library/loans", { params: status ? { status } : {} })).data,
+    issue: async (payload: { book_id: number; student_id: number; due_on?: string }) =>
+      (await axiosInstance.post("/library/loans", payload)).data,
+    returnLoan: async (id: number) => (await axiosInstance.post(`/library/loans/${id}/return`)).data,
+    student: async (studentId: number) => (await axiosInstance.get(`/library/student/${studentId}`)).data,
+    my: async () => (await axiosInstance.get("/library/my")).data,
+  },
+
+  transport: {
+    routes: async () => (await axiosInstance.get("/transport/routes")).data,
+    createRoute: async (payload: { name: string; description?: string; driver_name?: string; driver_phone?: string; vehicle_no?: string; capacity?: number }) =>
+      (await axiosInstance.post("/transport/routes", payload)).data,
+    updateRoute: async (id: number, payload: Record<string, unknown>) =>
+      (await axiosInstance.put(`/transport/routes/${id}`, payload)).data,
+    removeRoute: async (id: number) => (await axiosInstance.delete(`/transport/routes/${id}`)).data,
+    routeStudents: async (id: number) => (await axiosInstance.get(`/transport/routes/${id}/students`)).data,
+    assign: async (id: number, payload: { student_id: number; stop_name?: string }) =>
+      (await axiosInstance.post(`/transport/routes/${id}/students`, payload)).data,
+    unassign: async (assignmentId: number) => (await axiosInstance.delete(`/transport/assignments/${assignmentId}`)).data,
+    student: async (studentId: number) => (await axiosInstance.get(`/transport/student/${studentId}`)).data,
+    my: async () => (await axiosInstance.get("/transport/my")).data,
+  },
+
+  inventory: {
+    list: async (params: { category?: string; low?: string } = {}) =>
+      (await axiosInstance.get("/inventory", { params })).data,
+    create: async (payload: { name: string; category?: string; quantity?: number; unit?: string; min_quantity?: number; location?: string; notes?: string }) =>
+      (await axiosInstance.post("/inventory", payload)).data,
+    update: async (id: number, payload: Record<string, unknown>) =>
+      (await axiosInstance.put(`/inventory/${id}`, payload)).data,
+    adjust: async (id: number, delta: number) => (await axiosInstance.post(`/inventory/${id}/adjust`, { delta })).data,
+    remove: async (id: number) => (await axiosInstance.delete(`/inventory/${id}`)).data,
+    summary: async () => (await axiosInstance.get("/inventory/summary")).data,
+  },
+
+  messages: {
+    directory: async () => (await axiosInstance.get("/messages/directory")).data,
+    conversations: async () => (await axiosInstance.get("/messages/conversations")).data,
+    thread: async (userId: number) => (await axiosInstance.get(`/messages/thread/${userId}`)).data,
+    send: async (payload: { recipient_id: number; body: string }) =>
+      (await axiosInstance.post("/messages", payload)).data,
+    unreadCount: async () => (await axiosInstance.get("/messages/unread-count")).data,
   },
 
   leaves: {

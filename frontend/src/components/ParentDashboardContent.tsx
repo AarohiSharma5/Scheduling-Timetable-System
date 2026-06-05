@@ -5,6 +5,9 @@ import AnnouncementsPanel from "./AnnouncementsPanel";
 import NotificationsCenter from "./NotificationsCenter";
 import StudentFeesView from "./StudentFeesView";
 import StudentAssignmentsView from "./StudentAssignmentsView";
+import StudentServicesView from "./StudentServicesView";
+import CalendarPanel from "./CalendarPanel";
+import MessagesPanel from "./MessagesPanel";
 
 interface Child {
   student_id: number;
@@ -27,7 +30,7 @@ interface ExamResult {
   overall_grade: string | null;
 }
 
-type Tab = "attendance" | "results" | "homework" | "fees" | "announcements" | "notifications";
+type Tab = "attendance" | "results" | "homework" | "fees" | "services" | "calendar" | "messages" | "announcements" | "notifications";
 
 const gradeColor = (g: string | null) => {
   if (!g) return "text-slate-400";
@@ -129,6 +132,9 @@ export default function ParentDashboardContent() {
             <TabBtn id="results" label="🧾 Results" />
             <TabBtn id="homework" label="📒 Homework" />
             <TabBtn id="fees" label="💳 Fees" />
+            <TabBtn id="services" label="🚌 Services" />
+            <TabBtn id="calendar" label="🗓️ Calendar" />
+            <TabBtn id="messages" label="💬 Messages" />
             <TabBtn id="announcements" label="📣 Announcements" />
             <TabBtn id="notifications" label="🔔 Notifications" />
           </div>
@@ -194,6 +200,9 @@ export default function ParentDashboardContent() {
 
           {tab === "homework" && activeChild != null && <StudentAssignmentsView studentId={activeChild} />}
           {tab === "fees" && activeChild != null && <StudentFeesView studentId={activeChild} />}
+          {tab === "services" && activeChild != null && <StudentServicesView studentId={activeChild} />}
+          {tab === "calendar" && <CalendarPanel />}
+          {tab === "messages" && <MessagesPanel />}
           {tab === "announcements" && <AnnouncementsPanel />}
           {tab === "notifications" && <NotificationsCenter />}
         </>

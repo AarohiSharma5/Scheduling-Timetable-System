@@ -5,6 +5,9 @@ import NotificationsCenter from "./NotificationsCenter";
 import AnnouncementsPanel from "./AnnouncementsPanel";
 import AssignmentsPanel from "./AssignmentsPanel";
 import StudentFeesView from "./StudentFeesView";
+import CalendarPanel from "./CalendarPanel";
+import MessagesPanel from "./MessagesPanel";
+import StudentServicesView from "./StudentServicesView";
 
 interface PeriodRow {
   number: number;
@@ -37,7 +40,7 @@ interface BatchSchedule {
   teachers: { id: number; name: string }[];
 }
 
-type Tab = "overview" | "schedule" | "teachers" | "subjects" | "homework" | "fees" | "announcements" | "notifications";
+type Tab = "overview" | "schedule" | "teachers" | "subjects" | "homework" | "fees" | "services" | "calendar" | "messages" | "announcements" | "notifications";
 
 export default function StudentDashboardContent() {
   const { user } = useAuthStore();
@@ -114,6 +117,9 @@ export default function StudentDashboardContent() {
         <TabButton id="subjects" label="📖 My Subjects" />
         <TabButton id="homework" label="📒 Homework" />
         <TabButton id="fees" label="💳 Fees" />
+        <TabButton id="services" label="🚌 Services" />
+        <TabButton id="calendar" label="🗓️ Calendar" />
+        <TabButton id="messages" label="💬 Messages" />
         <TabButton id="announcements" label="📣 Announcements" />
         <TabButton id="notifications" label="🔔 Notifications" />
       </div>
@@ -271,6 +277,12 @@ export default function StudentDashboardContent() {
       {activeTab === "homework" && <AssignmentsPanel />}
 
       {activeTab === "fees" && <StudentFeesView />}
+
+      {activeTab === "services" && <StudentServicesView />}
+
+      {activeTab === "calendar" && <CalendarPanel />}
+
+      {activeTab === "messages" && <MessagesPanel />}
 
       {activeTab === "announcements" && <AnnouncementsPanel />}
 

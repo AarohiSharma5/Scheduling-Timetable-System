@@ -20,17 +20,29 @@ import AnnouncementsPanel from "../components/AnnouncementsPanel";
 import ParentsPanel from "../components/ParentsPanel";
 import FeesPanel from "../components/FeesPanel";
 import AssignmentsPanel from "../components/AssignmentsPanel";
+import CalendarPanel from "../components/CalendarPanel";
+import LibraryPanel from "../components/LibraryPanel";
+import TransportPanel from "../components/TransportPanel";
+import InventoryPanel from "../components/InventoryPanel";
+import AnalyticsPanel from "../components/AnalyticsPanel";
+import MessagesPanel from "../components/MessagesPanel";
 
-type Tab = "timetable" | "students" | "attendance" | "exams" | "homework" | "fees" | "announcements" | "teachers" | "parents" | "batches" | "rooms" | "groups" | "classperiods" | "subjects" | "charges" | "pinned" | "invitations" | "leaves" | "notifications" | "config";
+type Tab = "timetable" | "analytics" | "students" | "attendance" | "exams" | "homework" | "fees" | "announcements" | "messages" | "calendar" | "library" | "transport" | "inventory" | "teachers" | "parents" | "batches" | "rooms" | "groups" | "classperiods" | "subjects" | "charges" | "pinned" | "invitations" | "leaves" | "notifications" | "config";
 
 const tabs: Record<Tab, { icon: string; label: string }> = {
   timetable: { icon: "📊", label: "Timetable" },
+  analytics: { icon: "📈", label: "Analytics" },
   students: { icon: "👥", label: "Students" },
   attendance: { icon: "📝", label: "Attendance" },
   exams: { icon: "🧪", label: "Exams" },
   homework: { icon: "📒", label: "Homework" },
   fees: { icon: "💳", label: "Fees" },
   announcements: { icon: "📣", label: "Announcements" },
+  messages: { icon: "💬", label: "Messages" },
+  calendar: { icon: "🗓️", label: "Calendar" },
+  library: { icon: "📚", label: "Library" },
+  transport: { icon: "🚌", label: "Transport" },
+  inventory: { icon: "📦", label: "Inventory" },
   teachers: { icon: "👨‍🏫", label: "Teachers" },
   parents: { icon: "👪", label: "Parents" },
   batches: { icon: "📚", label: "Batches" },
@@ -92,12 +104,18 @@ export default function AdminPage() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="bg-white rounded-lg shadow-md p-6">
           {activeTab === "timetable" && <TimetableGenerator />}
+          {activeTab === "analytics" && <AnalyticsPanel />}
           {activeTab === "students" && <StudentManagement />}
           {activeTab === "attendance" && <AttendancePanel />}
           {activeTab === "exams" && <ExamsPanel />}
           {activeTab === "homework" && <AssignmentsPanel />}
           {activeTab === "fees" && <FeesPanel />}
           {activeTab === "announcements" && <AnnouncementsPanel />}
+          {activeTab === "messages" && <MessagesPanel />}
+          {activeTab === "calendar" && <CalendarPanel />}
+          {activeTab === "library" && <LibraryPanel />}
+          {activeTab === "transport" && <TransportPanel />}
+          {activeTab === "inventory" && <InventoryPanel />}
           {activeTab === "parents" && <ParentsPanel />}
           {activeTab === "teachers" && <TeacherManagement />}
           {activeTab === "batches" && <BatchManagement />}

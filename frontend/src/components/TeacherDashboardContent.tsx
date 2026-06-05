@@ -6,6 +6,9 @@ import AttendancePanel from "./AttendancePanel";
 import ExamsPanel from "./ExamsPanel";
 import AnnouncementsPanel from "./AnnouncementsPanel";
 import AssignmentsPanel from "./AssignmentsPanel";
+import CalendarPanel from "./CalendarPanel";
+import LibraryPanel from "./LibraryPanel";
+import MessagesPanel from "./MessagesPanel";
 import { useAuthStore } from "../stores/authStore";
 
 interface PeriodRow {
@@ -25,7 +28,7 @@ interface TeacherSchedule {
   subjects: { id: number; name: string }[];
 }
 
-type Tab = "overview" | "schedule" | "attendance" | "exams" | "homework" | "announcements" | "myclass" | "notifications";
+type Tab = "overview" | "schedule" | "attendance" | "exams" | "homework" | "announcements" | "messages" | "calendar" | "library" | "myclass" | "notifications";
 
 export default function TeacherDashboardContent() {
   const { user } = useAuthStore();
@@ -93,6 +96,9 @@ export default function TeacherDashboardContent() {
         <TabButton id="exams" label="🧪 Exams" />
         <TabButton id="homework" label="📒 Homework" />
         <TabButton id="announcements" label="📣 Announcements" />
+        <TabButton id="messages" label="💬 Messages" />
+        <TabButton id="calendar" label="🗓️ Calendar" />
+        <TabButton id="library" label="📚 Library" />
         {isClassTeacher && <TabButton id="myclass" label="🧑‍🎓 My Class" />}
         <TabButton id="notifications" label="🔔 Notifications" />
       </div>
@@ -220,6 +226,12 @@ export default function TeacherDashboardContent() {
       {activeTab === "homework" && <AssignmentsPanel />}
 
       {activeTab === "announcements" && <AnnouncementsPanel />}
+
+      {activeTab === "messages" && <MessagesPanel />}
+
+      {activeTab === "calendar" && <CalendarPanel />}
+
+      {activeTab === "library" && <LibraryPanel />}
 
       {activeTab === "myclass" && isClassTeacher && (
         <StudentManagement scopedGrade={user!.class_teacher_grade} scopedSection={user!.class_teacher_section} />
