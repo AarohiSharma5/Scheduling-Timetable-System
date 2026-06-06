@@ -1,10 +1,29 @@
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import event
 from datetime import datetime
 import json
 
 from crypto_utils import EncryptedString
 
 db = SQLAlchemy()
+
+
+# Per-role prefix for the human-friendly, school-assigned Login ID. The numeric
+# suffix is the (globally unique) user id, so a Login ID is unique per org too.
+_LOGIN_ID_PREFIX = {
+    "owner": "ADM",
+    "admin": "ADM",
+    "principal": "PRN",
+    "coordinator": "CRD",
+    "teacher": "TCH",
+    "student": "STU",
+    "parent": "PAR",
+}
+
+
+def make_login_id(role: str, user_id: int) -> str:
+    prefix = _LOGIN_ID_PREFIX.get((role or "").lower(), "USR")
+    return f"{prefix}{int(user_id):04d}"
 
 
 # ============================================================================
@@ -72,11 +91,15 @@ class User(db.Model):
     # a user with the same (e.g. personal) email. Identity is always (org, email).
     __table_args__ = (
         db.UniqueConstraint("organization_id", "email", name="uq_users_org_email"),
+        db.UniqueConstraint("organization_id", "login_id", name="uq_users_org_login_id"),
     )
     id = db.Column(db.Integer, primary_key=True)
     organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), index=True)
     name = db.Column(db.String(120), nullable=False)
     email = db.Column(db.String(120), nullable=False)
+    # School-assigned login identifier (e.g. ADM0007). Auto-generated on insert;
+    # users can sign in with either this or their email.
+    login_id = db.Column(db.String(40), index=True)
     role = db.Column(db.String(20), nullable=False)  # 'owner','admin','principal','coordinator','teacher','student','parent'
     password_hash = db.Column(db.String(255))  # For email/password auth
     batch_id = db.Column(db.Integer, db.ForeignKey("batches.id"))  # For students only
@@ -102,6 +125,7 @@ class User(db.Model):
             "organization_id": self.organization_id,
             "name": self.name,
             "email": self.email,
+            "login_id": self.login_id,
             "role": self.role,
             "batch_id": self.batch_id,
             "phone": self.phone,
@@ -112,6 +136,24 @@ class User(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+@event.listens_for(User, "after_insert")
+def _assign_login_id(mapper, connection, target):
+    """Auto-assign a school login ID (e.g. ADM0007) to every new account.
+
+    Runs for all creation paths (signup, invitations, admin-created accounts)
+    so an account is never left without a Login ID. Only fills it when blank,
+    so an explicitly-provided ID is respected.
+    """
+    if target.login_id:
+        return
+    login_id = make_login_id(target.role, target.id)
+    connection.execute(
+        User.__table__.update()
+        .where(User.__table__.c.id == target.id)
+        .values(login_id=login_id)
+    )
 
 
 # ============================================================================

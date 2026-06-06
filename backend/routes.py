@@ -502,12 +502,14 @@ def organization_register():
         log_audit("user.create", {"email": admin_email, "role": role, "primary": True},
                   user_id=primary.id, organization_id=org.id, commit=False)
         db.session.commit()
+        db.session.refresh(primary)  # read back the auto-assigned login_id
 
         # Hand back an org session so the UI can proceed to user login.
         token = generate_org_token(org.id, org.slug)
         resp = make_response(jsonify({
             "organization": org.to_dict(),
-            "admin": {"email": admin_email, "role": role, "name": admin_name},
+            "admin": {"email": admin_email, "role": role, "name": admin_name,
+                      "login_id": primary.login_id},
             "message": "Organization created. You can now sign in.",
         }), 201)
         _set_auth_cookie(resp, ORG_COOKIE_NAME, token, ORG_TOKEN_EXPIRY_DAYS * 24 * 3600)
@@ -548,22 +550,30 @@ def login():
             return err
 
         data = request.get_json(silent=True) or {}
-        email = data.get("email", "").strip()
+        # Accept either an email or a school-assigned Login ID (e.g. ADM0007).
+        # `identifier` is the new field; `email` is still honoured for back-compat.
+        identifier = (data.get("identifier") or data.get("email") or "").strip()
         password = data.get("password", "").strip()
 
-        if not email or not password:
-            return jsonify({"error": "Email and password required"}), 400
+        if not identifier or not password:
+            return jsonify({"error": "Email/ID and password required"}), 400
 
         # Scope the lookup to the organization being logged into. This is both an
         # isolation guarantee (you can only ever match an account in *your* org)
-        # and forward-compatible with per-tenant email uniqueness.
-        user = User.query.filter_by(email=email, organization_id=org.id).first()
+        # and forward-compatible with per-tenant email uniqueness. Match on email
+        # first, then fall back to the case-insensitive Login ID.
+        user = User.query.filter_by(email=identifier, organization_id=org.id).first()
+        if not user:
+            user = User.query.filter(
+                User.organization_id == org.id,
+                db.func.upper(User.login_id) == identifier.upper(),
+            ).first()
 
         # Account lockout: refuse early (before the password check) while a lock
         # is active, so a locked account can't be probed during the window.
         if user and user.locked_until and user.locked_until > datetime.utcnow():
             remaining = int((user.locked_until - datetime.utcnow()).total_seconds() // 60) + 1
-            log_audit("user.login_locked", {"email": email}, user_id=user.id,
+            log_audit("user.login_locked", {"identifier": identifier}, user_id=user.id,
                       organization_id=org.id)
             return jsonify({
                 "error": f"Account temporarily locked due to repeated failed attempts. "
@@ -583,7 +593,7 @@ def login():
         if not valid:
             if user:
                 user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
-                detail = {"email": email, "attempts": user.failed_login_attempts}
+                detail = {"identifier": identifier, "attempts": user.failed_login_attempts}
                 if user.failed_login_attempts >= LOGIN_MAX_FAILS:
                     user.locked_until = datetime.utcnow() + timedelta(minutes=LOGIN_LOCK_MINUTES)
                     user.failed_login_attempts = 0
@@ -594,8 +604,8 @@ def login():
                               organization_id=org.id, commit=False)
                 db.session.commit()
             else:
-                log_audit("user.login_failed", {"email": email}, organization_id=org.id)
-            return jsonify({"error": "Invalid email or password"}), 401
+                log_audit("user.login_failed", {"identifier": identifier}, organization_id=org.id)
+            return jsonify({"error": "Invalid email/ID or password"}), 401
 
         # Success: clear any failure counter / lock.
         user.failed_login_attempts = 0
@@ -612,6 +622,7 @@ def login():
                 "id": user.id,
                 "name": user.name,
                 "email": user.email,
+                "login_id": user.login_id,
                 "role": user.role,
                 "batch_id": user.batch_id,
                 "organization_id": org.id,
@@ -675,6 +686,7 @@ def get_current_user():
             "id": user.id,
             "name": user.name,
             "email": user.email,
+            "login_id": user.login_id,
             "role": user.role,
             "batch_id": user.batch_id,
             "must_change_password": bool(user.must_change_password),
@@ -838,7 +850,7 @@ def reset_password(token):
 # ============================================================================
 
 # Roles an admin/principal is allowed to invite.
-_INVITABLE_ROLES = {"teacher", "principal", "coordinator", "student"}
+_INVITABLE_ROLES = {"admin", "teacher", "principal", "coordinator", "student", "parent"}
 
 
 @api.route("/invitations", methods=["GET"])
@@ -878,6 +890,10 @@ def create_invitation():
             return jsonify({"error": "Email is required"}), 400
         if role not in _INVITABLE_ROLES:
             return jsonify({"error": f"Cannot invite role '{role}'"}), 400
+        # Only an admin/owner may create another admin — a principal can't
+        # escalate by minting a peer admin account.
+        if role == "admin" and (request.user.get("role") not in ("admin", "owner")):
+            return jsonify({"error": "Only an admin can invite another admin"}), 403
         if User.query.filter_by(email=email, organization_id=org_id).first():
             return jsonify({"error": "A user with this email already exists"}), 409
 
@@ -1009,9 +1025,16 @@ def accept_invitation(token):
         inv.accepted_at = datetime.utcnow()
         inv.target_user_id = user.id
         db.session.commit()
+        # The login_id is assigned by an after_insert listener via a direct UPDATE,
+        # so refresh to read it back for the confirmation screen.
+        db.session.refresh(user)
         log_audit("invitation.accept", {"email": inv.email, "role": inv.role},
                   user_id=user.id, organization_id=inv.organization_id)
-        return jsonify({"message": "Account created. You can now sign in.", "email": inv.email}), 201
+        return jsonify({
+            "message": "Account created. You can now sign in.",
+            "email": inv.email,
+            "login_id": user.login_id,
+        }), 201
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
