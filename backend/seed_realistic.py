@@ -374,6 +374,30 @@ def seed_database():
         db.session.add(principal)
         db.session.commit()
         print("   ✅ Principal created")
+
+        print("\n🧭 Creating coordinator...")
+        coordinator_user = User(
+            organization_id=org_id,
+            name="Anjali Rao",
+            email="anjali@school.edu",
+            role="coordinator",
+            password_hash=generate_password_hash("coordinator123"),
+        )
+        db.session.add(coordinator_user)
+        db.session.commit()
+
+        coordinator = Coordinator(
+            coordinator_id="C001",
+            user_id=coordinator_user.id,
+            name="Anjali Rao",
+            designation="Academic Coordinator",
+            responsibility="All grades — attendance, exams & academics",
+            email="anjali@school.edu",
+            phone="9876500001",
+        )
+        db.session.add(coordinator)
+        db.session.commit()
+        print("   ✅ Coordinator created (anjali@school.edu / coordinator123)")
         
         # =====================================================================
         # 8. TEACHERS (75 TOTAL)
@@ -773,6 +797,7 @@ def seed_database():
         print("\n🎯 USER CREDENTIALS (step 2 — after organization login):")
         print("   Admin:       admin@school.edu / admin123")
         print("   Principal:   principal@school.edu / principal123")
+        print("   Coordinator: anjali@school.edu / coordinator123")
         print("   Teacher:     priya.sharma@school.edu / teacher123")
 
         print("\n🚀 Ready to start the application!\n")

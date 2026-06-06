@@ -42,7 +42,8 @@ def _role():
 
 
 def _is_admin_principal():
-    return _role() in ("admin", "principal")
+    # Coordinators share the school-wide academic oversight of a principal.
+    return _role() in ("admin", "principal", "coordinator")
 
 
 def _acting_teacher():
@@ -90,6 +91,7 @@ def _visible(ann, role, my_batches):
     # Map a role to the audiences it receives.
     role_audiences = {
         "teacher": {"all", "teachers"},
+        "coordinator": {"all", "teachers"},
         "student": {"all", "students"},
         "parent": {"all", "parents"},
     }.get(role, {"all"})
@@ -106,7 +108,7 @@ def _visible(ann, role, my_batches):
 # ---------------------------------------------------------------------------
 
 @announcement_bp.route("/audiences", methods=["GET"])
-@role_required("admin", "principal", "teacher")
+@role_required("admin", "principal", "coordinator", "teacher")
 def audiences():
     org_id = _org_id()
     batches = Batch.query.filter_by(organization_id=org_id).all()
@@ -157,7 +159,7 @@ def list_announcements():
 # ---------------------------------------------------------------------------
 
 @announcement_bp.route("", methods=["POST"])
-@role_required("admin", "principal", "teacher")
+@role_required("admin", "principal", "coordinator", "teacher")
 def create_announcement():
     data = request.get_json(silent=True) or {}
     title = (data.get("title") or "").strip()
@@ -207,7 +209,7 @@ def _can_modify(ann):
 
 
 @announcement_bp.route("/<int:ann_id>", methods=["PUT"])
-@role_required("admin", "principal", "teacher")
+@role_required("admin", "principal", "coordinator", "teacher")
 def update_announcement(ann_id):
     ann = _owned(ann_id)
     if not ann:
@@ -226,7 +228,7 @@ def update_announcement(ann_id):
 
 
 @announcement_bp.route("/<int:ann_id>", methods=["DELETE"])
-@role_required("admin", "principal", "teacher")
+@role_required("admin", "principal", "coordinator", "teacher")
 def delete_announcement(ann_id):
     ann = _owned(ann_id)
     if not ann:

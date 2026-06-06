@@ -38,7 +38,8 @@ def _role():
 
 
 def _is_admin_principal():
-    return _role() in ("admin", "principal")
+    # Coordinators get the same school-wide academic oversight as a principal.
+    return _role() in ("admin", "principal", "coordinator")
 
 
 def _acting_teacher():
@@ -135,7 +136,7 @@ def list_exams():
 
 
 @exam_bp.route("", methods=["POST"])
-@role_required("admin", "principal")
+@role_required("admin", "principal", "coordinator")
 def create_exam():
     data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()
@@ -157,7 +158,7 @@ def create_exam():
 
 
 @exam_bp.route("/<int:exam_id>", methods=["PUT"])
-@role_required("admin", "principal")
+@role_required("admin", "principal", "coordinator")
 def update_exam(exam_id):
     exam = _owned_exam(exam_id)
     if not exam:
@@ -180,7 +181,7 @@ def update_exam(exam_id):
 
 
 @exam_bp.route("/<int:exam_id>", methods=["DELETE"])
-@role_required("admin", "principal")
+@role_required("admin", "principal", "coordinator")
 def delete_exam(exam_id):
     exam = _owned_exam(exam_id)
     if not exam:
@@ -192,7 +193,7 @@ def delete_exam(exam_id):
 
 
 @exam_bp.route("/<int:exam_id>/publish", methods=["POST"])
-@role_required("admin", "principal")
+@role_required("admin", "principal", "coordinator")
 def publish_exam(exam_id):
     exam = _owned_exam(exam_id)
     if not exam:
@@ -253,7 +254,7 @@ def marksheet(exam_id):
 
 
 @exam_bp.route("/<int:exam_id>/marks", methods=["POST"])
-@role_required("admin", "principal", "teacher")
+@role_required("admin", "principal", "coordinator", "teacher")
 def save_marks(exam_id):
     """Bulk upsert marks for a class+subject.
 

@@ -51,7 +51,7 @@ def list_events():
 
 
 @calendar_bp.route("", methods=["POST"])
-@role_required("admin", "principal")
+@role_required("admin", "principal", "coordinator")
 def create_event():
     data = request.get_json(silent=True) or {}
     title = (data.get("title") or "").strip()
@@ -78,7 +78,7 @@ def create_event():
 
 
 @calendar_bp.route("/<int:event_id>", methods=["PUT"])
-@role_required("admin", "principal")
+@role_required("admin", "principal", "coordinator")
 def update_event(event_id):
     ev = CalendarEvent.query.filter_by(id=event_id, organization_id=_org_id()).first()
     if not ev:
@@ -99,7 +99,7 @@ def update_event(event_id):
 
 
 @calendar_bp.route("/<int:event_id>", methods=["DELETE"])
-@role_required("admin", "principal")
+@role_required("admin", "principal", "coordinator")
 def delete_event(event_id):
     ev = CalendarEvent.query.filter_by(id=event_id, organization_id=_org_id()).first()
     if not ev:

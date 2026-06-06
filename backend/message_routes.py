@@ -20,7 +20,7 @@ from jwt_utils import token_required
 
 message_bp = Blueprint("messages", __name__, url_prefix="/api/messages")
 
-_STAFF = {"owner", "admin", "principal", "teacher"}
+_STAFF = {"owner", "admin", "principal", "coordinator", "teacher"}
 
 
 def _org_id():

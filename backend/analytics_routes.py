@@ -22,7 +22,7 @@ def _org_id():
 
 
 @analytics_bp.route("/overview", methods=["GET"])
-@role_required("admin", "principal")
+@role_required("admin", "principal", "coordinator")
 def overview():
     oid = _org_id()
 

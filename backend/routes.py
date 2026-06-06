@@ -838,7 +838,7 @@ def reset_password(token):
 # ============================================================================
 
 # Roles an admin/principal is allowed to invite.
-_INVITABLE_ROLES = {"teacher", "principal", "student"}
+_INVITABLE_ROLES = {"teacher", "principal", "coordinator", "student"}
 
 
 @api.route("/invitations", methods=["GET"])
@@ -2982,7 +2982,7 @@ def import_commit(entity):
 # ============================================================================
 
 @api.route("/admin/batches", methods=["GET"])
-@role_required("admin", "principal")
+@role_required("admin", "principal", "coordinator")
 def get_batches():
     """List all batches in the caller's organization"""
     batches = Batch.query.filter_by(organization_id=current_org_id()).all()
@@ -3958,7 +3958,7 @@ def get_principal_dashboard():
 # ============================================================================
 
 @api.route("/stats", methods=["GET"])
-@role_required("admin", "principal")
+@role_required("admin", "principal", "coordinator")
 def get_stats():
     """Get database statistics for the caller's organization"""
     return jsonify(get_db_stats(current_org_id())), 200

@@ -42,7 +42,8 @@ def _role():
 
 
 def _is_admin_principal():
-    return _role() in ("admin", "principal")
+    # Coordinators share the school-wide academic oversight of a principal.
+    return _role() in ("admin", "principal", "coordinator")
 
 
 def _acting_teacher():
@@ -107,7 +108,7 @@ def _decorate(assignments, *, extra_by_id=None):
 # ---------------------------------------------------------------------------
 
 @assignment_bp.route("/meta", methods=["GET"])
-@role_required("admin", "principal", "teacher")
+@role_required("admin", "principal", "coordinator", "teacher")
 def meta():
     batches = Batch.query.filter_by(organization_id=_org_id()).all()
     if not _is_admin_principal():
@@ -165,7 +166,7 @@ def list_assignments():
 # ---------------------------------------------------------------------------
 
 @assignment_bp.route("", methods=["POST"])
-@role_required("admin", "principal", "teacher")
+@role_required("admin", "principal", "coordinator", "teacher")
 def create_assignment():
     data = request.get_json(silent=True) or {}
     title = (data.get("title") or "").strip()
@@ -200,7 +201,7 @@ def _can_modify(a):
 
 
 @assignment_bp.route("/<int:aid>", methods=["PUT"])
-@role_required("admin", "principal", "teacher")
+@role_required("admin", "principal", "coordinator", "teacher")
 def update_assignment(aid):
     a = _owned(aid)
     if not a:
@@ -221,7 +222,7 @@ def update_assignment(aid):
 
 
 @assignment_bp.route("/<int:aid>", methods=["DELETE"])
-@role_required("admin", "principal", "teacher")
+@role_required("admin", "principal", "coordinator", "teacher")
 def delete_assignment(aid):
     a = _owned(aid)
     if not a:
@@ -264,7 +265,7 @@ def submit_assignment(aid):
 
 
 @assignment_bp.route("/<int:aid>/submissions", methods=["GET"])
-@role_required("admin", "principal", "teacher")
+@role_required("admin", "principal", "coordinator", "teacher")
 def list_submissions(aid):
     a = _owned(aid)
     if not a:
@@ -302,7 +303,7 @@ def list_submissions(aid):
 
 
 @assignment_bp.route("/<int:aid>/submissions/<int:student_id>", methods=["PUT"])
-@role_required("admin", "principal", "teacher")
+@role_required("admin", "principal", "coordinator", "teacher")
 def grade_submission(aid, student_id):
     a = _owned(aid)
     if not a:

@@ -41,7 +41,8 @@ def _role():
 
 
 def _is_admin_principal():
-    return _role() in ("admin", "principal")
+    # Coordinators share the school-wide academic oversight of a principal.
+    return _role() in ("admin", "principal", "coordinator")
 
 
 def _acting_teacher():
@@ -170,7 +171,7 @@ def attendance_roster():
 
 
 @attendance_bp.route("/mark", methods=["POST"])
-@role_required("admin", "principal", "teacher")
+@role_required("admin", "principal", "coordinator", "teacher")
 def attendance_mark():
     """Bulk upsert attendance for a class on a date/period.
 
@@ -367,7 +368,7 @@ def attendance_student(student_id):
 
 
 @attendance_bp.route("/today", methods=["GET"])
-@role_required("admin", "principal", "teacher")
+@role_required("admin", "principal", "coordinator", "teacher")
 def attendance_today():
     """Org-wide daily attendance snapshot for a date (default today)."""
     org_id = _org_id()
