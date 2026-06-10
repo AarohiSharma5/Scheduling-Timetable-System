@@ -409,6 +409,15 @@ export const api = {
       const { data } = await axiosInstance.get(`/timetable/jobs/${jobId}`);
       return data;
     },
+    feasibility: async () => {
+      const { data } = await axiosInstance.get("/timetable/feasibility");
+      return data;
+    },
+    rebalanceCharges: async (moves?: any[]) => {
+      const { data } = await axiosInstance.post("/timetable/feasibility/rebalance",
+        moves ? { moves } : {});
+      return data;
+    },
     publish: async (id: number) => {
       const { data } = await axiosInstance.post(`/timetable/${id}/publish`);
       return data;

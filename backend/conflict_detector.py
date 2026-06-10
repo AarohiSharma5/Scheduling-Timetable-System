@@ -284,10 +284,18 @@ class ConflictDetector:
             
             teacher_workload[slot.teacher_id]["count"] += 1
         
-        # Get teacher max periods (scoped to this timetable's organization)
+        # Get teacher max periods (scoped to this timetable's organization).
+        # Pre-primary homeroom teachers stay with their class all day, so the
+        # engine widens their budget; mirror that here to avoid false alarms.
+        homeroom_ids = {b.homeroom_teacher_id for b in Batch.query.filter_by(
+            organization_id=self.timetable.organization_id).all()
+            if getattr(b, "homeroom_teacher_id", None)}
         for teacher in Teacher.query.filter_by(organization_id=self.timetable.organization_id).all():
             if teacher.id in teacher_workload:
-                teacher_workload[teacher.id]["max_allowed"] = teacher.max_periods_per_week or 24
+                cap = teacher.max_periods_per_week or 24
+                if teacher.id in homeroom_ids:
+                    cap += 20
+                teacher_workload[teacher.id]["max_allowed"] = cap
         
         # Report overloaded teachers
         for teacher_id, data in teacher_workload.items():
@@ -309,26 +317,55 @@ class ConflictDetector:
     
     def _detect_teacher_batch_mismatch(self):
         """
-        Detect: Teacher assigned to batch they're not explicitly assigned to
+        Detect: Teacher teaching a (subject, section) they are not eligible for.
+
+        Eligibility mirrors the scheduler: structured teaching assignments OR
+        grade-level subject capability, plus class-teacher/homeroom duty.
+        Supervised activity fillers (subject_type='activity') are exempt — any
+        teacher may supervise a library/self-study period.
         """
+        import feasibility
+
+        org_id = self.timetable.organization_id
+        teachers = Teacher.query.filter_by(organization_id=org_id).all()
+        batches = Batch.query.filter_by(organization_id=org_id).all()
+        eligibility = feasibility.build_eligibility(teachers, batches)
+        teacher_by_id = {t.id: t for t in teachers}
+        homeroom_of = {b.id: b.homeroom_teacher_id for b in batches
+                       if getattr(b, "homeroom_teacher_id", None)}
+        ct_of = {t.class_teacher_batch_id: t.id for t in teachers
+                 if getattr(t, "class_teacher_batch_id", None)}
+        activity_ids = {s.id for s in Subject.query.filter_by(
+            organization_id=org_id, subject_type="activity").all()}
+
+        seen = set()
         for slot in self.slots:
-            if not slot.teacher_id or not slot.batch_id:
+            if not slot.teacher_id or not slot.batch_id or not slot.subject_id:
                 continue
-            
-            teacher = Teacher.query.get(slot.teacher_id)
-            batch = Batch.query.get(slot.batch_id)
-            
-            # Check if teacher is assigned to this batch
-            if slot.batch_id not in (teacher.assigned_batch_ids or []):
+            if slot.is_lunch or slot.subject_id in activity_ids:
+                continue
+            key = (slot.teacher_id, slot.subject_id, slot.batch_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            ok = (
+                (slot.subject_id, slot.batch_id) in eligibility.get(slot.teacher_id, ())
+                or homeroom_of.get(slot.batch_id) == slot.teacher_id
+                or ct_of.get(slot.batch_id) == slot.teacher_id
+            )
+            if not ok:
+                teacher = teacher_by_id.get(slot.teacher_id)
+                batch = slot.batch
                 self.report.add_error(
                     "TEACHER_BATCH_MISMATCH",
-                    f"Teacher '{teacher.name}' assigned to Grade {batch.grade}-{batch.section} but not in their assigned batches",
+                    f"Teacher '{teacher.name if teacher else slot.teacher_id}' teaches "
+                    f"'{slot.subject.name if slot.subject else slot.subject_id}' for "
+                    f"Grade {batch.grade}-{batch.section} but is not eligible for it",
                     {
                         "teacher_id": slot.teacher_id,
-                        "teacher_name": teacher.name,
+                        "subject_id": slot.subject_id,
                         "batch_id": slot.batch_id,
                         "batch_name": f"Grade {batch.grade}-{batch.section}",
-                        "assigned_batches": teacher.assigned_batch_ids or []
                     }
                 )
     
@@ -357,16 +394,28 @@ class ConflictDetector:
             key = (slot.subject_id, slot.batch_id)
             scheduled_periods[key] = scheduled_periods.get(key, 0) + 1
         
+        # Per-class overrides take precedence over the org-wide subject default,
+        # exactly like the scheduler's effective requirement.
+        from models import ClassSubjectConfig
+        overrides = {
+            (str(c.grade), c.subject_id): c.periods_per_week
+            for c in ClassSubjectConfig.query.filter_by(
+                organization_id=self.timetable.organization_id).all()
+        }
+
         # Check against requirements (scoped to this timetable's organization)
         for batch in Batch.query.filter_by(organization_id=self.timetable.organization_id).all():
             for subject_id in (batch.subject_ids or []):
                 subject = Subject.query.get(subject_id)
                 if not subject:
                     continue
+                if getattr(subject, "subject_type", None) == "activity":
+                    continue  # fillers have no required quota
                 
                 key = (subject_id, batch.id)
                 scheduled = scheduled_periods.get(key, 0)
-                required = subject.periods_per_week
+                required = overrides.get((str(batch.grade), subject_id)) \
+                    or subject.periods_per_week
                 
                 if scheduled < required:
                     missing = required - scheduled

@@ -12,6 +12,12 @@ import pytest
 # Default to the testing config before importing the app factory.
 os.environ.setdefault("FLASK_ENV", "testing")
 
+# Tests must be hermetic even when run inside the app container, where Redis
+# and the PII key are configured: jobs should use the sync fallback and the
+# crypto tests should see "no key configured" by default.
+for _var in ("REDIS_URL", "RATELIMIT_STORAGE_URI", "PII_ENCRYPTION_KEY"):
+    os.environ.pop(_var, None)
+
 from app import create_app  # noqa: E402
 from models import db as _db  # noqa: E402
 

@@ -28,6 +28,57 @@ def _org_id():
     return user.get("organization_id") if user else None
 
 # ============================================================================
+# PRE-FLIGHT FEASIBILITY (audit + one-click charge rebalancing)
+# ============================================================================
+
+@timetable_bp.route("/feasibility", methods=["GET"])
+@token_required
+@role_required("admin", "principal", "coordinator")
+def feasibility_audit():
+    """Pre-generation audit: class period budgets vs subject demand, teacher
+    supply vs demand (via the same block plan the engine uses), and suggested
+    charge moves that would close any capacity gap."""
+    import feasibility
+    try:
+        return jsonify(feasibility.audit(_org_id())), 200
+    except Exception as e:
+        return jsonify({"error": f"Feasibility audit failed: {str(e)}"}), 500
+
+
+@timetable_bp.route("/feasibility/rebalance", methods=["POST"])
+@token_required
+@role_required("admin", "principal")
+def feasibility_rebalance():
+    """Apply charge moves to free up teaching capacity.
+
+    Body (optional): {"moves": [...]} — the suggestions from GET /feasibility.
+    With no body, the current suggestions are recomputed and all applied.
+    Class-teacher duty is never moved.
+    """
+    import feasibility
+    org_id = _org_id()
+    user = getattr(request, "user", {}) or {}
+    data = request.get_json(silent=True) or {}
+    moves = data.get("moves")
+    if not moves:
+        ctx = feasibility.load_context(org_id)
+        plan = feasibility.plan_block_assignments(ctx)
+        moves = feasibility.suggest_charge_moves(ctx, plan)
+    if not moves:
+        return jsonify({"applied": [], "errors": [],
+                        "message": "Nothing to rebalance — no capacity deficit found."}), 200
+
+    applied, errors = feasibility.apply_charge_moves(org_id, moves, actor_user_id=user.get("user_id"))
+    return jsonify({
+        "applied": applied,
+        "errors": errors,
+        "message": (f"Moved {len(applied)} charge(s); "
+                    f"{sum(a['hours'] for a in applied)} teaching period(s)/week freed."
+                    if applied else "No charges could be moved."),
+    }), 200
+
+
+# ============================================================================
 # TIMETABLE GENERATION
 # ============================================================================
 
@@ -395,7 +446,8 @@ def delete_timetable(timetable_id):
         return jsonify({
             "error": "Cannot delete published timetable"
         }), 400
-    
+
+    GenerationJob.query.filter_by(timetable_id=timetable.id).update({"timetable_id": None})
     db.session.delete(timetable)
     db.session.commit()
     
@@ -1161,6 +1213,7 @@ def save_version(timetable_id):
     stale = (Timetable.query.filter_by(organization_id=org_id, status="draft")
              .order_by(Timetable.generated_at.desc()).offset(DRAFT_HISTORY_LIMIT).all())
     for old in stale:
+        GenerationJob.query.filter_by(timetable_id=old.id).update({"timetable_id": None})
         db.session.delete(old)
     if stale:
         db.session.commit()

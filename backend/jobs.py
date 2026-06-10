@@ -104,6 +104,10 @@ def execute_generation(job_id):
         )
         for old in stale:
             if old.id != timetable_id:
+                # Detach finished jobs still pointing at this draft, otherwise
+                # the FK from generation_jobs blocks the delete.
+                GenerationJob.query.filter_by(timetable_id=old.id).update(
+                    {"timetable_id": None})
                 db.session.delete(old)
         if stale:
             db.session.commit()

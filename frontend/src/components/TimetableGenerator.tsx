@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import TimetableEditor from "./TimetableEditor";
+import FeasibilityPanel from "./FeasibilityPanel";
 
 interface GenerationStatus {
   status: "idle" | "loading" | "success" | "error" | "warning";
@@ -243,6 +244,9 @@ export default function TimetableGenerator() {
 
   return (
     <div className="space-y-6">
+      {/* Pre-flight feasibility check */}
+      <FeasibilityPanel />
+
       {/* Generate Timetable Section */}
       <div className="bg-gradient-to-r from-blue-50 to-blue-100 rounded-lg p-6 border-2 border-blue-200">
         <h2 className="text-2xl font-bold text-blue-900 mb-2">Generate Timetable</h2>

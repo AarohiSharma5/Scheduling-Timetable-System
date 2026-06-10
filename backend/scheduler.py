@@ -179,36 +179,57 @@ class SchedulingEngine:
             self.short_break_idx = short_break_period_index(config)
             self.short_break_enabled = has_short_break(config)
 
-            # Step 5: Build per-teacher/subject constraint caches.
-            self._setup_caches(teachers, subjects)
+            # Steps 5-7a: place everything. Greedy placement is order-sensitive,
+            # so when the first attempt leaves gaps we restart with a different
+            # randomized tie-break order and keep the best attempt.
+            import random
+            pre_warnings = list(self.warnings)
+            pre_conflicts = list(self.conflicts)
 
-            # Room/facility awareness (home rooms + special rooms + ground limit).
-            # No-op when the org has no rooms configured (backward compatible).
-            self._setup_rooms(batches, subjects, config)
+            def _attempt(seed):
+                self.rng = random.Random(seed)
+                self.warnings = list(pre_warnings)
+                self.conflicts = list(pre_conflicts)
+                self.timetable = {}
+                self.shortfalls = []
+                self._shortfall_index = {}
+                self.batch_schedule = {b.id: {} for b in batches}
 
-            # Per-class subject configuration (frequency/priority/spread) +
-            # generation mode + class-teacher-first preference. No-op defaults.
-            self._setup_class_planning(batches, subjects, teachers, config)
+                # Step 5: constraint caches, rooms, per-class plans, blocks.
+                self._setup_caches(teachers, subjects)
+                self._setup_rooms(batches, subjects, config)
+                self._setup_class_planning(batches, subjects, teachers, config)
+                self._setup_elective_blocks(batches)
+                self._setup_special_blocks(batches, config)
 
-            # Reserve parallel elective/language blocks (teaching groups). This
-            # marks the block periods busy for the grade's sections + teachers so
-            # core scheduling works around them. No-op when no groups exist.
-            self._setup_elective_blocks(batches)
+                # Step 6: the (batch, subject) requirements.
+                requirements = self._calculate_requirements(batches, subjects, teachers)
+                if not requirements:
+                    return None
 
-            # Block assembly + zero-period slots for affected classes so regular
-            # subjects schedule around them. No-op when both are disabled.
-            self._setup_special_blocks(batches, config)
+                # Step 7: pinned periods first, then everything else, then the
+                # repair pass that relocates blockers for any leftover periods.
+                self._place_pinned(teachers)
+                self._schedule_requirements(requirements)
+                self._repair_pass()
+                return sum(e["missing"] for e in self.shortfalls)
 
-            # Step 6: Generate the (batch, subject) requirements.
-            requirements = self._calculate_requirements(batches, subjects, teachers)
-            if not requirements:
-                return False, ["No valid assignments generated"]
-
-            # Step 7: Place admin-locked (pinned) periods first, then schedule
-            # everything else around them honoring availability, spacing and
-            # double-period rules.
-            self._place_pinned(teachers)
-            self._schedule_requirements(requirements)
+            ATTEMPTS = 12
+            best_seed, best_missing = None, None
+            for seed in range(ATTEMPTS):
+                missing = _attempt(seed)
+                if missing is None:
+                    return False, ["No valid assignments generated"]
+                if best_missing is None or missing < best_missing:
+                    best_seed, best_missing = seed, missing
+                if missing == 0:
+                    break
+            if best_missing and best_seed != ATTEMPTS - 1:
+                _attempt(best_seed)  # deterministic: rebuild the best grid
+            if best_missing:
+                self.warnings.append(
+                    f"Best of {ATTEMPTS} attempts kept ({best_missing} period(s) unplaced)."
+                )
 
             if self.conflicts:
                 self.warnings.append("Scheduling completed with conflicts")
@@ -476,6 +497,11 @@ class SchedulingEngine:
         self.batch_home_room = {}
         self.special_rooms = {}             # room_type -> [room_name, ...]
         self.subject_room_type = {}         # subject_id -> special type or None
+        # Pre-primary classes never travel to shared special rooms — the little
+        # ones do everything (drawing, rhymes, play) in their own classroom, so
+        # they must not compete with the whole school for the art/music room.
+        from period_utils import is_pre_primary
+        self.home_room_only_batches = {b.id for b in batches if is_pre_primary(b.grade)}
 
         if not self.rooms_enabled:
             return
@@ -503,13 +529,23 @@ class SchedulingEngine:
                 # No matching special room exists -> taught in the home classroom.
                 self.subject_room_type[s.id] = None
 
-    def _room_available(self, subject_id, day, period) -> bool:
+    def _room_available(self, subject_id, day, period, batch_id=None) -> bool:
         """Whether a suitable room exists for this subject at (day, period)."""
         if not getattr(self, "rooms_enabled", False):
             return True
+        if batch_id is not None and batch_id in getattr(self, "home_room_only_batches", ()):
+            return True  # pre-primary: always in the home classroom
         rt = self.subject_room_type.get(subject_id)
+        # Labs are for practicals: only the consecutive double block needs the
+        # lab; single theory periods happen in the section's home classroom.
+        if rt == "lab" and not getattr(self, "_pair_ctx", False):
+            return True
         if not rt:
             return True  # home classroom: always available to its own batch
+        # Last-resort repair sweep: rather than dropping the period entirely,
+        # hold it in the section's home classroom when the special room is full.
+        if getattr(self, "_room_relax", False) and rt != "lab":
+            return True
         if rt == "ground":
             return self.ground_count.get((day, period), 0) < self.ground_limit
         pool = self.special_rooms.get(rt, [])
@@ -520,11 +556,18 @@ class SchedulingEngine:
 
     def _reserve_room(self, subject_id, batch_id, day, period):
         """Reserve and return the room label for a committed placement."""
+        if batch_id in getattr(self, "home_room_only_batches", ()):
+            return self.batch_home_room.get(batch_id)
         rt = self.subject_room_type.get(subject_id)
+        if rt == "lab" and not getattr(self, "_pair_ctx", False):
+            return self.batch_home_room.get(batch_id)  # theory period: home room
         if not rt:
             return self.batch_home_room.get(batch_id)
         if rt == "ground":
             n = self.ground_count.get((day, period), 0) + 1
+            if getattr(self, "_room_relax", False) and n > self.ground_limit:
+                self._room_relaxed = getattr(self, "_room_relaxed", 0) + 1
+                return self.batch_home_room.get(batch_id)  # indoor lesson instead
             self.ground_count[(day, period)] = n
             # Distinct numbered labels so the (shared) ground isn't flagged as a
             # room double-booking by the manual-edit conflict checker.
@@ -533,6 +576,10 @@ class SchedulingEngine:
             if (day, period, name) not in self.room_busy:
                 self.room_busy[(day, period, name)] = batch_id
                 return name
+        # Special room fully booked: hold the period in the home classroom
+        # (only reachable in the last-resort repair sweep).
+        if getattr(self, "_room_relax", False):
+            self._room_relaxed = getattr(self, "_room_relaxed", 0) + 1
         return self.batch_home_room.get(batch_id)
 
     def _setup_class_planning(self, batches, subjects, teachers, config):
@@ -729,13 +776,42 @@ class SchedulingEngine:
                 )
 
     def _calculate_requirements(self, batches, subjects, teachers) -> List[Requirement]:
-        """Build one Requirement per (batch, subject) the batch needs."""
+        """Build one Requirement per (batch, subject) the batch needs.
+
+        Teacher choice is delegated to the shared capacity-aware block planner
+        (feasibility.plan_block_assignments): every (section, subject) block is
+        owned by exactly ONE teacher, blocks are spread so nobody is asked for
+        more periods than their weekly capacity allows, and the most
+        constrained blocks are staffed first. This is the same plan the
+        pre-flight feasibility audit shows the admin.
+        """
+        import feasibility
+
         subject_by_id = {s.id: s for s in subjects}
         requirements = []
 
         self._setup_pre_primary(batches, subjects, teachers)
         # Extra weekly headroom each homeroom teacher needs for their dedicated class.
         homeroom_extra = {}
+
+        # ---- Capacity-aware whole-section plan (non-homeroom blocks) --------
+        ctx = {
+            "org_id": self.organization_id,
+            "config": self.config,
+            "teachers": teachers,
+            "batches": batches,
+            "subjects": subjects,
+            "cls_cfg": {k: v for k, v in (getattr(self, "cls_cfg", {}) or {}).items()},
+            "subject_by_id": subject_by_id,
+            "batch_by_id": {b.id: b for b in batches},
+            "teacher_by_id": {t.id: t for t in teachers},
+        }
+        plan = feasibility.plan_block_assignments(ctx, prefs=getattr(self, "prefs", None),
+                                                  rng=getattr(self, "rng", None))
+        block_owner = plan["owner"]
+        # Kept for the repair pass: who else could own a block if the planned
+        # owner turns out to be slot-starved during placement.
+        self.block_eligible = plan.get("eligible", {})
 
         for batch in batches:
             self.batch_schedule[batch.id] = {}
@@ -764,14 +840,11 @@ class SchedulingEngine:
                     ))
                     continue
 
-                eligible_teachers = [
-                    t for t in teachers
-                    if (subject_id, batch.id) in self.teacher_can_teach.get(t.id, ())
-                ]
+                teacher_id = block_owner.get((batch.id, subject_id))
 
-                # Specialist subject in a pre-primary class with no specialist
-                # available: let the homeroom teacher cover it rather than drop it.
-                if not eligible_teachers:
+                # No eligible teacher anywhere: in a pre-primary class the
+                # homeroom teacher covers it rather than dropping it.
+                if teacher_id is None:
                     if homeroom_id:
                         eff = self._eff_periods(batch.id, subject_id)
                         homeroom_extra[homeroom_id] = homeroom_extra.get(homeroom_id, 0) + eff
@@ -789,26 +862,8 @@ class SchedulingEngine:
                         )
                     continue
 
-                # Soft preference at selection time: among eligible teachers,
-                # favor one who has listed this class and/or subject as preferred.
-                # Whichever teacher is chosen keeps the (batch, subject) for ALL
-                # of its weekly periods, so a teacher assigned to a section teaches
-                # that section consistently across the week.
-                def _pref_rank(t):
-                    p = self.prefs.get(t.id)
-                    if not p:
-                        return 0
-                    rank = 0
-                    if batch.id in (p.preferred_classes or []):
-                        rank += 2
-                    if subject_id in (p.preferred_subjects or []):
-                        rank += 1
-                    return rank
-
-                eligible_teachers.sort(key=lambda t: (_pref_rank(t), -self.teacher_max.get(t.id, 24)), reverse=True)
-
                 requirements.append(Requirement(
-                    teacher_id=eligible_teachers[0].id,
+                    teacher_id=teacher_id,
                     subject_id=subject_id,
                     batch_id=batch.id,
                     periods=self._eff_periods(batch.id, subject_id),
@@ -832,12 +887,21 @@ class SchedulingEngine:
             return (getattr(self, "ct_first", False)
                     and self.class_teacher_of_batch.get(r.batch_id) == r.teacher_id)
 
+        # High-frequency (core/daily) subjects are the most constrained — they
+        # need one period nearly every day — so they are placed before the
+        # low-frequency activity subjects which can slot in anywhere.
+        # Ties are broken by the attempt's RNG (if any) so each restart
+        # explores a different placement order.
+        rng = getattr(self, "rng", None)
+        if rng is not None:
+            rng.shuffle(requirements)  # stable sort keeps this order within ties
         if getattr(self, "gen_mode", "global") == "class_first":
             requirements.sort(key=lambda r: (r.batch_id, not r.is_homeroom,
-                                             not _ct_own(r), not r.is_double, r.subject_id))
+                                             not _ct_own(r), not r.is_double,
+                                             -r.periods))
         else:
             requirements.sort(key=lambda r: (not r.is_homeroom, not _ct_own(r),
-                                             not r.is_double, r.subject_id))
+                                             not r.is_double, -r.periods))
         return requirements
 
     # ========================================================================
@@ -874,7 +938,7 @@ class SchedulingEngine:
             if seen >= self._eff_max_day(batch_id, subject_id):
                 return False
         # Room/facility availability (special rooms + ground concurrency).
-        if not self._room_available(subject_id, day, period):
+        if not self._room_available(subject_id, day, period, batch_id):
             return False
         return True
 
@@ -993,6 +1057,7 @@ class SchedulingEngine:
 
     def _place_pinned(self, teachers):
         """Place admin-locked periods before anything else."""
+        self.pinned_cells = set()  # (day, period, batch_id) the repair pass must not move
         q = PinnedSlot.query
         if self.organization_id is not None:
             q = q.filter_by(organization_id=self.organization_id)
@@ -1027,12 +1092,15 @@ class SchedulingEngine:
                 continue
 
             self._commit(teacher_id, subject_id, ps.batch_id, day, period)
+            self.pinned_cells.add((day, period, ps.batch_id))
 
     def _schedule_requirements(self, requirements: List[Requirement]):
         """Place each requirement's remaining periods (singles or doubles)."""
         for req in requirements:
             already = self.batch_schedule[req.batch_id].get(req.subject_id, 0)
-            remaining = self.subject_periods.get(req.subject_id, req.periods) - already
+            # req.periods is the per-class effective requirement (class config
+            # override aware); the org-wide subject default is only a fallback.
+            remaining = (req.periods or self.subject_periods.get(req.subject_id, 0)) - already
             if remaining <= 0:
                 continue
             if req.is_double and remaining >= 2:
@@ -1062,9 +1130,24 @@ class SchedulingEngine:
         leftover_single = remaining % 2
         pairs_placed = 0
 
+        self._pair_ctx = True  # the pair is the lab practical: it needs the lab room
+        try:
+            pairs_placed = self._place_double_pairs(req, pairs_needed)
+        finally:
+            self._pair_ctx = False
+
+        if pairs_placed < pairs_needed:
+            # Record the unplaced paired periods (each block is 2 periods).
+            self._record_shortfall(req, pairs_placed * 2, pairs_needed * 2)
+
+        if leftover_single:
+            self._place_singles(req, 1)
+
+    def _place_double_pairs(self, req: Requirement, pairs_needed: int) -> int:
+        pairs_placed = 0
         for _ in range(pairs_needed):
-            # Weekly quota must allow two more.
-            if self.batch_schedule[req.batch_id].get(req.subject_id, 0) + 2 > self.subject_periods.get(req.subject_id, 1):
+            # Weekly quota must allow two more (per-class effective requirement).
+            if self.batch_schedule[req.batch_id].get(req.subject_id, 0) + 2 > self._eff_periods(req.batch_id, req.subject_id):
                 break
 
             # Gather every feasible back-to-back pair and pick the best-scoring one.
@@ -1092,14 +1175,472 @@ class SchedulingEngine:
             self._commit(req.teacher_id, req.subject_id, req.batch_id, day, p1)
             self._commit(req.teacher_id, req.subject_id, req.batch_id, day, p2)
             pairs_placed += 1
-
-        if pairs_placed < pairs_needed:
-            # Record the unplaced paired periods (each block is 2 periods).
-            self._record_shortfall(req, pairs_placed * 2, pairs_needed * 2)
-
-        if leftover_single:
-            self._place_singles(req, 1)
+        return pairs_placed
     
+    # ========================================================================
+    # REPAIR PASS — relocate blocking classes to place missing periods
+    # ========================================================================
+
+    def _uncommit(self, teacher_id, subject_id, batch_id, day, period):
+        """Reverse a _commit (used only by the repair pass)."""
+        self.timetable.pop((Period(day, period), batch_id), None)
+        self.occupied.discard((day, period, batch_id))
+        self.teacher_busy.discard((teacher_id, day, period))
+        self.teacher_load[teacher_id] = max(0, self.teacher_load.get(teacher_id, 0) - 1)
+        key_d = (teacher_id, day)
+        self.teacher_day_load[key_d] = max(0, self.teacher_day_load.get(key_d, 0) - 1)
+        self.batch_schedule[batch_id][subject_id] = max(
+            0, self.batch_schedule[batch_id].get(subject_id, 0) - 1)
+        key_s = (batch_id, day, subject_id)
+        self.batch_day_subject[key_s] = max(0, self.batch_day_subject.get(key_s, 0) - 1)
+        if getattr(self, "rooms_enabled", False):
+            label = self.slot_room.pop((day, period, batch_id), None)
+            if label:
+                gname = getattr(self, "ground_name", None)
+                if gname and label.startswith(gname):
+                    k = (day, period)
+                    self.ground_count[k] = max(0, self.ground_count.get(k, 0) - 1)
+                elif (day, period, label) in self.room_busy:
+                    del self.room_busy[(day, period, label)]
+
+    def _movable(self, batch_id, subject_id, day, period):
+        """Whether the placement at (day, period, batch) may be relocated."""
+        if (day, period, batch_id) in getattr(self, "pinned_cells", set()):
+            return False
+        if self._eff_double(batch_id, subject_id):
+            return False  # never break lab double blocks
+        # The block currently being repaired must not be shuffled by its own
+        # relocation chains (keeps revert bookkeeping in reassign/takeover safe).
+        if (batch_id, subject_id) == getattr(self, "_frozen_block", None):
+            return False
+        return True
+
+    def _relocate_placement(self, teacher_id, subject_id, batch_id, day, period, depth=0):
+        """Move one committed placement to any other valid slot. True on success.
+
+        With depth > 0 the displaced class may itself displace another placement
+        (bounded chain, cycle-guarded), which resolves knots a single move can't.
+        """
+        if not self._movable(batch_id, subject_id, day, period):
+            return False
+        key = (teacher_id, subject_id, batch_id, day, period)
+        moving = getattr(self, "_moving", None)
+        if moving is None:
+            moving = self._moving = set()
+        if key in moving:
+            return False
+        moving.add(key)
+        try:
+            self._uncommit(teacher_id, subject_id, batch_id, day, period)
+
+            class _Req:  # _best_slot only reads these three attributes
+                pass
+            r = _Req()
+            r.teacher_id, r.batch_id, r.subject_id = teacher_id, batch_id, subject_id
+            alt = self._best_slot(r)
+            if alt is not None:
+                self._commit(teacher_id, subject_id, batch_id, alt.day, alt.period_num)
+                return True
+            if depth > 0:
+                # Guard the vacated cell while deeper chains run, so nothing
+                # claims this batch cell or the teacher's freed period — else
+                # restoring on failure would double-book them.
+                guard_b = (day, period, batch_id)
+                guard_t = (teacher_id, day, period)
+                self.occupied.add(guard_b)
+                self.teacher_busy.add(guard_t)
+                placed = False
+                try:
+                    limit = self.batch_periods.get(batch_id)
+                    for slot in self.slots:
+                        d2, p2 = slot.day, slot.period_num
+                        if (d2, p2) == (day, period):
+                            continue
+                        if limit is not None and p2 > limit:
+                            continue
+                        if self._try_slot_with_moves(teacher_id, subject_id, batch_id,
+                                                     d2, p2, allow_batch_move=True,
+                                                     relax_spacing=getattr(self, "_chain_relax", False),
+                                                     depth=depth):
+                            placed = True
+                            break
+                finally:
+                    self.occupied.discard(guard_b)
+                    self.teacher_busy.discard(guard_t)
+                if placed:
+                    return True
+            self._commit(teacher_id, subject_id, batch_id, day, period)  # restore
+            return False
+        finally:
+            moving.discard(key)
+
+    def _relocate_teacher_conflict(self, teacher_id, day, period, depth=0):
+        """Free (teacher, day, period) by moving whatever class they teach then."""
+        for (slot, b2), (t2, s2, _b) in list(self.timetable.items()):
+            if t2 == teacher_id and slot.day == day and slot.period_num == period:
+                return self._relocate_placement(t2, s2, b2, day, period, depth)
+        return False  # busy through an elective/zero reservation: not movable
+
+    def _relocate_room_conflict(self, subject_id, day, period, depth=0):
+        """Free a special room needed at (day, period) by moving one occupant."""
+        rt = self.subject_room_type.get(subject_id)
+        if not rt or rt == "ground":
+            return False
+        for name in self.special_rooms.get(rt, []):
+            b2 = self.room_busy.get((day, period, name))
+            if b2 is None:
+                continue
+            rec = self.timetable.get((Period(day, period), b2))
+            if not rec:
+                continue
+            t2, s2, _b = rec
+            if self._relocate_placement(t2, s2, b2, day, period, depth):
+                return True
+        return False
+
+    def _relocate_batch_conflict(self, batch_id, day, period, depth=0):
+        """Free (batch, day, period) by moving whatever the class has then."""
+        rec = self.timetable.get((Period(day, period), batch_id))
+        if not rec:
+            return False
+        t2, s2, _b = rec
+        return self._relocate_placement(t2, s2, batch_id, day, period, depth)
+
+    def _try_slot_with_moves(self, tid, sid, bid, d, p, allow_batch_move,
+                             relax_spacing=False, depth=1):
+        """Place (teacher, subject, batch) at (d, p), relocating blockers if needed.
+
+        Blocker relocations cascade up to `depth` levels. `relax_spacing` is the
+        last resort: allow a subject twice in one day (never more) rather than
+        leaving the period unscheduled altogether.
+        """
+        if (d, p) in self.teacher_unavail.get(tid, ()):
+            return False
+        day_cap = (max(2, self._eff_max_day(bid, sid)) if relax_spacing
+                   else self._eff_max_day(bid, sid))
+        if self.batch_day_subject.get((bid, d, sid), 0) >= day_cap:
+            return False
+        if (d, p, bid) in self.occupied:
+            if depth <= 0 or not allow_batch_move or \
+                    not self._relocate_batch_conflict(bid, d, p, depth - 1):
+                return False
+        if (tid, d, p) in self.teacher_busy:
+            if depth <= 0 or not self._relocate_teacher_conflict(tid, d, p, depth - 1):
+                return False
+        if not self._room_available(sid, d, p, bid):
+            if depth <= 0 or not self._relocate_room_conflict(sid, d, p, depth - 1):
+                return False
+            if not self._room_available(sid, d, p, bid):
+                return False
+        if self._can_place(tid, bid, sid, d, p, check_spacing=not relax_spacing):
+            self._commit(tid, sid, bid, d, p)
+            if relax_spacing and self.batch_day_subject.get((bid, d, sid), 0) > \
+                    self._eff_max_day(bid, sid):
+                self._repair_relaxed += 1
+            return True
+        return False
+
+    def _repair_one_double(self, entry) -> bool:
+        """Place a missing consecutive double pair, relocating blockers if needed."""
+        self._pair_ctx = True  # the pair occupies the lab room
+        try:
+            return self._repair_one_double_inner(entry)
+        finally:
+            self._pair_ctx = False
+
+    def _repair_one_double_inner(self, entry) -> bool:
+        tid, sid, bid = entry["teacher_id"], entry["subject_id"], entry["batch_id"]
+        if self.teacher_load.get(tid, 0) + 2 > self.teacher_max.get(tid, 24):
+            return False
+        if self.batch_schedule[bid].get(sid, 0) + 2 > self._eff_periods(bid, sid):
+            return False
+        limit = self.batch_periods.get(bid)
+        breaks = {self.lunch_idx if self.lunch_enabled else None,
+                  self.short_break_idx if self.short_break_enabled else None}
+        for allow_batch_move in (False, True):
+            for day in self.days_in_order:
+                if self.batch_day_subject.get((bid, day, sid), 0) > 0:
+                    continue  # keep the pair as the only lesson that day
+                for p in range(1, (limit or 0)):
+                    # Pair must not straddle lunch/short break.
+                    if p in breaks or (p + 1) in breaks:
+                        continue
+                    ok = True
+                    for q in (p, p + 1):
+                        if (day, q, bid) in self.occupied:
+                            if not allow_batch_move or \
+                                    not self._relocate_batch_conflict(bid, day, q, depth=1):
+                                ok = False
+                                break
+                        if (day, q) in self.teacher_unavail.get(tid, ()):
+                            ok = False
+                            break
+                        if (tid, day, q) in self.teacher_busy and \
+                                not self._relocate_teacher_conflict(tid, day, q, depth=1):
+                            ok = False
+                            break
+                        if not self._room_available(sid, day, q, bid) and \
+                                not (self._relocate_room_conflict(sid, day, q, depth=1)
+                                     and self._room_available(sid, day, q, bid)):
+                            ok = False
+                            break
+                    if not ok:
+                        continue
+                    if self._can_place(tid, bid, sid, day, p) and \
+                            self._can_place(tid, bid, sid, day, p + 1):
+                        self._commit(tid, sid, bid, day, p)
+                        self._commit(tid, sid, bid, day, p + 1)
+                        return True
+        return False
+
+    def _repair_one(self, entry) -> bool:
+        """Try to place ONE missing period of a shortfall via single-level swaps."""
+        tid, sid, bid = entry["teacher_id"], entry["subject_id"], entry["batch_id"]
+        if tid is None:
+            return False
+        # Weekly caps already exhausted can't be fixed by moving slots around.
+        if self.teacher_load.get(tid, 0) >= self.teacher_max.get(tid, 24):
+            return False
+        if self.batch_schedule[bid].get(sid, 0) >= self._eff_periods(bid, sid):
+            return False
+        if self._eff_double(bid, sid) and entry["missing"] >= 2:
+            return self._repair_one_double(entry) and self._note_extra_placed(entry)
+
+        limit = self.batch_periods.get(bid)
+        # Escalating sweeps: free batch cells, then cells we can vacate (with
+        # deeper relocation chains), then (last resort) allow the subject twice
+        # in one day.
+        for allow_batch_move, relax, depth, chain_relax in (
+            (False, False, 1, False), (True, False, 1, False), (True, False, 2, False),
+            (True, True, 2, False), (True, True, 3, False), (True, True, 3, True),
+        ):
+            self._chain_relax = chain_relax
+            try:
+                for slot in self.slots:
+                    d, p = slot.day, slot.period_num
+                    if limit is not None and p > limit:
+                        continue
+                    if (d, p, bid) in self.occupied and not allow_batch_move:
+                        continue
+                    if self._try_slot_with_moves(tid, sid, bid, d, p,
+                                                 allow_batch_move, relax, depth):
+                        return True
+            finally:
+                self._chain_relax = False
+        return False
+
+    def _note_extra_placed(self, entry):
+        """A double repair placed 2 periods; account for the second one here."""
+        entry["missing"] -= 1
+        entry["placed"] += 1
+        return True
+
+    def _reassign_block(self, entry) -> int:
+        """Hand the whole (section, subject) block to another eligible teacher.
+
+        Whole-section ownership is preserved: every already-placed period of the
+        block moves to the new teacher along with the missing ones. Returns how
+        many missing periods were recovered (0 = reverted, nothing changed).
+        """
+        bid, sid, old = entry["batch_id"], entry["subject_id"], entry["teacher_id"]
+        if old is None:
+            return 0
+        placed_slots = [(slot.day, slot.period_num)
+                        for (slot, b), (t, s, _b) in self.timetable.items()
+                        if b == bid and s == sid and t == old]
+        cands = [t for t in getattr(self, "block_eligible", {}).get((bid, sid), [])
+                 if t != old]
+        cands.sort(key=lambda t: self.teacher_load.get(t, 0))
+        need = entry["missing"]
+        for new in cands:
+            if self.teacher_load.get(new, 0) + len(placed_slots) + need > \
+                    self.teacher_max.get(new, 24):
+                continue
+            # The new owner must be free at every already-placed period.
+            if any((new, d, p) in self.teacher_busy
+                   or (d, p) in self.teacher_unavail.get(new, ())
+                   for (d, p) in placed_slots):
+                continue
+            for (d, p) in placed_slots:
+                self._uncommit(old, sid, bid, d, p)
+                self._commit(new, sid, bid, d, p)
+            entry["teacher_id"] = new
+            recovered = 0
+            while entry["missing"] > 0 and self._repair_one(entry):
+                entry["missing"] -= 1
+                entry["placed"] += 1
+                recovered += 1
+            if recovered:
+                return recovered
+            # No improvement: hand the block back.
+            for (d, p) in placed_slots:
+                self._uncommit(new, sid, bid, d, p)
+                self._commit(old, sid, bid, d, p)
+            entry["teacher_id"] = old
+        return 0
+
+    def _takeover_one(self, entry) -> bool:
+        """Final fallback: one period covered by a second eligible teacher.
+
+        Real schools share a section's subject across two teachers occasionally;
+        we only do it for periods that would otherwise stay unscheduled.
+        """
+        bid, sid, owner = entry["batch_id"], entry["subject_id"], entry["teacher_id"]
+        if self.batch_schedule[bid].get(sid, 0) >= self._eff_periods(bid, sid):
+            return False
+        cands = [t for t in getattr(self, "block_eligible", {}).get((bid, sid), [])
+                 if t != owner]
+        cands.sort(key=lambda t: self.teacher_load.get(t, 0))
+        limit = self.batch_periods.get(bid)
+        for relax, batch_move, chain_relax, depth in (
+                (False, False, False, 3), (True, False, False, 3),
+                (True, True, False, 3), (True, True, True, 3),
+                (True, True, True, 4)):
+            # In the very last tier, displaced classes in the relocation chain
+            # may also land as a second lesson of their subject that day.
+            self._chain_relax = chain_relax
+            try:
+                for alt in cands:
+                    if self.teacher_load.get(alt, 0) >= self.teacher_max.get(alt, 24):
+                        continue
+                    for slot in self.slots:
+                        d, p = slot.day, slot.period_num
+                        if limit is not None and p > limit:
+                            continue
+                        if (d, p, bid) in self.occupied and not batch_move:
+                            continue
+                        if self._try_slot_with_moves(alt, sid, bid, d, p,
+                                                     allow_batch_move=batch_move,
+                                                     relax_spacing=relax, depth=depth):
+                            self._takeovers += 1
+                            return True
+            finally:
+                self._chain_relax = False
+        return False
+
+    def _swap_day_cap(self, entry) -> bool:
+        """Unstick a shortfall whose only open cells sit on a day already at the
+        subject's daily cap: move one of that day's lessons to another day, then
+        place the missing period in the freed capacity."""
+        tid, sid, bid = entry["teacher_id"], entry["subject_id"], entry["batch_id"]
+        if self.batch_schedule[bid].get(sid, 0) >= self._eff_periods(bid, sid):
+            return False
+        cap = max(2, self._eff_max_day(bid, sid))
+        for d in self.days_in_order:
+            if self.batch_day_subject.get((bid, d, sid), 0) < cap:
+                continue
+            placements = [(sl, t) for (sl, b), (t, s, _) in self.timetable.items()
+                          if b == bid and s == sid and sl.day == d]
+            for sl, t in placements:
+                if not self._relocate_placement(t, sid, bid, d, sl.period_num, depth=2):
+                    continue
+                if self._repair_one(entry) or self._takeover_one(entry):
+                    return True
+                break  # relocation kept (still a valid grid); try the next day
+        return False
+
+    def _repair_pass(self, max_rounds: int = 3):
+        """Close as many recorded shortfalls as possible, escalating gradually:
+        relocate blockers -> hand whole blocks to colleagues -> allow the home
+        classroom when a special room is booked out -> let a second eligible
+        teacher cover a stray period. Every escalation is reported honestly.
+        """
+        repaired = 0
+        reassigned = 0
+        self._repair_relaxed = 0
+        self._room_relaxed = 0
+        self._takeovers = 0
+
+        def _repair_rounds():
+            nonlocal repaired
+            for _ in range(max_rounds):
+                progressed = False
+                for entry in self.shortfalls:
+                    while entry["missing"] > 0 and self._repair_one(entry):
+                        entry["missing"] -= 1
+                        entry["placed"] += 1
+                        repaired += 1
+                        progressed = True
+                if not progressed:
+                    break
+
+        def _still_missing():
+            return any(e["missing"] > 0 for e in self.shortfalls)
+
+        for _ in range(2):
+            _repair_rounds()
+            # Blocks whose owner is slot-starved go to a colleague (whole
+            # block, so one-teacher-per-section-subject still holds). Each
+            # handover frees slots, so repair gets one more go after it.
+            moved = 0
+            for entry in self.shortfalls:
+                if entry["missing"] > 0:
+                    self._frozen_block = (entry["batch_id"], entry["subject_id"])
+                    try:
+                        got = self._reassign_block(entry)
+                    finally:
+                        self._frozen_block = None
+                    repaired += got
+                    if got:
+                        moved += 1
+            reassigned += moved
+            if not moved:
+                break
+
+        # Escalating last-resort stages. Each stage reshapes the grid, so a
+        # second sweep over all stages often unsticks what the first couldn't.
+        for _ in range(2):
+            if not _still_missing():
+                break
+            # When the special room is the only blocker, hold the lesson in
+            # the section's home classroom instead of dropping it.
+            self._room_relax = True
+            try:
+                _repair_rounds()
+            finally:
+                self._room_relax = False
+
+            # A second eligible teacher covers the stray period.
+            if _still_missing():
+                for entry in self.shortfalls:
+                    while entry["missing"] > 0 and self._takeover_one(entry):
+                        entry["missing"] -= 1
+                        entry["placed"] += 1
+                        repaired += 1
+
+            # Day-cap swap: shift one lesson off a saturated day to open capacity.
+            if _still_missing():
+                for entry in self.shortfalls:
+                    while entry["missing"] > 0 and self._swap_day_cap(entry):
+                        entry["missing"] -= 1
+                        entry["placed"] += 1
+                        repaired += 1
+
+        if reassigned:
+            self.warnings.append(
+                f"{reassigned} class-subject block(s) were handed to another eligible "
+                "teacher because the planned owner had no free matching periods."
+            )
+        if repaired:
+            self.warnings.append(
+                f"Repair pass recovered {repaired} period(s) by relocating conflicting classes."
+            )
+        if self._repair_relaxed:
+            self.warnings.append(
+                f"{self._repair_relaxed} period(s) were scheduled as a second lesson of the "
+                "same subject on one day (last resort to avoid leaving them unscheduled)."
+            )
+        if self._room_relaxed:
+            self.warnings.append(
+                f"{self._room_relaxed} period(s) are held in the section's home classroom "
+                "because the matching special room was fully booked at that time."
+            )
+        if self._takeovers:
+            self.warnings.append(
+                f"{self._takeovers} period(s) are covered by a second eligible teacher "
+                "(shared section) because the owner had no free matching period."
+            )
+
     def _record_shortfall(self, req, placed, required):
         """Record periods the engine required for (batch, subject) but couldn't place.
 
@@ -1136,6 +1677,8 @@ class SchedulingEngine:
         that, e.g., Math is 2 periods short. We persist the truth on the
         timetable and return it in the API response.
         """
+        # Entries fully recovered by the repair pass are no longer shortfalls.
+        self.shortfalls = [s for s in self.shortfalls if s["missing"] > 0]
         lines = []
         total_missing = 0
         for s in sorted(self.shortfalls, key=lambda x: (x["batch"], x["subject"])):
@@ -1152,6 +1695,11 @@ class SchedulingEngine:
                 f"placed (empty slots were filled with supervised activities)."
             )
             persisted.extend(lines)
+            persisted.append(
+                "Tip: run the Pre-flight Check in the Timetable tab — it pinpoints which "
+                "subjects lack teacher capacity and can move non-teaching charges from "
+                "overloaded teachers to colleagues with lighter loads."
+            )
 
         tt = Timetable.query.get(timetable_id)
         if tt is not None:
