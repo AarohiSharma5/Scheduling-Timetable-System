@@ -34,6 +34,9 @@ class ProductionConfig(Config):
 class TestingConfig(Config):
     TESTING = True
     SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
+    # The in-memory limiter is shared across every test in the process, so
+    # rate limits from one test would bleed into the next. Disable in tests.
+    RATELIMIT_ENABLED = False
 
 config = {
     "development": DevelopmentConfig,

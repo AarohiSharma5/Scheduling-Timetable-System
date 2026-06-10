@@ -102,6 +102,13 @@ class User(db.Model):
     login_id = db.Column(db.String(40), index=True)
     role = db.Column(db.String(20), nullable=False)  # 'owner','admin','principal','coordinator','teacher','student','parent'
     password_hash = db.Column(db.String(255))  # For email/password auth
+    # --- Google Sign-In ---
+    # Google's stable account id ("sub" claim). Set when an account is created
+    # or linked via Google; such accounts may have no password at all.
+    google_id = db.Column(db.String(64), index=True)
+    profile_photo = db.Column(db.String(500))
+    # Bumped to invalidate every outstanding JWT ("log out of all devices").
+    token_version = db.Column(db.Integer, nullable=False, default=0, server_default="0")
     batch_id = db.Column(db.Integer, db.ForeignKey("batches.id"))  # For students only
     # --- Account lifecycle / first-login workflow ---
     phone = db.Column(db.String(40))
@@ -128,6 +135,8 @@ class User(db.Model):
             "login_id": self.login_id,
             "role": self.role,
             "batch_id": self.batch_id,
+            "google_linked": bool(self.google_id),
+            "profile_photo": self.profile_photo,
             "phone": self.phone,
             "designation": self.designation,
             "status": self.status or "active",
@@ -166,10 +175,13 @@ class Invitation(db.Model):
     email = db.Column(db.String(120), nullable=False, index=True)
     name = db.Column(db.String(120))
     role = db.Column(db.String(20), nullable=False)  # teacher / coordinator / principal / student
-    token = db.Column(db.String(120), unique=True, nullable=False, index=True)
+    # SHA-256 of the invite token. The plaintext token only ever appears in the
+    # link returned at creation time, so a database leak can't forge invites.
+    token_hash = db.Column(db.String(64), unique=True, nullable=False, index=True)
     status = db.Column(db.String(20), default="pending")  # pending | accepted | expired | revoked
     expires_at = db.Column(db.DateTime)
     invited_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    # When the invitation was consumed (single-use marker).
     accepted_at = db.Column(db.DateTime)
     # Optional link to the provisioned user/teacher/student record.
     target_user_id = db.Column(db.Integer, db.ForeignKey("users.id"))

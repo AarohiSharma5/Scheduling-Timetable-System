@@ -6,7 +6,9 @@ export interface User {
   id: number;
   name: string;
   email: string;
-  role: "admin" | "principal" | "teacher" | "student" | "parent";
+  login_id?: string | null;
+  profile_photo?: string | null;
+  role: "admin" | "principal" | "coordinator" | "teacher" | "student" | "parent";
   must_change_password?: boolean;
   profile_completed?: boolean;
   phone?: string;
@@ -29,7 +31,7 @@ interface AuthState {
   isAuthenticated: boolean;
 
   // Actions
-  login: (email: string, password: string) => Promise<User>;
+  login: (identifier: string, password: string) => Promise<User>;
   logout: () => Promise<void>;
   setUser: (user: User | null) => void;
   setLoading: (loading: boolean) => void;
@@ -46,7 +48,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   error: null,
   isAuthenticated: false,
 
-  login: async (email: string, password: string) => {
+  login: async (identifier: string, password: string) => {
     set({ loading: true, error: null });
     try {
       // The org session is an httpOnly cookie the browser sends automatically;
@@ -55,11 +57,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         throw new Error("Please log in to your organization first.");
       }
 
+      // `identifier` may be an email or a school-assigned Login ID.
       const response = await fetch(`${API_BASE}/auth/login`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ identifier, password }),
       });
 
       if (!response.ok) {

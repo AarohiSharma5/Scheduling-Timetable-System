@@ -41,6 +41,8 @@ services:
       # Encrypts student PII at rest. Optional: unset = stored as plaintext.
       PII_ENCRYPTION_KEY: ${PII_ENCRYPTION_KEY:-}
       DATA_RETENTION_YEARS: ${DATA_RETENTION_YEARS:-7}
+      # Google Sign-In OAuth client id (unset = Google login disabled).
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
     depends_on:
       postgres:
         condition: service_healthy

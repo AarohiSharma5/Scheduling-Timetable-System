@@ -72,10 +72,18 @@ export default function LandingPage() {
             )}
             <button
               onClick={handleOrgCta}
-              className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold shadow-sm hover:bg-indigo-700 transition focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+              className="px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-semibold hover:bg-slate-50 transition"
             >
               {organization ? "Continue to login" : "Sign in"}
             </button>
+            {!organization && (
+              <Link
+                to="/org-signup"
+                className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold shadow-sm hover:bg-indigo-700 transition focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+              >
+                Register School
+              </Link>
+            )}
           </div>
         </div>
       </header>

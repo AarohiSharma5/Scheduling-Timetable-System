@@ -73,7 +73,7 @@ const gradeColor = (g: string | null) => {
 
 export default function ExamsPanel() {
   const role = useAuthStore((s) => s.user?.role);
-  const canManage = role === "admin" || role === "principal";
+  const canManage = role === "admin" || role === "principal" || role === "coordinator";
 
   const [mode, setMode] = useState<"marks" | "results">("marks");
   const [exams, setExams] = useState<Exam[]>([]);

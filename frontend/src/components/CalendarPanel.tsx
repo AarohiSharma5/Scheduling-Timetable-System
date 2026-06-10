@@ -26,7 +26,7 @@ const typeBadge = (t: string) => {
 
 export default function CalendarPanel() {
   const role = useAuthStore((s) => s.user?.role);
-  const canManage = role === "admin" || role === "principal";
+  const canManage = role === "admin" || role === "principal" || role === "coordinator";
 
   const [items, setItems] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);

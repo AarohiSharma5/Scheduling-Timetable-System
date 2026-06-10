@@ -77,13 +77,13 @@ def test_onboarding_is_tenant_scoped(app, db):
     assert keys["subjects"] is False
 
 
-def test_coordinator_role_cannot_be_invited(app, db):
-    s = _school(db, slug="nocoord")
+def test_coordinator_role_is_invitable(app, db):
+    # Coordinator was reinstated as a real role with its own dashboard.
+    s = _school(db, slug="okcoord")
     admin = _admin_client(app, s)
     r = admin.post("/api/invitations",
-                   json={"email": "x@nocoord.test", "name": "X", "role": "coordinator"})
-    assert r.status_code == 400
-    assert "coordinator" in (r.get_json().get("error") or "").lower()
+                   json={"email": "x@okcoord.test", "name": "X", "role": "coordinator"})
+    assert r.status_code == 201, r.get_json()
 
 
 def test_teacher_role_still_invitable(app, db):

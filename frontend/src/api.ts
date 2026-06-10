@@ -508,6 +508,16 @@ export const api = {
       new_password: string;
       complete_profile?: { name?: string; phone?: string };
     }) => (await axiosInstance.post("/auth/change-password", payload)).data,
+    googleConfig: async () =>
+      (await axiosInstance.get("/auth/google/config")).data as {
+        enabled: boolean;
+        client_id: string | null;
+      },
+    googleLogin: async (credential: string) =>
+      (await axiosInstance.post("/auth/google", { credential })).data,
+    completeProfile: async (payload: { name?: string; phone?: string; profile_photo?: string }) =>
+      (await axiosInstance.post("/auth/complete-profile", payload)).data,
+    logoutAll: async () => (await axiosInstance.post("/auth/logout-all")).data,
     forgotPassword: async (email: string) =>
       (await axiosInstance.post("/auth/forgot-password", { email })).data,
     resetInfo: async (token: string) =>
@@ -529,6 +539,8 @@ export const api = {
       token: string,
       payload: { name?: string; password: string; phone?: string }
     ) => (await axiosInstance.post(`/invitations/accept/${token}`, payload)).data,
+    acceptGoogle: async (token: string, credential: string) =>
+      (await axiosInstance.post(`/invitations/accept-google/${token}`, { credential })).data,
   },
 
   attendance: {

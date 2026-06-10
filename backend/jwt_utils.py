@@ -29,18 +29,39 @@ ACCESS_COOKIE_NAME = "access_token"
 ORG_COOKIE_NAME = "org_token"
 
 
-def generate_token(user_id: int, email: str, role: str, organization_id: int | None = None) -> str:
-    """Generate JWT token for a user, optionally scoped to an organization"""
+def generate_token(user_id: int, email: str, role: str, organization_id: int | None = None,
+                   token_version: int = 0) -> str:
+    """Generate JWT token for a user, optionally scoped to an organization.
+
+    ``token_version`` ("tv" claim) must match the user's current
+    ``User.token_version``; bumping that column invalidates every outstanding
+    token at once ("log out of all devices").
+    """
     payload = {
         "user_id": user_id,
         "email": email,
         "role": role,
         "organization_id": organization_id,
+        "tv": token_version or 0,
         "exp": datetime.utcnow() + timedelta(hours=TOKEN_EXPIRY_HOURS),
         "iat": datetime.utcnow(),
     }
     token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
     return token
+
+
+def check_token_version(payload: dict) -> bool:
+    """True when the token's "tv" claim matches the user's current version.
+
+    Tokens minted before versioning existed carry no claim and are treated as
+    version 0, so a bump revokes them too.
+    """
+    from models import User  # local import to avoid a circular dependency
+
+    user = User.query.get(payload.get("user_id"))
+    if user is None:
+        return False
+    return (user.token_version or 0) == payload.get("tv", 0)
 
 
 ORG_TOKEN_EXPIRY_DAYS = 30
@@ -123,7 +144,10 @@ def token_required(f):
         payload = verify_token(token)
         if "error" in payload:
             return jsonify(payload), 401
-        
+
+        if not check_token_version(payload):
+            return jsonify({"error": "Session revoked. Please sign in again."}), 401
+
         # Add user info to request context
         request.user = payload
         return f(*args, **kwargs)
@@ -155,7 +179,10 @@ def role_required(*allowed_roles):
             payload = verify_token(token)
             if "error" in payload:
                 return jsonify(payload), 401
-            
+
+            if not check_token_version(payload):
+                return jsonify({"error": "Session revoked. Please sign in again."}), 401
+
             if payload.get("role") not in flattened:
                 return jsonify({"error": f"Forbidden: requires {sorted(flattened)}"}), 403
             

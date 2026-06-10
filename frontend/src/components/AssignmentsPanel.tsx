@@ -48,7 +48,7 @@ const statusBadge = (s: string) => {
 
 export default function AssignmentsPanel() {
   const role = useAuthStore((s) => s.user?.role);
-  const isStaff = role === "admin" || role === "principal" || role === "teacher";
+  const isStaff = role === "admin" || role === "principal" || role === "coordinator" || role === "teacher";
   const isStudent = role === "student";
 
   const [items, setItems] = useState<Assignment[]>([]);

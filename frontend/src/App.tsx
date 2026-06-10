@@ -11,11 +11,13 @@ import OrgLoginPage from "./pages/OrgLoginPage";
 import OrgSignupPage from "./pages/OrgSignupPage";
 import LoginPage from "./pages/LoginPage";
 import ChangePasswordPage from "./pages/ChangePasswordPage";
+import FirstTimeSetupPage from "./pages/FirstTimeSetupPage";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
 import AcceptInvitePage from "./pages/AcceptInvitePage";
 import AdminPage from "./pages/AdminPage";
 import PrincipalPage from "./pages/PrincipalPage";
+import CoordinatorPage from "./pages/CoordinatorPage";
 import TeacherPage from "./pages/TeacherPage";
 import StudentPage from "./pages/StudentPage";
 import ParentPage from "./pages/ParentPage";
@@ -77,6 +79,16 @@ const App: React.FC = () => {
           }
         />
 
+        {/* First-time profile setup after invitation acceptance */}
+        <Route
+          path="/setup"
+          element={
+            <ProtectedRoute>
+              <FirstTimeSetupPage />
+            </ProtectedRoute>
+          }
+        />
+
         {/* Protected Routes (require org session + user auth) */}
         <Route
           path="/admin"
@@ -91,6 +103,14 @@ const App: React.FC = () => {
           element={
             <ProtectedRoute requiredRole="principal">
               <PrincipalPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/coordinator"
+          element={
+            <ProtectedRoute requiredRole="coordinator">
+              <CoordinatorPage />
             </ProtectedRoute>
           }
         />

@@ -46,6 +46,8 @@ from student_service import (
 )
 import bulk_import
 from compliance_utils import student_data_export, anonymize_student
+from google_auth import google_enabled, verify_google_credential, GOOGLE_CLIENT_ID
+import hashlib
 import os
 import re
 import secrets
@@ -161,6 +163,12 @@ def gen_temp_password():
 def gen_link_token():
     """Opaque, URL-safe token for in-app invitation / password-reset links."""
     return secrets.token_urlsafe(32)
+
+
+def hash_link_token(token: str) -> str:
+    """SHA-256 of a link token. Only the hash is ever stored, so a database
+    leak can't be replayed as live invitation / reset links."""
+    return hashlib.sha256((token or "").encode()).hexdigest()
 
 
 def next_teacher_code(org_id):
@@ -611,7 +619,8 @@ def login():
         user.failed_login_attempts = 0
         user.locked_until = None
 
-        token = generate_token(user.id, user.email, user.role, organization_id=org.id)
+        token = generate_token(user.id, user.email, user.role, organization_id=org.id,
+                               token_version=user.token_version or 0)
         log_audit("user.login", {"email": user.email, "role": user.role},
                   user_id=user.id, organization_id=org.id)
 
@@ -643,6 +652,146 @@ def logout():
     resp = make_response(jsonify({"message": "Logged out"}), 200)
     _clear_auth_cookie(resp, ACCESS_COOKIE_NAME)
     return resp
+
+
+@api.route("/auth/logout-all", methods=["POST"])
+@token_required
+def logout_all_devices():
+    """Invalidate every outstanding session for this account.
+
+    Bumps the user's token_version so all previously issued JWTs (on any
+    device) fail the version check, then clears this device's cookie.
+    """
+    user = User.query.get(request.user.get("user_id"))
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    user.token_version = (user.token_version or 0) + 1
+    db.session.commit()
+    log_audit("user.logout_all", {"email": user.email},
+              user_id=user.id, organization_id=user.organization_id)
+    resp = make_response(jsonify({"message": "Signed out of all devices."}), 200)
+    _clear_auth_cookie(resp, ACCESS_COOKIE_NAME)
+    return resp
+
+
+@api.route("/auth/google/config", methods=["GET"])
+def google_config():
+    """Public: tells the frontend whether Google Sign-In is available."""
+    return jsonify({
+        "enabled": google_enabled(),
+        "client_id": GOOGLE_CLIENT_ID or None,
+    }), 200
+
+
+@api.route("/auth/google", methods=["POST"])
+@limiter.limit("10 per minute")
+def google_login():
+    """Sign in an existing user with Google (org session required first).
+
+    Body: { "credential": "<GIS ID token>" }
+
+    Matches by google_id, falling back to the verified email within the
+    organization (which links the Google account on first use).
+    """
+    try:
+        org, err = _resolve_org_from_request()
+        if err:
+            return err
+
+        data = request.get_json() or {}
+        claims = verify_google_credential(data.get("credential"))
+        if "error" in claims:
+            log_audit("user.google_login_failed", {"reason": claims["error"]},
+                      organization_id=org.id)
+            return jsonify({"error": claims["error"]}), 401
+
+        google_sub = str(claims.get("sub"))
+        google_email = (claims.get("email") or "").strip().lower()
+
+        user = User.query.filter_by(google_id=google_sub, organization_id=org.id).first()
+        if not user:
+            user = User.query.filter(
+                User.organization_id == org.id,
+                db.func.lower(User.email) == google_email,
+            ).first()
+            if user:
+                # First Google sign-in for an existing account: link it.
+                user.google_id = google_sub
+                if not user.profile_photo:
+                    user.profile_photo = claims.get("picture")
+
+        if not user:
+            log_audit("user.google_login_failed",
+                      {"google": google_email, "reason": "no_account"},
+                      organization_id=org.id)
+            return jsonify({
+                "error": "No account in this organisation matches that Google "
+                         "account. Ask your school admin for an invitation.",
+            }), 404
+
+        if user.locked_until and user.locked_until > datetime.utcnow():
+            return jsonify({"error": "Account temporarily locked. Try again later.",
+                            "locked": True}), 429
+
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        db.session.commit()
+
+        token = generate_token(user.id, user.email, user.role, organization_id=org.id,
+                               token_version=user.token_version or 0)
+        log_audit("user.google_login", {"email": user.email, "role": user.role},
+                  user_id=user.id, organization_id=org.id)
+
+        resp = make_response(jsonify({
+            "user": {
+                "id": user.id,
+                "name": user.name,
+                "email": user.email,
+                "login_id": user.login_id,
+                "role": user.role,
+                "batch_id": user.batch_id,
+                "organization_id": org.id,
+                "profile_photo": user.profile_photo,
+                "must_change_password": bool(user.must_change_password),
+                "profile_completed": bool(user.profile_completed) if user.profile_completed is not None else True,
+            },
+            "organization": org.to_dict(),
+        }), 200)
+        _set_auth_cookie(resp, ACCESS_COOKIE_NAME, token, TOKEN_EXPIRY_HOURS * 3600)
+        return resp
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/auth/complete-profile", methods=["POST"])
+@token_required
+def complete_profile():
+    """First-time setup after invitation acceptance.
+
+    Body: { "phone": "...", "profile_photo": "https://...", "name": "..." }
+    All fields optional; submitting marks the profile as completed.
+    """
+    try:
+        user = User.query.get(request.user.get("user_id"))
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        data = request.get_json() or {}
+        if (data.get("name") or "").strip():
+            user.name = data["name"].strip()
+        if "phone" in data:
+            user.phone = (data.get("phone") or "").strip() or None
+        if "profile_photo" in data:
+            user.profile_photo = (data.get("profile_photo") or "").strip() or None
+        user.profile_completed = True
+        db.session.commit()
+        log_audit("user.profile_completed", {"email": user.email},
+                  user_id=user.id, organization_id=user.organization_id)
+        return jsonify({"message": "Profile saved.", "user": user.to_dict()}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
 
 
 @api.route("/auth/me", methods=["GET"])
@@ -689,6 +838,8 @@ def get_current_user():
             "login_id": user.login_id,
             "role": user.role,
             "batch_id": user.batch_id,
+            "profile_photo": user.profile_photo,
+            "phone": user.phone,
             "must_change_password": bool(user.must_change_password),
             "profile_completed": bool(user.profile_completed) if user.profile_completed is not None else True,
             **additional_info,
@@ -775,7 +926,7 @@ def forgot_password():
                 email=email,
                 name=user.name,
                 role="password_reset",
-                token=token,
+                token_hash=hash_link_token(token),
                 status="pending",
                 expires_at=datetime.utcnow() + timedelta(hours=24),
                 target_user_id=user.id,
@@ -798,7 +949,7 @@ def forgot_password():
 @api.route("/auth/reset-password/<token>", methods=["GET"])
 def reset_password_info(token):
     """Validate a reset token (for the reset page to show the target email)."""
-    inv = Invitation.query.filter_by(token=token, role="password_reset").first()
+    inv = Invitation.query.filter_by(token_hash=hash_link_token(token), role="password_reset").first()
     if not inv or inv.status != "pending":
         return jsonify({"valid": False, "error": "This reset link is invalid or already used"}), 404
     if inv.expires_at and inv.expires_at < datetime.utcnow():
@@ -815,7 +966,7 @@ def reset_password(token):
     Body: { "new_password": "..." }
     """
     try:
-        inv = Invitation.query.filter_by(token=token, role="password_reset").first()
+        inv = Invitation.query.filter_by(token_hash=hash_link_token(token), role="password_reset").first()
         if not inv or inv.status != "pending":
             return jsonify({"error": "This reset link is invalid or already used"}), 404
         if inv.expires_at and inv.expires_at < datetime.utcnow():
@@ -867,7 +1018,9 @@ def list_invitations():
     out = []
     for inv in invites:
         d = inv.to_dict()
-        d["invite_link"] = f"/accept-invite/{inv.token}" if inv.status == "pending" else None
+        # Tokens are stored hashed, so a link can only be shown at creation
+        # time. Re-inviting the same email mints a fresh link.
+        d["invite_link"] = None
         out.append(d)
     return jsonify(out), 200
 
@@ -897,12 +1050,15 @@ def create_invitation():
         if User.query.filter_by(email=email, organization_id=org_id).first():
             return jsonify({"error": "A user with this email already exists"}), 409
 
+        # The plaintext token exists only in this response; we store its hash.
+        raw_token = gen_link_token()
+
         # Reuse an existing pending invite for the same email/role if present.
         existing = Invitation.query.filter_by(
             organization_id=org_id, email=email, status="pending"
         ).filter(Invitation.role != "password_reset").first()
         if existing:
-            existing.token = gen_link_token()
+            existing.token_hash = hash_link_token(raw_token)
             existing.role = role
             existing.name = name or existing.name
             existing.expires_at = datetime.utcnow() + timedelta(days=7)
@@ -913,7 +1069,7 @@ def create_invitation():
                 email=email,
                 name=name or None,
                 role=role,
-                token=gen_link_token(),
+                token_hash=hash_link_token(raw_token),
                 status="pending",
                 expires_at=datetime.utcnow() + timedelta(days=7),
                 invited_by=request.user.get("user_id"),
@@ -923,7 +1079,7 @@ def create_invitation():
         log_audit("invitation.create", {"email": email, "role": role},
                   user_id=request.user.get("user_id"), organization_id=org_id)
         result = inv.to_dict()
-        result["invite_link"] = f"/accept-invite/{inv.token}"
+        result["invite_link"] = f"/accept-invite/{raw_token}"
         return jsonify(result), 201
     except Exception as e:
         db.session.rollback()
@@ -947,14 +1103,19 @@ def revoke_invitation(invite_id):
 
 
 @api.route("/invitations/accept/<token>", methods=["GET"])
+@limiter.limit("20 per minute")
 def invitation_info(token):
     """Public: validate an invite token so the accept page can pre-fill."""
-    inv = Invitation.query.filter_by(token=token).filter(Invitation.role != "password_reset").first()
+    inv = Invitation.query.filter_by(token_hash=hash_link_token(token)).filter(Invitation.role != "password_reset").first()
     if not inv or inv.status != "pending":
+        log_audit("invitation.validate_failed", {"reason": "invalid_or_used"},
+                  organization_id=inv.organization_id if inv else None)
         return jsonify({"valid": False, "error": "This invitation is invalid or already used"}), 404
     if inv.expires_at and inv.expires_at < datetime.utcnow():
         inv.status = "expired"
         db.session.commit()
+        log_audit("invitation.validate_failed", {"reason": "expired", "email": inv.email},
+                  organization_id=inv.organization_id)
         return jsonify({"valid": False, "error": "This invitation has expired"}), 410
     org = Organization.query.get(inv.organization_id)
     return jsonify({
@@ -963,17 +1124,21 @@ def invitation_info(token):
         "name": inv.name,
         "role": inv.role,
         "organization": org.name if org else None,
+        # Tells the page whether to render the Google Sign-In button.
+        "google_enabled": google_enabled(),
+        "google_client_id": GOOGLE_CLIENT_ID or None,
     }), 200
 
 
 @api.route("/invitations/accept/<token>", methods=["POST"])
+@limiter.limit("10 per minute")
 def accept_invitation(token):
     """Public: accept an invite, provisioning the user account on first use.
 
     Body: { "name": "...", "password": "...", "phone": "..." }
     """
     try:
-        inv = Invitation.query.filter_by(token=token).filter(Invitation.role != "password_reset").first()
+        inv = Invitation.query.filter_by(token_hash=hash_link_token(token)).filter(Invitation.role != "password_reset").first()
         if not inv or inv.status != "pending":
             return jsonify({"error": "This invitation is invalid or already used"}), 404
         if inv.expires_at and inv.expires_at < datetime.utcnow():
@@ -1035,6 +1200,118 @@ def accept_invitation(token):
             "email": inv.email,
             "login_id": user.login_id,
         }), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@api.route("/invitations/accept-google/<token>", methods=["POST"])
+@limiter.limit("10 per minute")
+def accept_invitation_google(token):
+    """Accept an invitation by signing in with Google.
+
+    Body: { "credential": "<GIS ID token>" }
+
+    The Google account's verified email must EXACTLY match the invited email;
+    otherwise no account is created. On success the user is provisioned with
+    the invitation's role (never client-chosen), the invitation is consumed,
+    and the user is signed in (org + access cookies) ready for first-time
+    profile setup.
+    """
+    try:
+        inv = Invitation.query.filter_by(token_hash=hash_link_token(token)).filter(Invitation.role != "password_reset").first()
+        if not inv or inv.status != "pending":
+            return jsonify({"error": "This invitation is invalid or already used"}), 404
+        if inv.expires_at and inv.expires_at < datetime.utcnow():
+            inv.status = "expired"
+            db.session.commit()
+            return jsonify({"error": "This invitation has expired"}), 410
+
+        data = request.get_json() or {}
+        claims = verify_google_credential(data.get("credential"))
+        if "error" in claims:
+            log_audit("invitation.google_failed", {"email": inv.email, "reason": claims["error"]},
+                      organization_id=inv.organization_id)
+            return jsonify({"error": claims["error"]}), 401
+
+        google_email = (claims.get("email") or "").strip().lower()
+        if google_email != (inv.email or "").strip().lower():
+            # Exact-match policy: deny and do NOT create an account.
+            log_audit("invitation.google_mismatch",
+                      {"invited": inv.email, "google": google_email},
+                      organization_id=inv.organization_id)
+            return jsonify({
+                "error": "Access denied: this invitation was issued to a different "
+                         "email address. Sign in with the invited Google account.",
+                "mismatch": True,
+            }), 403
+
+        if User.query.filter_by(email=inv.email, organization_id=inv.organization_id).first():
+            inv.status = "accepted"
+            db.session.commit()
+            return jsonify({"error": "An account with this email already exists. Please sign in."}), 409
+
+        name = (claims.get("name") or inv.name or inv.email.split("@")[0]).strip()
+        user = User(
+            name=name,
+            email=inv.email,
+            role=inv.role,  # role comes from the invitation, never the client
+            organization_id=inv.organization_id,
+            password_hash=None,  # Google-only account
+            google_id=str(claims.get("sub")),
+            profile_photo=claims.get("picture"),
+            status="active",
+            must_change_password=False,
+            profile_completed=False,  # force the first-time setup page
+            terms_accepted_at=datetime.utcnow(),
+        )
+        db.session.add(user)
+        db.session.commit()
+
+        if inv.role == "teacher":
+            db.session.add(Teacher(
+                organization_id=inv.organization_id,
+                user_id=user.id,
+                teacher_code=next_teacher_code(inv.organization_id),
+                name=name,
+                email=inv.email,
+                status="active",
+            ))
+
+        inv.status = "accepted"
+        inv.accepted_at = datetime.utcnow()
+        inv.target_user_id = user.id
+        db.session.commit()
+        db.session.refresh(user)  # pick up the auto-assigned login_id
+        log_audit("invitation.google_accept", {"email": inv.email, "role": inv.role},
+                  user_id=user.id, organization_id=inv.organization_id)
+
+        # Sign the user straight in: org session + user session cookies.
+        org = Organization.query.get(inv.organization_id)
+        resp = make_response(jsonify({
+            "message": "Account created with Google.",
+            "user": {
+                "id": user.id,
+                "name": user.name,
+                "email": user.email,
+                "login_id": user.login_id,
+                "role": user.role,
+                "organization_id": inv.organization_id,
+                "profile_photo": user.profile_photo,
+                "must_change_password": False,
+                "profile_completed": False,
+            },
+            "organization": org.to_dict() if org else None,
+        }), 201)
+        if org:
+            _set_auth_cookie(resp, ORG_COOKIE_NAME, generate_org_token(org.id, org.slug),
+                             ORG_TOKEN_EXPIRY_DAYS * 24 * 3600)
+        _set_auth_cookie(resp, ACCESS_COOKIE_NAME,
+                         generate_token(user.id, user.email, user.role,
+                                        organization_id=inv.organization_id,
+                                        token_version=user.token_version or 0),
+                         TOKEN_EXPIRY_HOURS * 3600)
+        return resp
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500

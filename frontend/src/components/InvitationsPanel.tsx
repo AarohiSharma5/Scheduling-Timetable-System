@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api";
+import { useAuthStore } from "../stores/authStore";
 
 interface Invite {
   id: number;
@@ -14,9 +15,12 @@ interface Invite {
 }
 
 const ROLES = [
-  { value: "teacher", label: "Teacher" },
+  { value: "admin", label: "Admin" },
   { value: "principal", label: "Principal" },
+  { value: "coordinator", label: "Coordinator" },
+  { value: "teacher", label: "Teacher" },
   { value: "student", label: "Student" },
+  { value: "parent", label: "Parent" },
 ];
 
 const statusStyle: Record<string, string> = {
@@ -34,7 +38,15 @@ export default function InvitationsPanel() {
   const [role, setRole] = useState("teacher");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState<number | null>(null);
+  // Tokens are stored hashed server-side, so an invite link is only available
+  // once — right after it's created/regenerated. Keep it here for copying.
+  const [freshLink, setFreshLink] = useState<{ email: string; link: string } | null>(null);
+
+  const currentRole = useAuthStore((s) => s.user?.role);
+  // Only an admin/owner may mint another admin (matches the backend guard).
+  const availableRoles = ROLES.filter(
+    (r) => r.value !== "admin" || currentRole === "admin"
+  );
 
   const load = async () => {
     setLoading(true);
@@ -62,7 +74,8 @@ export default function InvitationsPanel() {
     }
     setBusy(true);
     try {
-      await api.invitations.create({ email: email.trim(), name: name.trim(), role });
+      const res = await api.invitations.create({ email: email.trim(), name: name.trim(), role });
+      if (res?.invite_link) setFreshLink({ email: res.email, link: fullLink(res.invite_link) });
       setEmail("");
       setName("");
       await load();
@@ -70,6 +83,18 @@ export default function InvitationsPanel() {
       setError(err?.response?.data?.error || "Could not create invitation.");
     } finally {
       setBusy(false);
+    }
+  };
+
+  // Re-issue a pending invite to mint a fresh one-time link.
+  const regenerate = async (inv: Invite) => {
+    setError("");
+    try {
+      const res = await api.invitations.create({ email: inv.email, name: inv.name || "", role: inv.role });
+      if (res?.invite_link) setFreshLink({ email: res.email, link: fullLink(res.invite_link) });
+      await load();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Could not regenerate the link.");
     }
   };
 
@@ -82,26 +107,37 @@ export default function InvitationsPanel() {
     }
   };
 
-  const copy = (inv: Invite) => {
-    const link = fullLink(inv.invite_link);
-    if (!link) return;
-    navigator.clipboard.writeText(link);
-    setCopied(inv.id);
-    setTimeout(() => setCopied((c) => (c === inv.id ? null : c)), 1500);
-  };
-
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-bold text-slate-900">Invitations</h2>
         <p className="text-sm text-slate-500">
-          Invite staff and students with an in-app link. They set their own password when accepting.
-          (Email delivery is coming soon — for now, copy and share the link.)
+          Invite staff, students and parents with a secure single-use link (valid 7 days).
+          Invitees verify with Google Sign-In using the invited email. Links are shown
+          once at creation — copy and share them; use “New link” to re-issue.
         </p>
       </div>
 
       {error && (
         <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">{error}</div>
+      )}
+
+      {freshLink && (
+        <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-sm text-emerald-800 flex flex-wrap items-center gap-2">
+          <span>
+            Invite link for <strong>{freshLink.email}</strong> (shown once — copy it now):
+          </span>
+          <code className="px-2 py-0.5 bg-white rounded border border-emerald-200 text-xs break-all">{freshLink.link}</code>
+          <button
+            onClick={() => { navigator.clipboard.writeText(freshLink.link); }}
+            className="px-2.5 py-1 rounded bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700"
+          >
+            Copy
+          </button>
+          <button onClick={() => setFreshLink(null)} className="text-emerald-500 text-xs hover:text-emerald-700">
+            Dismiss
+          </button>
+        </div>
       )}
 
       <form onSubmit={create} className="bg-white rounded-xl border border-slate-200 p-4 grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
@@ -132,7 +168,7 @@ export default function InvitationsPanel() {
             onChange={(e) => setRole(e.target.value)}
             className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           >
-            {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+            {availableRoles.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
           </select>
         </div>
         <button
@@ -174,12 +210,13 @@ export default function InvitationsPanel() {
                     </span>
                   </td>
                   <td className="px-4 py-2.5">
-                    {inv.status === "pending" && inv.invite_link ? (
+                    {inv.status === "pending" ? (
                       <button
-                        onClick={() => copy(inv)}
+                        onClick={() => regenerate(inv)}
                         className="text-indigo-600 hover:text-indigo-800 text-xs font-medium"
+                        title="Links are stored hashed, so a new one is minted each time"
                       >
-                        {copied === inv.id ? "Copied!" : "Copy link"}
+                        New link
                       </button>
                     ) : (
                       <span className="text-slate-300 text-xs">—</span>

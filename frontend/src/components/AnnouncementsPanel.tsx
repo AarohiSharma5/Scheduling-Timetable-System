@@ -37,8 +37,8 @@ const audienceBadge = (a: string) => {
 
 export default function AnnouncementsPanel() {
   const role = useAuthStore((s) => s.user?.role);
-  const canPost = role === "admin" || role === "principal" || role === "teacher";
-  const isStaffAdmin = role === "admin" || role === "principal";
+  const canPost = role === "admin" || role === "principal" || role === "coordinator" || role === "teacher";
+  const isStaffAdmin = role === "admin" || role === "principal" || role === "coordinator";
 
   const [items, setItems] = useState<Announcement[]>([]);
   const [classes, setClasses] = useState<ClassOption[]>([]);
