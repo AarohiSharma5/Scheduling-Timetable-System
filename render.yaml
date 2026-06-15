@@ -1,34 +1,37 @@
-# Render "Blueprint": provisions the whole app in one go.
-# In the Render dashboard: New + > Blueprint > connect this repo. Render reads
-# this file and creates the web app, the background worker, a Postgres database
-# (with automatic daily backups), and a Redis/Key-Value store.
+# FREE deploy: ONE web service + a free PostgreSQL. No Redis and no separate
+# worker — timetable generation runs inline (the app has a built-in synchronous
+# fallback) and rate-limiting falls back to in-memory. Great for testing 1-2
+# schools at zero cost.
 #
-# After the first deploy, set the values marked `sync: false` under
-# Environment for BOTH the web and worker service (see docs/PILOT_RUNBOOK.md):
-#   APP_BASE_URL, PII_ENCRYPTION_KEY, and (optional) the SMTP_* + GOOGLE_CLIENT_ID.
+# In the Render dashboard: New +  >  Blueprint  >  pick this repo  >  Apply.
 #
-# If anything in this file is rejected by a future Render schema change, just
-# follow the click-by-click UI steps in docs/PILOT_RUNBOOK.md instead.
+# FREE-TIER CAVEATS (important):
+#   * The web service SLEEPS after ~15 min of no traffic; the next visit takes
+#     ~30-60s to wake up. Just wait and refresh — it's not broken.
+#   * The free database is small and is NOT meant for permanent data. Before a
+#     real school relies on this, switch to render-paid.yaml (rename it to
+#     render.yaml) so you get an always-on service + backed-up database.
+#
+# After the first deploy, set the `sync: false` values under the web service's
+# Environment tab (see docs/PILOT_RUNBOOK.md):
+#   APP_BASE_URL (your Render URL), and optionally PII_ENCRYPTION_KEY, the SMTP_*
+#   email settings, and GOOGLE_CLIENT_ID.
 
 databases:
   - name: timetable-db
-    plan: basic-256mb          # smallest paid tier; includes automated backups
+    plan: free
 
 services:
-  # Shared Redis: rate-limit store + background job queue.
-  - type: keyvalue
-    name: timetable-redis
-    plan: starter
-    ipAllowList: []            # internal-only; not reachable from the internet
-
-  # Secrets shared by BOTH the web and worker so their tokens match.
   - type: web
     name: timetable-web
     runtime: docker
     dockerfilePath: ./Dockerfile
-    plan: starter
+    plan: free
     healthCheckPath: /api/health/live
-    preDeployCommand: flask db upgrade    # apply DB migrations before each deploy
+    # Apply DB migrations on boot, then start the server. (Free tier has no
+    # separate pre-deploy step, so we do it here; `flask db upgrade` is safe to
+    # run every start.) Two workers keep memory within the free 512 MB.
+    dockerCommand: sh -c "flask db upgrade && gunicorn --workers 2 --timeout 120 --bind 0.0.0.0:3000 wsgi:app"
     envVars:
       - key: FLASK_ENV
         value: production
@@ -36,23 +39,13 @@ services:
         fromDatabase:
           name: timetable-db
           property: connectionString
-      - key: REDIS_URL
-        fromService:
-          name: timetable-redis
-          type: keyvalue
-          property: connectionString
-      - key: RATELIMIT_STORAGE_URI
-        fromService:
-          name: timetable-redis
-          type: keyvalue
-          property: connectionString
       - key: JWT_SECRET_KEY
         generateValue: true     # Render generates a strong random secret
       - key: SECRET_KEY
         generateValue: true
       - key: DATA_RETENTION_YEARS
         value: "7"
-      # Set these yourself in the dashboard after first deploy:
+      # Set these yourself in the dashboard after the first deploy:
       - key: APP_BASE_URL
         sync: false
       - key: PII_ENCRYPTION_KEY
@@ -68,36 +61,4 @@ services:
       - key: EMAIL_FROM
         sync: false
       - key: GOOGLE_CLIENT_ID
-        sync: false
-
-  # Background worker: runs timetable generation off the web request.
-  - type: worker
-    name: timetable-worker
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    dockerCommand: python worker.py
-    plan: starter
-    envVars:
-      - key: FLASK_ENV
-        value: production
-      - key: DATABASE_URL
-        fromDatabase:
-          name: timetable-db
-          property: connectionString
-      - key: REDIS_URL
-        fromService:
-          name: timetable-redis
-          type: keyvalue
-          property: connectionString
-      - key: RATELIMIT_STORAGE_URI
-        fromService:
-          name: timetable-redis
-          type: keyvalue
-          property: connectionString
-      # IMPORTANT: copy the SAME values the web service generated for these two.
-      - key: JWT_SECRET_KEY
-        sync: false
-      - key: SECRET_KEY
-        sync: false
-      - key: PII_ENCRYPTION_KEY
         sync: false

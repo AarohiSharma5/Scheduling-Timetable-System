@@ -1,0 +1,93 @@
+# PAID blueprint (reliable, always-on, persistent). Use this once a real school
+# depends on the app. To use it: rename this file to `render.yaml` (replacing the
+# free one), commit, and re-sync the Blueprint in Render.
+#
+# Provisions: web service + background worker + PostgreSQL (daily backups) + Redis.
+
+databases:
+  - name: timetable-db
+    plan: basic-256mb          # smallest paid tier; includes automated backups
+
+services:
+  # Shared Redis: rate-limit store + background job queue.
+  - type: keyvalue
+    name: timetable-redis
+    plan: starter
+    ipAllowList: []            # internal-only; not reachable from the internet
+
+  - type: web
+    name: timetable-web
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /api/health/live
+    preDeployCommand: flask db upgrade
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: timetable-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: timetable-redis
+          type: keyvalue
+          property: connectionString
+      - key: RATELIMIT_STORAGE_URI
+        fromService:
+          name: timetable-redis
+          type: keyvalue
+          property: connectionString
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATA_RETENTION_YEARS
+        value: "7"
+      - key: APP_BASE_URL
+        sync: false
+      - key: PII_ENCRYPTION_KEY
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+
+  - type: worker
+    name: timetable-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: python worker.py
+    plan: starter
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: timetable-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: timetable-redis
+          type: keyvalue
+          property: connectionString
+      - key: RATELIMIT_STORAGE_URI
+        fromService:
+          name: timetable-redis
+          type: keyvalue
+          property: connectionString
+      - key: JWT_SECRET_KEY
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: PII_ENCRYPTION_KEY
+        sync: false
