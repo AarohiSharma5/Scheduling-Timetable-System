@@ -1,0 +1,23 @@
+# Keep the build context small and never ship local artifacts/secrets.
+.git
+.gitignore
+.env
+.env.*
+**/__pycache__/
+**/*.pyc
+backend/venv/
+backend/.pytest_cache/
+backend/instance/
+**/*.db
+**/*.sqlite
+frontend/node_modules/
+frontend/build/
+node_modules/
+backups/
+*.log
+.DS_Store
+docs/
+documentation/
+*.md
+COMPLETION_SUMMARY.txt
+TEACHER_DASHBOARD_DELIVERY.txt

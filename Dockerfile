@@ -28,6 +28,8 @@ COPY backend/ /app/
 COPY --from=frontend /frontend/build /frontend/build
 
 ENV FLASK_ENV=production
+# Lets the `flask db upgrade` pre-deploy step find the app deterministically.
+ENV FLASK_APP=wsgi:app
 EXPOSE 3000
 
 # Generation can be slow on large schools, so allow a generous worker timeout.
