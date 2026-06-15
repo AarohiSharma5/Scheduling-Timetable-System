@@ -491,7 +491,11 @@ class SchedulingEngine:
         self.rooms_enabled = bool(rooms)
         self.slot_room = {}                 # (day, period, batch_id) -> room label
         self.room_busy = {}                 # (day, period, room_name) -> batch_id
-        self.ground_count = {}              # (day, period) -> batches on ground
+        # (day, period) -> set of occupied ground sub-slot indices. A set (not a
+        # bare count) so that when a class is moved off the ground during repair
+        # we free its specific "#n" slot; reusing a stale count would hand the
+        # same "#n" label to two classes and look like a room double-booking.
+        self.ground_slots = {}
         self.ground_limit = getattr(config, "ground_max_concurrent_batches", 4) or 4
         self.ground_name = None
         self.batch_home_room = {}
@@ -547,7 +551,7 @@ class SchedulingEngine:
         if getattr(self, "_room_relax", False) and rt != "lab":
             return True
         if rt == "ground":
-            return self.ground_count.get((day, period), 0) < self.ground_limit
+            return len(self.ground_slots.get((day, period), ())) < self.ground_limit
         pool = self.special_rooms.get(rt, [])
         if not pool:
             return True
@@ -564,14 +568,17 @@ class SchedulingEngine:
         if not rt:
             return self.batch_home_room.get(batch_id)
         if rt == "ground":
-            n = self.ground_count.get((day, period), 0) + 1
-            if getattr(self, "_room_relax", False) and n > self.ground_limit:
+            slots = self.ground_slots.setdefault((day, period), set())
+            idx = 1                                   # smallest free sub-slot #
+            while idx in slots:
+                idx += 1
+            if getattr(self, "_room_relax", False) and idx > self.ground_limit:
                 self._room_relaxed = getattr(self, "_room_relaxed", 0) + 1
                 return self.batch_home_room.get(batch_id)  # indoor lesson instead
-            self.ground_count[(day, period)] = n
+            slots.add(idx)
             # Distinct numbered labels so the (shared) ground isn't flagged as a
             # room double-booking by the manual-edit conflict checker.
-            return f"{self.ground_name} #{n}" if self.ground_name else self.batch_home_room.get(batch_id)
+            return f"{self.ground_name} #{idx}" if self.ground_name else self.batch_home_room.get(batch_id)
         for name in self.special_rooms.get(rt, []):
             if (day, period, name) not in self.room_busy:
                 self.room_busy[(day, period, name)] = batch_id
@@ -1198,8 +1205,12 @@ class SchedulingEngine:
             if label:
                 gname = getattr(self, "ground_name", None)
                 if gname and label.startswith(gname):
-                    k = (day, period)
-                    self.ground_count[k] = max(0, self.ground_count.get(k, 0) - 1)
+                    # Free this class's specific "#n" ground sub-slot.
+                    try:
+                        idx = int(label.rsplit("#", 1)[1].strip())
+                        self.ground_slots.get((day, period), set()).discard(idx)
+                    except (ValueError, IndexError):
+                        pass
                 elif (day, period, label) in self.room_busy:
                     del self.room_busy[(day, period, label)]
 
