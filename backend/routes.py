@@ -2028,6 +2028,17 @@ def create_teacher():
             "must_change_password": is_temp,
             "teacher_code": teacher.teacher_code,
         }
+
+        # Best-effort welcome email with login details. If SMTP isn't configured
+        # this only logs (and the admin still sees the temp password above), so a
+        # mail failure must never break teacher creation.
+        import email_utils
+        org = Organization.query.get(org_id)
+        result["email_sent"] = email_utils.send_welcome_email(
+            to=email, name=data.get("name"), role="teacher",
+            org_name=org.name if org else None,
+            temp_password=raw_password if is_temp else None,
+        )
         return jsonify(result), 201
     except Exception as e:
         db.session.rollback()

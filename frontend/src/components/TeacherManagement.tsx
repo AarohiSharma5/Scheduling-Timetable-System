@@ -289,8 +289,15 @@ export default function TeacherManagement() {
       }
       await loadData();
       resetForm();
-    } catch (err) {
-      setError("Failed to save teacher");
+    } catch (err: any) {
+      // Surface the backend's actual reason (e.g. duplicate email) instead of a
+      // generic message so the admin knows how to fix it.
+      const serverMsg = err?.response?.data?.error;
+      const status = err?.response?.status;
+      setError(
+        serverMsg
+          || (status === 409 ? "A teacher with this email already exists." : "Failed to save teacher.")
+      );
       console.error(err);
     }
   };

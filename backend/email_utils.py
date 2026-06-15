@@ -112,6 +112,54 @@ def send_invitation_email(to: str, name: str | None, role: str,
     return send_email(to, subject, text, html)
 
 
+def send_welcome_email(to: str, name: str | None, role: str,
+                       org_name: str | None, temp_password: str | None = None,
+                       login_path: str = "/login") -> bool:
+    """Email a newly-created user their login details.
+
+    Used when an admin adds the user directly (with a temporary password) rather
+    than sending a self-serve invite. When `temp_password` is given the email
+    includes it and tells them to change it on first login.
+    """
+    url = absolute_url(login_path)
+    who = name or "there"
+    school = org_name or "your school"
+    role_label = (role or "member").replace("_", " ")
+    subject = f"Your {school} account is ready"
+    if temp_password:
+        creds_text = (
+            f"Log in here:\n{url}\n\n"
+            f"  Email:    {to}\n"
+            f"  Password: {temp_password}\n\n"
+            f"You'll be asked to set your own password the first time you log in.\n\n"
+        )
+        creds_html = (
+            f'<p>Log in here: <a href="{url}">{url}</a></p>'
+            f"<p><strong>Email:</strong> {to}<br>"
+            f"<strong>Temporary password:</strong> {temp_password}</p>"
+            f"<p>You'll be asked to set your own password the first time you log in.</p>"
+        )
+    else:
+        creds_text = f"Log in here:\n{url}\n\nUse the password you were given.\n\n"
+        creds_html = (
+            f'<p>Log in here: <a href="{url}">{url}</a></p>'
+            f"<p>Use the password you were given.</p>"
+        )
+    text = (
+        f"Hi {who},\n\n"
+        f"An account has been created for you at {school} as a {role_label}.\n\n"
+        f"{creds_text}"
+        f"If you weren't expecting this, you can ignore this email."
+    )
+    html = (
+        f"<p>Hi {who},</p>"
+        f"<p>An account has been created for you at <strong>{school}</strong> as a {role_label}.</p>"
+        f"{creds_html}"
+        f"<p>If you weren't expecting this, ignore this email.</p>"
+    )
+    return send_email(to, subject, text, html)
+
+
 def send_password_reset_email(to: str, name: str | None,
                               org_name: str | None, link_path: str) -> bool:
     """Email a user their password-reset link."""
