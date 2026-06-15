@@ -937,6 +937,12 @@ def forgot_password():
             log_audit("user.password_reset_requested", {"email": email},
                       user_id=user.id, organization_id=org.id)
 
+            # Best-effort email; link still returned for manual delivery / dev.
+            import email_utils
+            email_utils.send_password_reset_email(
+                to=email, name=user.name, org_name=org.name, link_path=reset_link,
+            )
+
         return jsonify({
             "message": "If the account exists, a reset link has been generated.",
             "reset_link": reset_link,
@@ -1079,7 +1085,17 @@ def create_invitation():
         log_audit("invitation.create", {"email": email, "role": role},
                   user_id=request.user.get("user_id"), organization_id=org_id)
         result = inv.to_dict()
-        result["invite_link"] = f"/accept-invite/{raw_token}"
+        link_path = f"/accept-invite/{raw_token}"
+        result["invite_link"] = link_path
+
+        # Best-effort email delivery. If SMTP isn't configured the link is still
+        # returned so the admin can hand it over manually (and it's logged).
+        import email_utils
+        org = Organization.query.get(org_id)
+        result["email_sent"] = email_utils.send_invitation_email(
+            to=email, name=name, role=role,
+            org_name=org.name if org else None, link_path=link_path,
+        )
         return jsonify(result), 201
     except Exception as e:
         db.session.rollback()
@@ -4444,8 +4460,11 @@ def get_leave(leave_request_id):
     """Get a specific leave request"""
     try:
         from models import LeaveRequest
-        
-        leave_request = LeaveRequest.query.get(leave_request_id)
+
+        # Tenant scope: only the leave's own organization may read it.
+        leave_request = LeaveRequest.query.filter_by(
+            id=leave_request_id, organization_id=current_org_id()
+        ).first()
         if not leave_request:
             return jsonify({"error": "Leave request not found"}), 404
         
@@ -4461,7 +4480,15 @@ def approve_leave(leave_request_id):
     """Approve a leave request"""
     try:
         from leave_service import LeaveService
-        
+        from models import LeaveRequest
+
+        # Tenant scope: only the leave's own organization may approve it.
+        lr = LeaveRequest.query.filter_by(
+            id=leave_request_id, organization_id=current_org_id()
+        ).first()
+        if not lr:
+            return jsonify({"error": "Leave request not found"}), 404
+
         data = request.get_json()
         approved_by_id = request.user.get("user_id")
         substitute_teacher_id = data.get("substitute_teacher_id")
@@ -4485,7 +4512,15 @@ def reject_leave(leave_request_id):
     """Reject a leave request"""
     try:
         from leave_service import LeaveService
-        
+        from models import LeaveRequest
+
+        # Tenant scope: only the leave's own organization may reject it.
+        lr = LeaveRequest.query.filter_by(
+            id=leave_request_id, organization_id=current_org_id()
+        ).first()
+        if not lr:
+            return jsonify({"error": "Leave request not found"}), 404
+
         data = request.get_json()
         rejection_reason = data.get("rejection_reason", "")
         

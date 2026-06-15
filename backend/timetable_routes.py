@@ -200,7 +200,11 @@ def validate_timetable(timetable_id):
     """
     try:
         from conflict_detector import ConflictDetector
-        
+
+        # Tenant scope: never validate another organization's timetable.
+        if not _owned_timetable(timetable_id):
+            return jsonify({"error": "Timetable not found"}), 404
+
         detector = ConflictDetector(timetable_id)
         report = detector.validate()
         
@@ -222,7 +226,11 @@ def get_conflict_summary(timetable_id):
     """
     try:
         from conflict_detector import ConflictDetector
-        
+
+        # Tenant scope: never expose another organization's conflict summary.
+        if not _owned_timetable(timetable_id):
+            return jsonify({"error": "Timetable not found"}), 404
+
         detector = ConflictDetector(timetable_id)
         report = detector.validate()
         
@@ -250,7 +258,11 @@ def get_conflicts_by_type(timetable_id):
     """
     try:
         from conflict_detector import ConflictDetector
-        
+
+        # Tenant scope: never expose another organization's conflicts.
+        if not _owned_timetable(timetable_id):
+            return jsonify({"error": "Timetable not found"}), 404
+
         detector = ConflictDetector(timetable_id)
         report = detector.validate()
         

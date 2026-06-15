@@ -21,7 +21,15 @@ def create_app(config_name=None):
         app = Flask(__name__)
     
     app.config.from_object(config.get(config_name, config["default"]))
-    
+
+    # Behind a managed host / reverse proxy (Render, Railway, nginx, ...) TLS is
+    # terminated at the proxy and the app is reached over plain HTTP internally.
+    # Trust one proxy hop's forwarded headers so `request.is_secure` is correct,
+    # which makes the auth cookies' `secure` flag turn on in production.
+    if is_production:
+        from werkzeug.middleware.proxy_fix import ProxyFix
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
     db.init_app(app)
 
     from extensions import limiter, migrate

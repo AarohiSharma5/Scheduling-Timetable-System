@@ -2,16 +2,32 @@ import os
 from datetime import timedelta
 
 
+# Obvious placeholder values we refuse to boot with in production.
+_WEAK_SECRETS = {
+    "", "secret", "changeme", "change-me", "dev-only-insecure-secret-key",
+    "your-secret-key", "please-change-me", "password",
+}
+_MIN_SECRET_LEN = 32
+
+
 def _resolve_secret_key():
-    """Flask SECRET_KEY: required in production, dev-only fallback otherwise."""
+    """Flask SECRET_KEY: required (and strong) in production, dev fallback otherwise.
+
+    In production we refuse to start unless the key is set, long enough, and not
+    an obvious placeholder — a weak/guessable key lets anyone forge login
+    sessions for any school.
+    """
     key = os.getenv("SECRET_KEY") or os.getenv("JWT_SECRET_KEY")
-    if key:
+    is_prod = os.getenv("FLASK_ENV") == "production"
+    if is_prod:
+        if not key or key.strip().lower() in _WEAK_SECRETS or len(key) < _MIN_SECRET_LEN:
+            raise RuntimeError(
+                "SECRET_KEY (and JWT_SECRET_KEY) must be set in production to a strong, "
+                f"random value of at least {_MIN_SECRET_LEN} characters. Generate one with: "
+                "python3 -c \"import secrets; print(secrets.token_urlsafe(48))\""
+            )
         return key
-    if os.getenv("FLASK_ENV") == "production":
-        raise RuntimeError(
-            "SECRET_KEY must be set in production. Refusing to start with an insecure default."
-        )
-    return "dev-only-insecure-secret-key"
+    return key or "dev-only-insecure-secret-key"
 
 
 class Config:

@@ -13,12 +13,18 @@ from flask import request, jsonify, current_app
 # so tokens can't be forged by anyone who has read the source.
 _DEV_FALLBACK_SECRET = "dev-only-insecure-jwt-secret"
 SECRET_KEY = os.getenv("JWT_SECRET_KEY") or os.getenv("SECRET_KEY")
-if not SECRET_KEY:
-    if os.getenv("FLASK_ENV") == "production":
+_WEAK = {"", "secret", "changeme", "change-me", _DEV_FALLBACK_SECRET,
+         "dev-only-insecure-secret-key", "your-secret-key", "password"}
+if os.getenv("FLASK_ENV") == "production":
+    # A weak/guessable signing key lets anyone forge a login token for ANY
+    # school, so production must use a strong, random secret.
+    if not SECRET_KEY or SECRET_KEY.strip().lower() in _WEAK or len(SECRET_KEY) < 32:
         raise RuntimeError(
-            "JWT_SECRET_KEY (or SECRET_KEY) must be set in production. "
-            "Refusing to start with an insecure default."
+            "JWT_SECRET_KEY (or SECRET_KEY) must be set in production to a strong, "
+            "random value of at least 32 characters. Generate one with: "
+            "python3 -c \"import secrets; print(secrets.token_urlsafe(48))\""
         )
+elif not SECRET_KEY:
     SECRET_KEY = _DEV_FALLBACK_SECRET
 ALGORITHM = "HS256"
 TOKEN_EXPIRY_HOURS = 24
