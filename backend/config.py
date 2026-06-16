@@ -43,9 +43,17 @@ class DevelopmentConfig(Config):
     SQLALCHEMY_ECHO = os.getenv("SQLALCHEMY_ECHO", "0") == "1"
     SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL", "sqlite:///timetable.db")
 
+def _normalize_db_url(url):
+    # Some hosts (Render, Heroku, ...) hand out "postgres://", which SQLAlchemy
+    # 1.4+ no longer accepts; psycopg2 wants "postgresql://".
+    if url and url.startswith("postgres://"):
+        return "postgresql://" + url[len("postgres://"):]
+    return url
+
+
 class ProductionConfig(Config):
     DEBUG = False
-    SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL")
+    SQLALCHEMY_DATABASE_URI = _normalize_db_url(os.getenv("DATABASE_URL"))
 
 class TestingConfig(Config):
     TESTING = True

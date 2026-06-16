@@ -1,0 +1,18 @@
+# Dependencies for the Vercel Python serverless function (the Flask backend).
+# Kept in sync with backend/requirements.txt. gunicorn is omitted (Vercel runs
+# the WSGI app directly); redis/rq stay so optional async paths import cleanly.
+Flask==2.3.3
+Flask-CORS==4.0.0
+Flask-SQLAlchemy==3.0.5
+Flask-Migrate==4.0.5
+Flask-Limiter==3.5.1
+redis==5.0.1
+rq==1.16.2
+cryptography==42.0.8
+python-dotenv==1.0.0
+psycopg2-binary==2.9.9
+PyJWT==2.13.0
+google-auth==2.35.0
+reportlab==4.0.7
+Pillow==10.1.0
+openpyxl==3.1.2
