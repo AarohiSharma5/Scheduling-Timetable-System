@@ -21,7 +21,7 @@ services:
     dockerfilePath: ./Dockerfile
     plan: starter
     healthCheckPath: /api/health/live
-    preDeployCommand: flask db upgrade
+    # DB migrations run on boot via the image's entrypoint.sh.
     envVars:
       - key: FLASK_ENV
         value: production
@@ -71,6 +71,9 @@ services:
     envVars:
       - key: FLASK_ENV
         value: production
+      # Only the web service applies migrations; the worker must not race it.
+      - key: RUN_MIGRATIONS
+        value: "0"
       - key: DATABASE_URL
         fromDatabase:
           name: timetable-db

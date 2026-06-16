@@ -27,10 +27,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ /app/
 COPY --from=frontend /frontend/build /frontend/build
 
+# Startup script: runs DB migrations then the main process (see entrypoint.sh).
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 ENV FLASK_ENV=production
-# Lets the `flask db upgrade` pre-deploy step find the app deterministically.
+# Lets `flask db upgrade` (run from entrypoint.sh) find the app deterministically.
 ENV FLASK_APP=wsgi:app
 EXPOSE 3000
 
-# Generation can be slow on large schools, so allow a generous worker timeout.
-CMD ["gunicorn", "--workers", "3", "--timeout", "120", "--bind", "0.0.0.0:3000", "wsgi:app"]
+# entrypoint.sh migrates the DB, then execs this command. 2 workers keeps memory
+# within the free 512 MB tier; generation can be slow so allow a long timeout.
+ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["gunicorn", "--workers", "2", "--timeout", "120", "--bind", "0.0.0.0:3000", "wsgi:app"]

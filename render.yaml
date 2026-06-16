@@ -28,10 +28,8 @@ services:
     dockerfilePath: ./Dockerfile
     plan: free
     healthCheckPath: /api/health/live
-    # Apply DB migrations on boot, then start the server. (Free tier has no
-    # separate pre-deploy step, so we do it here; `flask db upgrade` is safe to
-    # run every start.) Two workers keep memory within the free 512 MB.
-    dockerCommand: sh -c "flask db upgrade && gunicorn --workers 2 --timeout 120 --bind 0.0.0.0:3000 wsgi:app"
+    # Migrations + server start are handled by the image's entrypoint.sh, so no
+    # custom command is needed here.
     envVars:
       - key: FLASK_ENV
         value: production
