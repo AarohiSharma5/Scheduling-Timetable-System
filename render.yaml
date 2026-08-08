@@ -1,25 +1,23 @@
-# FREE deploy: ONE web service + a free PostgreSQL. No Redis and no separate
-# worker — timetable generation runs inline (the app has a built-in synchronous
-# fallback) and rate-limiting falls back to in-memory. Great for testing 1-2
-# schools at zero cost.
+# FREE deploy: ONE web service on Render + an EXTERNAL free PostgreSQL (Neon or
+# Supabase). No Redis and no separate worker — timetable generation runs inline
+# (the app has a built-in synchronous fallback) and rate-limiting falls back to
+# in-memory. Great for testing 1-2 schools at zero cost.
+#
+# Why an external DB? Render's own FREE database is DELETED after ~30 days
+# (taking all your data with it). Neon/Supabase free tiers are persistent, so we
+# point DATABASE_URL at one of those instead. Set it under the web service's
+# Environment tab (sync: false below).
 #
 # In the Render dashboard: New +  >  Blueprint  >  pick this repo  >  Apply.
 #
-# FREE-TIER CAVEATS (important):
-#   * The web service SLEEPS after ~15 min of no traffic; the next visit takes
-#     ~30-60s to wake up. Just wait and refresh — it's not broken.
-#   * The free database is small and is NOT meant for permanent data. Before a
-#     real school relies on this, switch to render-paid.yaml (rename it to
-#     render.yaml) so you get an always-on service + backed-up database.
+# FREE-TIER CAVEAT: the web service SLEEPS after ~15 min of no traffic; the next
+# visit takes ~30-60s to wake up. Just wait and refresh — it's not broken.
 #
 # After the first deploy, set the `sync: false` values under the web service's
 # Environment tab (see docs/PILOT_RUNBOOK.md):
-#   APP_BASE_URL (your Render URL), and optionally PII_ENCRYPTION_KEY, the SMTP_*
-#   email settings, and GOOGLE_CLIENT_ID.
-
-databases:
-  - name: timetable-db
-    plan: free
+#   DATABASE_URL (your Neon/Supabase connection string), APP_BASE_URL (your
+#   Render URL), and optionally PII_ENCRYPTION_KEY, the SMTP_* email settings,
+#   and GOOGLE_CLIENT_ID.
 
 services:
   - type: web
@@ -33,10 +31,10 @@ services:
     envVars:
       - key: FLASK_ENV
         value: production
+      # Set this in the dashboard to your Neon/Supabase connection string
+      # (postgresql://...  — include ?sslmode=require).
       - key: DATABASE_URL
-        fromDatabase:
-          name: timetable-db
-          property: connectionString
+        sync: false
       - key: JWT_SECRET_KEY
         generateValue: true     # Render generates a strong random secret
       - key: SECRET_KEY
